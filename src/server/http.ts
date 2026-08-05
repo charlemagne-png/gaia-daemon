@@ -11,7 +11,7 @@ import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DEFAULTS, gaiaCodesignIdentity, gaiaHost, gaiaPort } from "../core/config.js";
-import { bundledDir, gaiaHome, globalPaths } from "../core/paths.js";
+import { bundledDir, gaiaHome, globalPaths, workspacePaths } from "../core/paths.js";
 import { newId } from "../core/ids.js";
 import { ATTACHMENT_MAX_BYTES, attachmentMime } from "../core/attachments.js";
 import { bearerToken, json, parseBody, readRawBody, text } from "../core/http.js";
@@ -1470,6 +1470,71 @@ export class GaiaWebServer {
       
       // Simple acknowledgment - actual result comes via canvas state update
       return json(response, 200, { ok: true, command });
+    }
+
+    // Design canvas prompt injection: enqueue a user message addressed to @dieter
+    if (method === "POST" && path === "/api/canvas/prompt") {
+      const body = await parseBody(request);
+      const text = stringField(body, "text");
+      if (!text?.trim()) return json(response, 400, { error: "Missing text" });
+
+      let resolvedWorkspaceId: string | undefined;
+      let resolvedRoomId: string | undefined;
+
+      const providedRoomId = stringField(body, "roomId");
+      if (providedRoomId) {
+        // Room explicitly provided: need to find its workspace
+        const workspaces = await this.daemon.registry.list();
+        for (const workspace of workspaces) {
+          if (!workspace.isInitialized) continue;
+          const roomPath = workspacePaths.transcript(workspace.path, providedRoomId);
+          if (existsSync(roomPath)) {
+            resolvedWorkspaceId = workspace.id;
+            resolvedRoomId = providedRoomId;
+            break;
+          }
+        }
+        if (!resolvedWorkspaceId || !resolvedRoomId) {
+          return json(response, 404, { error: `Room not found: ${providedRoomId}` });
+        }
+      } else {
+        // No room provided: use or create the dedicated per-design canvas room
+        const design = stringField(body, "design");
+        const resolved = await this.daemon.getOrCreateCanvasPromptRoom(design);
+        resolvedWorkspaceId = resolved.workspaceId;
+        resolvedRoomId = resolved.roomId;
+      }
+
+      // Address the message to @dieter
+      const addressedText = text.trim().startsWith("@dieter") ? text : `@dieter ${text}`;
+      
+      // Enqueue the message via the existing path
+      const service = await this.daemon.serviceFor(resolvedWorkspaceId, resolvedRoomId);
+      const task = await service.sendMessage(addressedText, { recordUserMessage: true });
+
+      // Broadcast acknowledgment to UI
+      this.broadcast({
+        type: "canvas-command",
+        command: "prompt-ack",
+        params: { roomId: resolvedRoomId }
+      });
+
+      return json(response, 200, { ok: true, roomId: resolvedRoomId, task });
+    }
+
+    // Design canvas autosave: persist design JSON to ~/Designs/gaia-design/
+    if (method === "POST" && path === "/api/canvas/save") {
+      const body = await parseBody(request);
+      const design = stringField(body, "design");
+      if (!design?.trim()) return json(response, 400, { error: "Missing design" });
+      const data = (body && typeof body === "object" && "data" in body) ? (body as { data: unknown }).data : undefined;
+      if (data === undefined) return json(response, 400, { error: "Missing data" });
+      const safe = design.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 64) || "untitled";
+      const dir = join(homedir(), "Designs", "gaia-design");
+      await mkdir(dir, { recursive: true });
+      const file = join(dir, `${safe}.json`);
+      await writeFile(file, JSON.stringify({ design: design.trim(), savedAt: new Date().toISOString(), data }, null, 2));
+      return json(response, 200, { ok: true, file });
     }
 
     json(response, 404, { error: "Not found" });

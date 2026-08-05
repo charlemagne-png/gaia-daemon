@@ -820,6 +820,37 @@ export class Daemon {
     return this.userName();
   }
 
+  // --- canvas prompt room (dedicated room for design canvas injections) --------
+
+  /** Get or create the dedicated canvas-prompt room for a design. One FRESH
+   * room per design name, persisted in app.json (canvasPromptRooms map) —
+   * never the user's current room (prompts must not leak into other chats). */
+  async getOrCreateCanvasPromptRoom(design?: string): Promise<{ workspaceId: string; roomId: string }> {
+    const key = (design?.trim() || "untitled").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 64);
+    const config = ((await readJson(globalPaths.appSettings())) ?? {}) as {
+      canvasPromptRooms?: Record<string, { workspaceId: string; roomId: string }>;
+    };
+
+    const stored = config.canvasPromptRooms?.[key];
+    if (stored) {
+      const record = await this.registry.find(stored.workspaceId);
+      if (record?.isInitialized) return stored;
+    }
+
+    const workspaces = await this.registry.list();
+    const workspace = workspaces.find((w) => w.isInitialized);
+    if (!workspace) throw new Error("No initialized workspace found");
+
+    // Fresh auto room: `chat-` prefix keeps daemon auto-titling from first message
+    const roomId = `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const entry = { workspaceId: workspace.id, roomId };
+    await writeJsonAtomic(globalPaths.appSettings(), {
+      ...config,
+      canvasPromptRooms: { ...config.canvasPromptRooms, [key]: entry }
+    });
+    return entry;
+  }
+
   // --- settings hot-reload ----------------------------------------------------------
 
   /** Settings files feed workspace/agent definitions cached at service

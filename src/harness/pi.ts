@@ -4,7 +4,7 @@
 // HarnessSpec registered at the bottom (AGENTS.md §RULE #0).
 
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -767,8 +767,21 @@ async function probePiUsage(provider: "anthropic" | "openai-codex"): Promise<Usa
 }
 
 async function probePiAccountUsage(credentials: Record<string, string>): Promise<UsageProbeResult> {
-  const token = credentials.accessToken;
-  return token ? fetchChatGptUsage(token, credentials.accountId) : { status: "none" };
+  // Normalize credential field names (support both old and new formats)
+  const accessToken = credentials.access || credentials.accessToken;
+  const refreshToken = credentials.refresh || credentials.refreshToken;
+  
+  // Detect provider from credential structure
+  const isOpenAI = credentials.accountId || (accessToken && accessToken.startsWith("eyJ"));
+  const isAnthropic = accessToken && accessToken.startsWith("sk-ant-");
+  
+  if (isOpenAI && accessToken) {
+    return fetchChatGptUsage(accessToken, credentials.accountId);
+  } else if (isAnthropic && accessToken) {
+    return fetchAnthropicUsage(accessToken);
+  } else {
+    return { status: "none" };
+  }
 }
 
 // Named pi accounts: an isolated PI_CODING_AGENT_DIR materialized from the
@@ -782,33 +795,88 @@ async function probePiAccountUsage(credentials: Record<string, string>): Promise
 // only rewritten when the store's credential is FRESHER than what is
 // already on disk, so pi's own rotation stays authoritative.
 // models.json is copied in from the real agent dir
-// (when present) so custom model definitions still resolve. v1 scope: the
-// openai-codex (ChatGPT OAuth) provider — pi's own provider vocabulary,
-// declared as data on this spec (RULE #0 intact).
+// (when present) so custom model definitions still resolve. Handles BOTH
+// OpenAI (accessToken/refreshToken/accountId) and Anthropic (access/refresh/expires)
+// credential structures — detected automatically from field presence.
 function materializePiAgentDir(credentials: Record<string, string>): string {
-  const key = credentials.accountId?.trim() || createHash("sha256").update(credentials.refreshToken ?? "").digest("hex").slice(0, 16);
+  // Detect provider from credential structure:
+  // OpenAI: accountId present (or JWT-structured access token)
+  // Anthropic: sk-ant- prefix on access token
+  // Support both old (accessToken/refreshToken) and new (access/refresh) field names
+  const accessToken = credentials.access || credentials.accessToken;
+  const refreshToken = credentials.refresh || credentials.refreshToken;
+  const isOpenAI = credentials.accountId || (accessToken && accessToken.startsWith("eyJ"));
+  const provider = isOpenAI ? "openai-codex" : "anthropic";
+  
+  // Key for directory: OpenAI uses accountId, Anthropic hashes refresh token
+  const key = isOpenAI
+    ? (credentials.accountId?.trim() || createHash("sha256").update(refreshToken ?? "").digest("hex").slice(0, 16))
+    : createHash("sha256").update(refreshToken ?? "").digest("hex").slice(0, 16);
+  
   const dir = join(gaiaHome(), "pi-accounts", key);
   mkdirSync(dir, { recursive: true });
+  
+  // Create full Pi directory structure (bin, skills, sessions)
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  mkdirSync(join(dir, "skills"), { recursive: true });
+  mkdirSync(join(dir, "sessions"), { recursive: true });
+  
+  // Copy models.json from ambient Pi if present
   const modelsSrc = join(homedir(), ".pi", "agent", "models.json");
   const modelsDst = join(dir, "models.json");
   if (existsSync(modelsSrc) && !existsSync(modelsDst)) copyFileSync(modelsSrc, modelsDst);
+  
+  // Symlink extensions from ambient Pi (critical for pi-claude-code-identity)
+  const extensionsSrc = join(homedir(), ".pi", "agent", "extensions");
+  const extensionsDst = join(dir, "extensions");
+  if (existsSync(extensionsSrc) && !existsSync(extensionsDst)) {
+    try {
+      symlinkSync(extensionsSrc, extensionsDst);
+    } catch (err) {
+      // Symlink failed (permissions/filesystem) → fall back to recursive copy
+      cpSync(extensionsSrc, extensionsDst, { recursive: true });
+    }
+  }
+  
+  // Create settings.json with default model if missing
+  const settingsPath = join(dir, "settings.json");
+  if (!existsSync(settingsPath)) {
+    const defaultModel = isOpenAI ? "openai-codex/gpt-5.5" : "anthropic/claude-sonnet-4";
+    writeFileSync(settingsPath, JSON.stringify({ model: { default: defaultModel } }, null, 2) + "\n");
+  }
+  
   const authPath = join(dir, "auth.json");
-  const entry = {
-    type: "oauth",
-    refresh: credentials.refreshToken ?? "",
-    access: credentials.accessToken ?? "",
-    expires: expiryMsFromJwt(credentials.accessToken),
-    ...(credentials.accountId ? { accountId: credentials.accountId } : {}),
-  };
-  let existing: { ["openai-codex"]?: { refresh?: string; access?: string } } | undefined;
+  
+  // Build auth entry based on provider
+  const entry = isOpenAI
+    ? {
+        type: "oauth",
+        refresh: refreshToken ?? "",
+        access: accessToken ?? "",
+        expires: expiryMsFromJwt(accessToken),
+        ...(credentials.accountId ? { accountId: credentials.accountId } : {}),
+      }
+    : {
+        type: "oauth",
+        refresh: refreshToken ?? "",
+        access: accessToken ?? "",
+        expires: Number(credentials.expires) || 0,
+      };
+  
+  // Read existing and only rewrite if store's credential is fresher
+  let existing: { [provider: string]: { refresh?: string; access?: string; expires?: number } } | undefined;
   try {
     existing = JSON.parse(readFileSync(authPath, "utf8")) as typeof existing;
   } catch {
     // missing or torn — rewrite below
   }
-  const materialized = existing?.["openai-codex"];
-  if (!materialized?.refresh || entry.expires > expiryMsFromJwt(materialized.access)) {
-    writeFileSync(authPath, JSON.stringify({ "openai-codex": entry }, null, 2) + "\n", { mode: 0o600 });
+  
+  const materialized = existing?.[provider];
+  const currentExpiry = isOpenAI ? expiryMsFromJwt(materialized?.access) : (materialized?.expires ?? 0);
+  const newExpiry = isOpenAI ? entry.expires : Number(entry.expires);
+  
+  if (!materialized?.refresh || newExpiry > currentExpiry) {
+    writeFileSync(authPath, JSON.stringify({ [provider]: entry }, null, 2) + "\n", { mode: 0o600 });
   }
   return dir;
 }
