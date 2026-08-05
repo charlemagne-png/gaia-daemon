@@ -769,19 +769,32 @@ async function probePiUsage(provider: "anthropic" | "openai-codex"): Promise<Usa
 async function probePiAccountUsage(credentials: Record<string, string>): Promise<UsageProbeResult> {
   // Normalize credential field names (support both old and new formats)
   const accessToken = credentials.access || credentials.accessToken;
-  const refreshToken = credentials.refresh || credentials.refreshToken;
   
   // Detect provider from credential structure
   const isOpenAI = credentials.accountId || (accessToken && accessToken.startsWith("eyJ"));
   const isAnthropic = accessToken && accessToken.startsWith("sk-ant-");
+  if (!accessToken || (!isOpenAI && !isAnthropic)) return { status: "none" };
+  const provider = isOpenAI ? "openai-codex" : "anthropic";
   
-  if (isOpenAI && accessToken) {
-    return fetchChatGptUsage(accessToken, credentials.accountId);
-  } else if (isAnthropic && accessToken) {
-    return fetchAnthropicUsage(accessToken);
-  } else {
-    return { status: "none" };
+  // Probe through the account's MATERIALIZED agent dir — the same auth.json
+  // agent runs use. AuthStorage.getApiKey auto-refreshes an expired OAuth
+  // token (with file locking) and writes the rotated pair back into that dir,
+  // so an expired accounts.json token no longer freezes the meter: the stored
+  // refresh token mints a fresh access token whenever a probe finds a stale one.
+  let cred: { type?: string; accountId?: unknown } | undefined;
+  let token: string | undefined;
+  try {
+    const storage = AuthStorage.create(join(materializePiAgentDir(credentials), "auth.json"));
+    cred = storage.get(provider) as typeof cred;
+    if (!cred || cred.type !== "oauth") return { status: "none" };
+    token = await storage.getApiKey(provider);
+  } catch {
+    return { status: "error" }; // store unreadable / refresh raced — transient, keep last-known.
   }
+  if (!token) return { status: "error" }; // refresh could not mint a token — transient, keep last-known.
+  return isAnthropic
+    ? fetchAnthropicUsage(token)
+    : fetchChatGptUsage(token, credentials.accountId ?? (typeof cred.accountId === "string" ? cred.accountId : undefined));
 }
 
 // Named pi accounts: an isolated PI_CODING_AGENT_DIR materialized from the
