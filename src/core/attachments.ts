@@ -5,6 +5,7 @@
 // room dir, so a request can't reach elsewhere).
 
 import { readFile } from "node:fs/promises";
+import { resizeImage } from "@earendil-works/pi-coding-agent";
 import type { MessageAttachment } from "./types.js";
 
 /** Largest single pasted file the upload route accepts (25 MiB). */
@@ -51,15 +52,26 @@ export function nativeImageAttachments(attachments: MessageAttachment[] | undefi
 }
 
 /** Native images with their bytes base64-loaded (pi/claude inline them).
- * An unreadable file is skipped, never fatal — its breadcrumb still points
- * at the path. */
+ * Oversized images are downscaled ONCE here — Anthropic 400s any inline
+ * image with a side >2000px on many-image requests, so the cap lives at
+ * this shared layer and every harness inherits it uniformly. The resizer
+ * may transcode (png↔jpeg for the byte budget), so callers must use the
+ * returned `mime`, not attachment.mime. Resize failure (undecodable bytes)
+ * falls back to the raw file; an unreadable file is skipped, never fatal —
+ * its breadcrumb still points at the path. */
 export async function loadNativeImages(
   attachments: MessageAttachment[] | undefined,
-): Promise<{ attachment: MessageAttachment; base64: string }[]> {
-  const images: { attachment: MessageAttachment; base64: string }[] = [];
+): Promise<{ attachment: MessageAttachment; base64: string; mime: string }[]> {
+  const images: { attachment: MessageAttachment; base64: string; mime: string }[] = [];
   for (const attachment of nativeImageAttachments(attachments)) {
     try {
-      images.push({ attachment, base64: (await readFile(attachment.path)).toString("base64") });
+      const bytes = await readFile(attachment.path);
+      const resized = await resizeImage(new Uint8Array(bytes), attachment.mime).catch(() => null);
+      images.push(
+        resized
+          ? { attachment, base64: resized.data, mime: resized.mimeType }
+          : { attachment, base64: bytes.toString("base64"), mime: attachment.mime },
+      );
     } catch {
       // Breadcrumb-only fallback.
     }

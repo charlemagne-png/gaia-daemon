@@ -366,10 +366,10 @@ export class PiRuntime implements AgentRuntime {
     // Pasted images ride the SDK's native channel (PromptOptions.images, the
     // same ImageContent[] the pi CLI builds for clipboard pastes); the prompt
     // text keeps the uniform path breadcrumbs for non-image files.
-    const images = (await loadNativeImages(input.attachments)).map(({ attachment, base64 }) => ({
+    const images = (await loadNativeImages(input.attachments)).map(({ mime, base64 }) => ({
       type: "image" as const,
       data: base64,
-      mimeType: attachment.mime,
+      mimeType: mime,
     }));
     session
       .prompt(prompt, { source: "interactive", ...(images.length ? { images } : {}) })
@@ -420,10 +420,10 @@ export class PiRuntime implements AgentRuntime {
   async steer(roomId: string, message: string, attachments?: MessageAttachment[]): Promise<boolean> {
     const session = this.sessions.get(roomId)?.session;
     if (!session?.steer) return false;
-    const images = (await loadNativeImages(attachments)).map(({ attachment, base64 }) => ({
+    const images = (await loadNativeImages(attachments)).map(({ mime, base64 }) => ({
       type: "image" as const,
       data: base64,
-      mimeType: attachment.mime,
+      mimeType: mime,
     }));
     await session.steer(message, images.length ? images : undefined);
     return true;

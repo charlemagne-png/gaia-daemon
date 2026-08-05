@@ -157,13 +157,13 @@ function claudeStartupError(error: unknown, stderr?: string): Error {
  * are no native images, else a text block followed by base64 image blocks (the
  * same wire the Agent SDK uses). Shared by send() and steer() so the mid-turn
  * image path is identical to the first-turn one. */
-function claudeUserContent(text: string, images: { attachment: MessageAttachment; base64: string }[]): ClaudeUserContent {
+function claudeUserContent(text: string, images: { base64: string; mime: string }[]): ClaudeUserContent {
   if (images.length === 0) return text;
   return [
     { type: "text", text },
-    ...images.map(({ attachment, base64 }) => ({
+    ...images.map(({ mime, base64 }) => ({
       type: "image" as const,
-      source: { type: "base64" as const, media_type: attachment.mime, data: base64 },
+      source: { type: "base64" as const, media_type: mime, data: base64 },
     })),
   ];
 }
