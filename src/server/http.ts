@@ -129,6 +129,17 @@ function stringArrayField(body: unknown, field: string): string[] | undefined {
 
 /** Attachment references on a message body: `[{ id, name?, mime? }]`. Only the
  * server-issued id matters for path resolution; name/mime are display echoes. */
+/** Collision-safe copy into ~/Downloads ("name 2.png", "name 3.png", …). */
+async function mirrorToDownloads(name: string, data: Buffer): Promise<void> {
+  const dir = join(homedir(), "Downloads");
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  let target = join(dir, name);
+  for (let n = 2; existsSync(target); n++) target = join(dir, `${base} ${n}${ext}`);
+  await writeFile(target, data);
+}
+
 function attachmentRefs(body: unknown): { id: string; name?: string; mime?: string }[] | undefined {
   if (!body || typeof body !== "object") return undefined;
   const raw = (body as Record<string, unknown>).attachments;
@@ -1008,6 +1019,10 @@ export class GaiaWebServer {
         const data = await readRawBody(request, ATTACHMENT_MAX_BYTES);
         if (data.length === 0) return json(response, 400, { error: "Empty file" });
         const stored = await service.storeAttachment(name, data, mime);
+        // ?downloads=1 (drag-dropped screenshot preview): the drag pre-empted
+        // macOS's own save, so mirror a copy into ~/Downloads — the file then
+        // exists on disk exactly where a normal save would have put it.
+        if (url.searchParams.get("downloads") === "1") await mirrorToDownloads(stored.name, data).catch(() => {});
         json(response, 201, { attachment: { id: stored.id, name: stored.name, mime: stored.mime, size: stored.size } });
       } catch (error) {
         json(response, 400, { error: error instanceof Error ? error.message : String(error) });

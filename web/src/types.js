@@ -84,6 +84,8 @@
  * @property {string} mime
  * @property {number} size
  * @property {string|null} previewUrl object URL for image thumbnails
+ * @property {boolean} [fromDrop] dropped (not pasted) — upload also mirrors
+ *   the file into ~/Downloads (drag from screenshot preview pre-empts the save)
  */
 
 /**

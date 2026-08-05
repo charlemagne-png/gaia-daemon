@@ -449,12 +449,15 @@ export async function deleteWorkspace(workspaceId) {
  * api(): the body is the file's bytes, not JSON.
  * @param {File} file
  * @param {string} name
+ * @param {boolean} [mirrorToDownloads] dropped files (screenshot preview
+ *   drags) are also written to ~/Downloads by the server — the drag happened
+ *   before the file was saved anywhere the user can find it.
  * @returns {Promise<import("./types.js").UploadedAttachment>}
  */
-export async function uploadAttachment(file, name) {
+export async function uploadAttachment(file, name, mirrorToDownloads = false) {
   const snapshot = state.snapshot;
   if (!snapshot) throw new Error("No room selected");
-  const url = `/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/files?name=${encodeURIComponent(name)}`;
+  const url = `/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/files?name=${encodeURIComponent(name)}${mirrorToDownloads ? "&downloads=1" : ""}`;
   const response = await fetch(url, {
     method: "POST",
     ...(file.type ? { headers: { "content-type": file.type } } : {}),

@@ -416,7 +416,7 @@ async function sendWithAttachments(text, pending, options = {}) {
   try {
     /** @type {import("./types.js").UploadedAttachment[]} */
     const uploaded = [];
-    for (const item of pending) uploaded.push(await uploadAttachment(item.file, item.name));
+    for (const item of pending) uploaded.push(await uploadAttachment(item.file, item.name, item.fromDrop === true));
     return await sendMessage(text, uploaded, { queue: options.queue });
   } catch (error) {
     setError(error);
@@ -435,6 +435,41 @@ export function capturePastedFiles(event) {
   const files = [...(event.clipboardData?.files ?? [])];
   if (files.length === 0) return false;
   event.preventDefault();
+  return captureFiles(files, false);
+}
+
+/**
+ * Capture files from a drag-drop anywhere in the app (Finder, or the macOS
+ * screenshot preview thumbnail — Chromium resolves the promised file at drop
+ * time, before macOS has "officially" saved it). Dropped files are flagged so
+ * the upload also mirrors them into ~/Downloads: the drag pre-empted the
+ * normal save, so the server performs it.
+ * @param {DragEvent} event
+ */
+export function captureDroppedFiles(event) {
+  const transfer = event.dataTransfer;
+  if (!transfer) return false;
+  // files is authoritative on drop; items.getAsFile() is the fallback for
+  // drags that only expose kind:"file" items (promised files in some shells).
+  let files = [...transfer.files];
+  if (files.length === 0) {
+    files = [...transfer.items]
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file) => file !== null);
+  }
+  if (files.length === 0) return false;
+  event.preventDefault();
+  return captureFiles(files, true);
+}
+
+/**
+ * Shared tail of paste/drop capture: queue as pending attachment chips,
+ * uploaded at send time.
+ * @param {File[]} files
+ * @param {boolean} fromDrop
+ */
+function captureFiles(files, fromDrop) {
   if (state.editingEventId) {
     setError(new Error("Finish (or cancel) editing before attaching files — an edit can remove the original attachments (× on each chip) but not add new ones."));
     return true;
@@ -446,6 +481,7 @@ export function capturePastedFiles(event) {
       mime: file.type || "application/octet-stream",
       size: file.size,
       previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+      fromDrop,
     });
   }
   markDirty("composer");
@@ -1132,6 +1168,26 @@ export function installComposerRouting() {
       if (!state.snapshot || state.dario.open || state.search.open) return;
       if (event.defaultPrevented || isEditableElement(event.target)) return;
       if (capturePastedFiles(event)) focusComposer();
+    },
+    true,
+  );
+  // Drop-anywhere: dragging a file (Finder, screenshot preview thumbnail)
+  // over the app attaches it to the composer, same as paste. dragover MUST
+  // preventDefault or the browser navigates to the file on drop.
+  window.addEventListener(
+    "dragover",
+    (event) => {
+      if (!state.snapshot) return;
+      if (event.dataTransfer && [...event.dataTransfer.types].includes("Files")) event.preventDefault();
+    },
+    true,
+  );
+  window.addEventListener(
+    "drop",
+    (event) => {
+      if (!state.snapshot || state.dario.open || state.search.open) return;
+      if (event.defaultPrevented) return;
+      if (captureDroppedFiles(event)) focusComposer();
     },
     true,
   );
