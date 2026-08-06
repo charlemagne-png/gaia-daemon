@@ -1050,6 +1050,9 @@ registerHarness({
       { key: "accountId", label: "Account ID", hint: "~/.pi/agent/auth.json → openai-codex.accountId (codex: tokens.account_id)" },
     ],
     env: (credentials) => ({ PI_CODING_AGENT_DIR: materializePiAgentDir(credentials) }),
+    // Same materialized dir env() points a subprocess at — reused for in-process
+    // consolidation so it authenticates as the bound account (OAuth refreshed).
+    authStoragePath: (credentials) => join(materializePiAgentDir(credentials), "auth.json"),
     email: (credentials) => emailFromJwt(credentials.accessToken),
   },
   // Pi's proxy wiring (the in-process fetch redirect lives in applyCredentialProxy):

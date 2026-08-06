@@ -1444,7 +1444,7 @@ export class Daemon {
  * so key/model changes apply without a daemon restart; no key → the call
  * throws and consolidation skips with the error as its reason. */
 function consolidateLlm(): ConsolidateLlm {
-  return async ({ system, user, model }) => {
+  return async ({ system, user, model, authPath }) => {
     const provider = model?.provider ?? DEFAULTS.model.provider;
     const name = model?.name ?? DEFAULTS.model.name;
     const [{ completeSimple }, { ModelRegistry, ModelRuntime }] = await Promise.all([
@@ -1452,7 +1452,10 @@ function consolidateLlm(): ConsolidateLlm {
       import("@earendil-works/pi-ai/compat"),
       import("@earendil-works/pi-coding-agent"),
     ]);
-    const runtime = await ModelRuntime.create();
+    // Per-agent auth: build the runtime from the agent's bound-account auth
+    // store so getAuth resolves (and OAuth-refreshes) THAT subscription. Absent
+    // authPath (ambient agent) falls back to the daemon's default login.
+    const runtime = await ModelRuntime.create(authPath ? { authPath } : undefined);
     // Alias fallback (RULE #0): short tier names (fable/opus/sonnet/haiku) in an
     // agent's config resolve here too — this direct pi-ai path bypasses the
     // harness CLI, so an un-aliased `find` was silently killing consolidation

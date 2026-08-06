@@ -340,6 +340,12 @@ export interface HarnessAccountsSpec {
   env(credentials: Record<string, string>): Record<string, string>;
   /** Best-effort identity extraction from an opaque credential bag. */
   email?(credentials: Record<string, string>): string | undefined;
+  /** On-disk auth.json path for an account's materialized credential store,
+   * for IN-PROCESS provider calls (memory consolidation) that bypass env():
+   * they build the model runtime from this path so the call authenticates as
+   * the bound account (OAuth auto-refreshed) instead of the daemon's ambient
+   * login. Absent ⇒ in-process calls fall back to the ambient auth store. */
+  authStoragePath?(credentials: Record<string, string>): string | undefined;
   /** Interactive in-app login; absent = accounts for this harness are created
    * by pasting credentials into accounts.json directly. */
   login?: AccountLoginSpec;
