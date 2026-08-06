@@ -1447,14 +1447,11 @@ function consolidateLlm(): ConsolidateLlm {
   return async ({ system, user, model, authPath }) => {
     const provider = model?.provider ?? DEFAULTS.model.provider;
     const name = model?.name ?? DEFAULTS.model.name;
-    const [{ completeSimple }, { ModelRegistry, ModelRuntime }] = await Promise.all([
-      // completeSimple moved to the compat subpath in pi-ai 0.80 (same shape).
-      import("@earendil-works/pi-ai/compat"),
-      import("@earendil-works/pi-coding-agent"),
-    ]);
+    const { ModelRegistry, ModelRuntime } = await import("@earendil-works/pi-coding-agent");
     // Per-agent auth: build the runtime from the agent's bound-account auth
-    // store so getAuth resolves (and OAuth-refreshes) THAT subscription. Absent
-    // authPath (ambient agent) falls back to the daemon's default login.
+    // store so it authenticates as THAT subscription (OAuth refreshed), exactly
+    // like a normal turn. Absent authPath (ambient agent) => daemon's default
+    // login. Consolidation is a per-agent/subscription thing, never per-model.
     const runtime = await ModelRuntime.create(authPath ? { authPath } : undefined);
     // Alias fallback (RULE #0): short tier names (fable/opus/sonnet/haiku) in an
     // agent's config resolve here too — this direct pi-ai path bypasses the
@@ -1462,11 +1459,13 @@ function consolidateLlm(): ConsolidateLlm {
     // for any agent configured with a short name (e.g. anthropic/fable).
     const resolved = findModelWithAlias(new ModelRegistry(runtime), provider, name);
     if (!resolved) throw new Error(`consolidation model not found: ${provider}/${name}`);
-    const apiKey = (await runtime.getAuth(provider))?.auth.apiKey;
-    const message = await completeSimple(
+    // Complete THROUGH the runtime so it resolves oauth (bearer + beta header)
+    // or api-key internally. Hand-feeding getAuth().apiKey would ship an oauth
+    // access token as x-api-key and the API would reject it.
+    const message = await runtime.completeSimple(
       resolved,
       { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
-      { ...(apiKey ? { apiKey } : {}), maxTokens: 4_000 },
+      { maxTokens: 4_000 },
     );
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       throw new Error(message.errorMessage ?? "consolidation model call failed");
