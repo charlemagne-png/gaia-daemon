@@ -910,17 +910,18 @@ async function probePiAccountUsage(credentials: Record<string, string>): Promise
   const provider = isOpenAI ? "openai-codex" : "anthropic";
   
   // Probe through the account's MATERIALIZED agent dir — the same auth.json
-  // agent runs use. AuthStorage.getApiKey auto-refreshes an expired OAuth
+  // agent runs use. ModelRuntime.getAuth auto-refreshes an expired OAuth
   // token (with file locking) and writes the rotated pair back into that dir,
   // so an expired accounts.json token no longer freezes the meter: the stored
   // refresh token mints a fresh access token whenever a probe finds a stale one.
   let cred: { type?: string; accountId?: unknown } | undefined;
   let token: string | undefined;
   try {
-    const storage = AuthStorage.create(join(materializePiAgentDir(credentials), "auth.json"));
-    cred = storage.get(provider) as typeof cred;
+    const authPath = join(materializePiAgentDir(credentials), "auth.json");
+    cred = readStoredCredential(provider, authPath) as typeof cred;
     if (!cred || cred.type !== "oauth") return { status: "none" };
-    token = await storage.getApiKey(provider);
+    const runtime = await ModelRuntime.create({ authPath });
+    token = (await runtime.getAuth(provider))?.auth.apiKey;
   } catch {
     return { status: "error" }; // store unreadable / refresh raced — transient, keep last-known.
   }
