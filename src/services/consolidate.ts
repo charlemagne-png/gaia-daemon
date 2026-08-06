@@ -131,6 +131,11 @@ export interface ConsolidateLlmInput {
   system: string;
   user: string;
   model?: AgentModelConfig;
+  /** The consolidating agent's bound account id. The daemon-side llm points
+   * the model runtime at THIS account's live (rotating) credential store — the
+   * same one the agent's turns use — instead of the ambient login, which can
+   * expire independently and silently kill consolidation. */
+  account?: string;
 }
 export type ConsolidateLlm = (input: ConsolidateLlmInput) => Promise<string>;
 
@@ -166,6 +171,9 @@ export interface ConsolidateRunOptions {
   memoryStore: MemoryStore;
   llm: ConsolidateLlm;
   model?: AgentModelConfig;
+  /** The agent's bound account id — forwarded to the llm so consolidation
+   * authenticates against the agent's live account credential store. */
+  account?: string;
   maxPerDay: number;
   /** The workspace-shared facts store (§5); absent → everything agent-scope. */
   sharedFactsDir?: string;
@@ -277,7 +285,7 @@ export async function runConsolidation(options: ConsolidateRunOptions): Promise<
 
   const maxFactAdds = options.maxFactAdds ?? DEFAULT_MAX_FACT_ADDS;
   const maxFactChars = options.maxFactChars ?? DEFAULT_MAX_FACT_CHARS;
-  const reply = await options.llm({ system: systemPrompt(maxFactAdds, maxFactChars), user, model: options.model });
+  const reply = await options.llm({ system: systemPrompt(maxFactAdds, maxFactChars), user, model: options.model, account: options.account });
   const { ops, dropped } = enforceFactBudget(parseConsolidateOps(reply), maxFactAdds, maxFactChars);
 
   // Propose mode (Dream v2): run the LLM + validation exactly as normal, apply

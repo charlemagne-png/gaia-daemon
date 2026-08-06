@@ -14,7 +14,8 @@ import { DEFAULTS } from "./core/config.js";
 import { globalPaths, workspacePaths } from "./core/paths.js";
 import { readJson, writeJsonAtomic } from "./core/store.js";
 import type { AgentDef, ChatSearchHit, ChatSearchResult, KeepAwakeCapability, PetBinding, RoomState, Snapshot, UiEvent, UsageLimits, VoiceCallInfo, Workspace, WorkspaceRecord } from "./core/types.js";
-import { capabilitiesFor, type GaiaTool, harnessIdFor } from "./harness/spec.js";
+import { capabilitiesFor, type GaiaTool, harnessIdFor, harnessSpecFor } from "./harness/spec.js";
+import { findAccount } from "./domain/accounts.js";
 import { findModelWithAlias } from "./harness/model-aliases.js";
 import { reapOrphans } from "./harness/reaper.js";
 import type { MemoryAction, MemoryMutationResult } from "./domain/memory.js";
@@ -1463,12 +1464,32 @@ async function providerRequestRewriters(): Promise<Array<(payload: unknown) => P
   return beforeRequestHandlers;
 }
 
+/** The live, rotating auth.json a bound account materializes — the SAME store
+ * the agent's turns authenticate against. Consolidation points its ModelRuntime
+ * here instead of the ambient ~/.pi/agent login, which expires independently
+ * and silently kills consolidation for every agent (observed 2026-08-06: ambient
+ * anthropic OAuth dead since 08-05 11:00 while per-account logins stayed live).
+ * Harness-agnostic (RULE #0): reads whatever cred-store dir the owning spec's
+ * accounts.env descriptor materializes; undefined → fall back to ambient. */
+function accountAuthPath(accountId: string | undefined): string | undefined {
+  if (!accountId) return undefined;
+  const record = findAccount(accountId);
+  if (!record) return undefined;
+  const env = harnessSpecFor(record.harness).accounts?.env(record.credentials);
+  const dir = env?.PI_CODING_AGENT_DIR;
+  return dir ? join(dir, "auth.json") : undefined;
+}
+
 function consolidateLlm(): ConsolidateLlm {
-  return async ({ system, user, model }) => {
+  return async ({ system, user, model, account }) => {
     const provider = model?.provider ?? DEFAULTS.model.provider;
     const name = model?.name ?? DEFAULTS.model.name;
     const { ModelRegistry, ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-    const runtime = await ModelRuntime.create();
+    // Authenticate against the consolidating agent's OWN account credential
+    // store (live/rotating) rather than the ambient login (which can expire
+    // independently and take every agent's consolidation down with it).
+    const authPath = accountAuthPath(account);
+    const runtime = await ModelRuntime.create(authPath ? { authPath } : undefined);
     // Alias fallback (RULE #0): short tier names (fable/opus/sonnet/haiku) in an
     // agent's config resolve here too — this path bypasses the harness CLI, so
     // an un-aliased `find` was silently killing consolidation for any agent

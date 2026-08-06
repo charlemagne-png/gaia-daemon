@@ -684,6 +684,7 @@ export class MemoryService {
         memoryStore: this.options.memoryStore,
         llm: this.options.llm,
         model: config.consolidate.model ?? this.apiModelFor(agent),
+        account: agent.account,
         maxPerDay: config.consolidate.maxPerDay,
         sharedFactsDir: sharedMemorySource(this.options.workspaceRoot).memoryDir,
         force: options.force,
