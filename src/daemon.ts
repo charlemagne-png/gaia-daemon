@@ -1443,27 +1443,62 @@ export class Daemon {
 /** Builds the completion function consolidation uses. Resolved lazily per call
  * so key/model changes apply without a daemon restart; no key → the call
  * throws and consolidation skips with the error as its reason. */
+// Loaded once: the ambient pi extensions' `before_provider_request` handlers
+// (chiefly pi-claude-code-identity, which relocates the system preamble so a
+// Claude Pro/Max OAuth request bills to the PLAN instead of tripping the
+// third-party-usage classifier). Consolidation runs the SAME handlers a real
+// agent turn runs, so an oauth subscription authenticates AND bills correctly.
+// Provider-agnostic (RULE #0): each handler no-ops for non-oauth/non-anthropic
+// payloads, so this is one uniform mechanism, never a harness/provider branch.
+let beforeRequestHandlers: Promise<Array<(payload: unknown) => Promise<unknown>>> | undefined;
+async function providerRequestRewriters(): Promise<Array<(payload: unknown) => Promise<unknown>>> {
+  beforeRequestHandlers ??= (async () => {
+    const { discoverAndLoadExtensions, getAgentDir } = await import("@earendil-works/pi-coding-agent");
+    const { extensions } = await discoverAndLoadExtensions([], process.cwd(), getAgentDir());
+    const raw = extensions.flatMap((ext) => ext.handlers.get("before_provider_request") ?? []);
+    // The identity handler is a pure `(event) => rewritten | undefined` payload
+    // transform that never touches ctx; pass a bare event and no ctx.
+    return raw.map((h) => (payload: unknown) => Promise.resolve(h({ type: "before_provider_request", payload }, undefined)));
+  })();
+  return beforeRequestHandlers;
+}
+
 function consolidateLlm(): ConsolidateLlm {
   return async ({ system, user, model }) => {
     const provider = model?.provider ?? DEFAULTS.model.provider;
     const name = model?.name ?? DEFAULTS.model.name;
-    const [{ completeSimple }, { ModelRegistry, ModelRuntime }] = await Promise.all([
-      // completeSimple moved to the compat subpath in pi-ai 0.80 (same shape).
-      import("@earendil-works/pi-ai/compat"),
-      import("@earendil-works/pi-coding-agent"),
-    ]);
+    const { ModelRegistry, ModelRuntime } = await import("@earendil-works/pi-coding-agent");
     const runtime = await ModelRuntime.create();
     // Alias fallback (RULE #0): short tier names (fable/opus/sonnet/haiku) in an
-    // agent's config resolve here too — this direct pi-ai path bypasses the
-    // harness CLI, so an un-aliased `find` was silently killing consolidation
-    // for any agent configured with a short name (e.g. anthropic/fable).
+    // agent's config resolve here too — this path bypasses the harness CLI, so
+    // an un-aliased `find` was silently killing consolidation for any agent
+    // configured with a short name (e.g. anthropic/fable).
     const resolved = findModelWithAlias(new ModelRegistry(runtime), provider, name);
     if (!resolved) throw new Error(`consolidation model not found: ${provider}/${name}`);
-    const apiKey = (await runtime.getAuth(provider))?.auth.apiKey;
-    const message = await completeSimple(
+    // Complete THROUGH the runtime so it authenticates with the agent's stored
+    // pi subscription login exactly like a normal turn — the runtime resolves
+    // oauth (bearer) or api-key internally. The old path pulled getAuth().apiKey
+    // and hand-fed it to a standalone completeSimple; an oauth subscription has
+    // NO apiKey, so that key was always undefined and consolidation died with
+    // "no api key for anthropic". Consolidation is an agent/subscription thing,
+    // never a raw-API-key thing. onPayload runs the ambient identity extension
+    // so the OAuth plan-billing rewrite applies here too (else a large system
+    // prompt 400s as third-party usage).
+    const rewriters = await providerRequestRewriters();
+    const message = await runtime.complete(
       resolved,
       { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
-      { ...(apiKey ? { apiKey } : {}), maxTokens: 4_000 },
+      {
+        maxTokens: 4_000,
+        onPayload: async (payload) => {
+          let current = payload;
+          for (const rewrite of rewriters) {
+            const next = await rewrite(current);
+            if (next !== undefined) current = next;
+          }
+          return current;
+        },
+      },
     );
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       throw new Error(message.errorMessage ?? "consolidation model call failed");
