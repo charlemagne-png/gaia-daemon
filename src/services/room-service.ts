@@ -3517,6 +3517,22 @@ export class RoomService {
     await this.emitRoomsChanged();
   }
 
+  /** Opt-in worker self-episode (AgentDef.selfEpisode): a summoned worker
+   * records ONE distilled episode of its own lane into its OWN memory. This is
+   * the deliberate exception to captureEpisode's incognito short-circuit — the
+   * room's raw transcript still stays out of the shared recall index (its
+   * incognito bit is untouched); only this distilled head is learned. Reuses
+   * the same mechanical memory.capture path, no duplicate write. Best-effort:
+   * never fails a summon. */
+  async captureSummonEpisode(agentId: string, task: string, reply: string, outcome: EpisodeCapture["outcome"]): Promise<void> {
+    if (!this.options.memory) return;
+    try {
+      await this.options.memory.capture(agentId, { roomId: this.roomId, task, reply, outcome });
+    } catch {
+      // Derived data; the worker's transcript already holds the full lane.
+    }
+  }
+
   /** The most recent reply text from an agent in this room (summon results). */
   async latestReplyFrom(agentId: string): Promise<string> {
     await this.init();

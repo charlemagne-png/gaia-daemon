@@ -120,6 +120,10 @@ export interface SummonRoomAccess {
   sendMessage(text: string, options: { targets: string[]; bypassContextGate?: boolean }): Promise<SummonTask>;
   subscribe(listener: (event: SummonTaskEvent) => void): () => void;
   latestReplyFrom(agentId: string): Promise<string>;
+  /** Opt-in worker self-episode (AgentDef.selfEpisode): record ONE distilled
+   * episode of this incognito lane into the WORKER's own memory. Room stays
+   * incognito; only the head is learned. Best-effort, never fails a summon. */
+  captureSummonEpisode(agentId: string, task: string, reply: string, outcome: "complete" | "error"): Promise<void>;
   /** Fully settled: no running task, no durable pending turn, empty queue
    * (covers turns that init() resumes asynchronously after a restart). */
   waitForSettled(): Promise<void>;
@@ -448,13 +452,21 @@ export class SummonCoordinator implements SummonHost {
     const info: SummonChild = { roomId: childRoomId, parentRoomId, agentId, prompt: task, untrusted };
     this.running.set(childRoomId, info);
 
+    // Worker self-episode opt-in (AgentDef.selfEpisode): the WORKER learns from
+    // its own lane. Separate from caller-side insight ledgers; keyed on the
+    // worker's def, best-effort, room stays incognito (only the head is
+    // captured, via the same memory.capture path a normal turn uses).
+    const workerSelfEpisode = this.workspace.agents[agentId]?.selfEpisode === true;
     const ledgered = this.runChild(child, info, task, options).then(
       async (reply) => {
         await recordInsightLedger(caller, agentId, childRoomId, task, reply, false, this.log);
+        if (workerSelfEpisode) await child.captureSummonEpisode(agentId, task, reply, "complete");
         return reply;
       },
       async (error) => {
-        await recordInsightLedger(caller, agentId, childRoomId, task, error instanceof Error ? error.message : String(error), true, this.log);
+        const message = error instanceof Error ? error.message : String(error);
+        await recordInsightLedger(caller, agentId, childRoomId, task, message, true, this.log);
+        if (workerSelfEpisode) await child.captureSummonEpisode(agentId, task, message, "error");
         throw error;
       },
     );
