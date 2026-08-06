@@ -49,6 +49,9 @@ async function applyAppPayload(body) {
  * @param {string} [currentWorkspaceId] Preferred workspace to open (e.g. the one
  *   the user last had open). Ignored if it no longer exists, so a removed
  *   workspace never surfaces as an error on boot.
+ * @returns {Promise<boolean>} true once the daemon answered and the app loaded;
+ *   false if the daemon was unreachable (e.g. mid /rebuild re-exec) — the caller
+ *   retries rather than dead-ending on a blank error screen.
  */
 export async function loadApp(currentWorkspaceId) {
   try {
@@ -57,8 +60,10 @@ export async function loadApp(currentWorkspaceId) {
     await applyAppPayload(body);
     const known = (body.workspaces ?? []).some((workspace) => workspace.id === currentWorkspaceId);
     if (currentWorkspaceId && known && body.currentWorkspaceId !== currentWorkspaceId) await loadWorkspace(currentWorkspaceId);
+    return true;
   } catch (error) {
     setError(error);
+    return false;
   }
 }
 
