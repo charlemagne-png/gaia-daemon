@@ -74,7 +74,13 @@ export function connectEvents(resyncOnReady = false) {
     const bootId = payload && typeof payload === "object" && typeof payload.bootId === "string" ? payload.bootId : undefined;
     if (bootId) {
       if (knownBootId && knownBootId !== bootId) {
-        window.location.reload();
+        // Daemon re-exec'd (/rebuild). In a plain browser, reload now. In the
+        // native shell, DON'T — a reload here races the ~1-3s daemon-down
+        // window and, on macOS wry, can leave the WKWebView rendered but the
+        // NSWindow blank/frozen. The Rust side watches the daemon pidfile and
+        // drives a reload + 1px repaint nudge once the fresh daemon answers
+        // (src-tauri/src/lib.rs), which reconnects AND re-composites.
+        if (!(/** @type {any} */ (window).__TAURI_INTERNALS__)) window.location.reload();
         return;
       }
       knownBootId = bootId;

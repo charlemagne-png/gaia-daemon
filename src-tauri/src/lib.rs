@@ -640,6 +640,78 @@ mod webkit {
                 install_ios_scroll_inset_fix(&main_window);
                 crate::debug_server::spawn(app.handle().clone());
 
+                // Native repaint after /rebuild. The daemon re-execs on reload
+                // and rewrites <gaia home>/daemon.pid with the new pid. On macOS
+                // wry the WKWebView sometimes renders the fresh DOM without
+                // compositing it to the NSWindow — a blank/frozen window the user
+                // could only escape by force-quitting. Watch the pidfile; when it
+                // changes, wait for the new daemon to accept connections, reload
+                // the view, then nudge the window size by 1px to force a
+                // WKWebView→NSWindow re-composite. Pure-shell; the web client
+                // suppresses its own bootId reload inside the shell (events.js).
+                #[cfg(desktop)]
+                {
+                    let handle = app.handle().clone();
+                    let win = main_window.clone();
+                    let port = resolve_port();
+                    std::thread::spawn(move || {
+                        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                        let mut last = crate::daemon_lifecycle::read_daemon_pid();
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            let cur = crate::daemon_lifecycle::read_daemon_pid();
+                            if cur.is_none() || cur == last {
+                                continue;
+                            }
+                            // Daemon pid changed — a re-exec happened. Wait (≈15s)
+                            // for the new daemon to actually accept connections.
+                            let deadline =
+                                std::time::Instant::now() + std::time::Duration::from_secs(15);
+                            let mut healthy = false;
+                            while std::time::Instant::now() < deadline {
+                                if std::net::TcpStream::connect_timeout(
+                                    &addr,
+                                    std::time::Duration::from_millis(300),
+                                )
+                                .is_ok()
+                                {
+                                    healthy = true;
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                            }
+                            last = cur;
+                            if !healthy {
+                                continue;
+                            }
+                            // Let the fresh daemon settle before we reload onto it.
+                            std::thread::sleep(std::time::Duration::from_millis(600));
+                            let w = win.clone();
+                            let _ = handle.run_on_main_thread(move || {
+                                let _ = w.eval("window.location.reload()");
+                                if let Ok(s) = w.inner_size() {
+                                    let _ = w.set_size(tauri::PhysicalSize::new(
+                                        s.width + 1,
+                                        s.height,
+                                    ));
+                                }
+                            });
+                            // Separate main-loop tick so the compositor registers
+                            // the size change, then restore — this is the nudge.
+                            std::thread::sleep(std::time::Duration::from_millis(140));
+                            let w = win.clone();
+                            let _ = handle.run_on_main_thread(move || {
+                                if let Ok(s) = w.inner_size() {
+                                    let _ = w.set_size(tauri::PhysicalSize::new(
+                                        s.width.saturating_sub(1),
+                                        s.height,
+                                    ));
+                                }
+                            });
+                        }
+                    });
+                }
+
                 Ok(())
             })
             .build(tauri::generate_context!())
