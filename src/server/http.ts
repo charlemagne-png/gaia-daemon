@@ -97,14 +97,34 @@ function pidfilePath(): string {
 function installParentWatchdog(): void {
   const parentPid = Number.parseInt(process.env.GAIA_PARENT_PID ?? "", 10);
   if (!Number.isInteger(parentPid) || parentPid <= 0) return;
-  setInterval(() => {
+  const timer = setInterval(() => {
     try {
       process.kill(parentPid, 0);
     } catch {
+      // The shell we were told to shadow is gone. A FIRST-GENERATION daemon
+      // spawned directly by the shell (its immediate parent is the shell / its
+      // bun launcher, so process.ppid !== 1) must die with it — that is how a
+      // quit avoids leaking a daemon. But a daemon produced by a /reload
+      // re-exec is spawned detached and reparented to launchd (process.ppid ===
+      // 1), and across a /rebuild the shell ITSELF is torn down and relaunched
+      // — so the pre-rebuild GAIA_PARENT_PID we inherited is stale. Suiciding
+      // there frees :8787 with NO daemon behind it; the reloading webview then
+      // hits ERR_CONNECTION_REFUSED and parks on a blank screen the user can
+      // only escape by force-quitting (observed 2026-08-06: every rebuild
+      // logged "parent shell gone — exiting", pid chain 53572→55224→57563→…).
+      // The shell reclaims :8787 on its next launch (kills the owner, spawns a
+      // fresh daemon), so a re-exec'd daemon is safe — even correct — to keep
+      // serving. Stop watching a pid that can never be ours again and stay up.
+      if (process.ppid === 1) {
+        console.error(`[daemon] parent GAIA shell (pid ${parentPid}) is gone, but this is a re-exec'd/detached daemon (ppid=1) — staying up so the reloaded webview / next shell can use :8787`);
+        clearInterval(timer);
+        return;
+      }
       console.error(`[daemon] parent GAIA shell (pid ${parentPid}) is gone — exiting`);
       process.exit(0);
     }
-  }, 2000).unref();
+  }, 2000);
+  timer.unref();
 }
 
 function stringField(body: unknown, field: string): string | undefined {
