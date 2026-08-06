@@ -6,6 +6,7 @@
 // route table over this class.
 
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { Bus } from "./core/bus.js";
@@ -18,7 +19,7 @@ import { findModelWithAlias } from "./harness/model-aliases.js";
 import { reapOrphans } from "./harness/reaper.js";
 import type { MemoryAction, MemoryMutationResult } from "./domain/memory.js";
 import { MemoryStore } from "./domain/memory.js";
-import { normalizeRoomState } from "./domain/rooms.js";
+import { normalizeRoomState, RoomHandle } from "./domain/rooms.js";
 import { listWorkspacePetBindings } from "./domain/pets.js";
 import { DEFAULT_ROOM, ensureWorkspaceRoom, initWorkspace, isValidRoomId, liveMaxSummonsPerRoom, loadWorkspace, setWorkspaceDefaultAgent, setWorkspaceRoom, trashWorkspaceRoom, workspacePath } from "./domain/workspace.js";
 import { setAgentDefaultRole, trashGlobalAgent } from "./domain/agents.js";
@@ -50,6 +51,7 @@ import {
 import { readAloud, readAloudStream, resolveTtsChoice, ttsStackSettings, type ReadAloudDelivery, type ReadAloudResult } from "./services/read-aloud.js";
 import { transcribe, type SttAudioInput } from "./services/transcribe.js";
 import { TtsCallBridge } from "./services/voice-tts-bridge.js";
+import { SttCallBridge } from "./services/voice-stt-bridge.js";
 import { KeepAwakeManager, keepAwakeCapability, migrateLegacyLaunchdAgent, readKeepAwakeSetting, writeKeepAwakeSetting } from "./services/keep-awake.js";
 import { readUserNameSetting, writeUserNameSetting } from "./services/user-name.js";
 
@@ -183,6 +185,8 @@ export class Daemon {
   // Live only while a call routes its TTS through a read-aloud engine
   // (claude-voice); torn down on hang-up.
   private ttsBridge: TtsCallBridge | undefined;
+  // Live only while a call routes STT through Replicate; torn down on hang-up.
+  private sttBridge: SttCallBridge | undefined;
   // Resolves once boot()'s orphan sweep has finished. serviceFor() awaits this
   // so an HTTP request landing in the window between "server listening" and
   // "orphan sweep done" (the server accepts connections before boot() settles
@@ -745,6 +749,16 @@ export class Daemon {
     return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
   }
 
+  /** Run a declarative local-plugin panel action through its normal slash-command
+   * state path, then return/broadcast the authoritative room snapshot. */
+  async runPluginAction(workspaceId: string, roomId: string, command: string, args: string[]): Promise<SelectionPayload & { message: string }> {
+    const service = await this.serviceFor(workspaceId, roomId);
+    const message = await service.runPluginAction(command, args);
+    const snapshot = await service.getSnapshot();
+    this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
+    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), message };
+  }
+
   /** Toggle room agent-dialogue (agents replying to each other's @mentions). */
   async setRoomAgentDialogue(workspaceId: string, roomId: string, on: boolean): Promise<SelectionPayload> {
     const service = await this.serviceFor(workspaceId, roomId);
@@ -1007,6 +1021,85 @@ export class Daemon {
     return window ?? `no transcript hit with id ${hitId} — ids come from recall results ("hit N")`;
   }
 
+  /** INSIGHT "full" tier, decree 2026-07-28 part 3: direct, pull-based read of
+   * ANY currently-incognito room's raw transcript, on demand — never indexed,
+   * never pushed anywhere, reachable only when the CALLING agent's own
+   * `insight` is "full" (Solas reading a brother's room, not a general
+   * capability — the target room's own owner/agentId is irrelevant to the
+   * gate). Windowed by event count (offset/limit) because a ghoul's
+   * transcript can run to megabytes of tool-call noise; unwindowed dumping
+   * would defeat the point of a considered, on-demand read. */
+  async harnessGhoulRoomRead(claims: HarnessTokenClaims, targetRoomId: string, options: { offset?: number; limit?: number } = {}): Promise<string> {
+    const record = await this.registry.find(claims.workspaceId);
+    if (!record) throw new Error(`Unknown workspace: ${claims.workspaceId}`);
+    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
+    const caller = service.workspace.agents[claims.agentId];
+    if (caller?.insight !== "full") {
+      throw new Error(`insight "full" required to read another room's raw transcript (caller '${claims.agentId}' has insight "${caller?.insight ?? "none"}")`);
+    }
+    // RoomHandle.open has create-on-open semantics (seeds a default state.json
+    // for any id that doesn't exist) — wrong for a read-only "look into the
+    // labyrinth" operation, so check existence first; never let a typo'd room
+    // id silently create a phantom room on disk.
+    if (!existsSync(workspacePaths.roomState(record.path, targetRoomId))) throw new Error(`no such room: ${targetRoomId}`);
+    const handle = await RoomHandle.open(record.path, targetRoomId);
+    const state = await handle.state();
+    if (state.incognito !== true) {
+      throw new Error(`'${targetRoomId}' is not an incognito room — read it through normal recall instead`);
+    }
+    const { events } = await handle.eventsFrom(0);
+    const offset = Math.max(0, options.offset ?? 0);
+    const limit = Math.min(Math.max(1, options.limit ?? 40), 200);
+    const window = events.slice(offset, offset + limit);
+    if (window.length === 0) return `'${targetRoomId}': no events at offset ${offset} (${events.length} total)`;
+    const lines = window.map((event, index) => {
+      const shown = event.text.length > 800 ? `${event.text.slice(0, 800)}…` : event.text;
+      return `[${offset + index}] ${event.author}: ${shown || "(no text)"}`;
+    });
+    const consumed = offset + window.length;
+    const more = consumed < events.length ? `\n\n… ${events.length - consumed} more events; pass offset=${consumed} to continue` : "";
+    return `${targetRoomId} (${events.length} events total, showing ${offset}–${consumed - 1}):\n\n${lines.join("\n")}${more}`;
+  }
+
+  /** INSIGHT "full" tier: search every agent's distilled summon ledgers (never
+   * the raw transcripts) by substring — "index the ledgers, not the
+   * transcripts" (decree 2026-07-28 part 2): real search power, zero
+   * widening of the shared recall index (ledgers never enter that index; this
+   * reads the plain .md files directly, filesystem-scoped). Omitted query =
+   * list every entry. */
+  async harnessGhoulLedgerSearch(claims: HarnessTokenClaims, query?: string): Promise<string> {
+    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
+    const caller = service.workspace.agents[claims.agentId];
+    if (caller?.insight !== "full") {
+      throw new Error(`insight "full" required to search other agents' ledgers (caller '${claims.agentId}' has insight "${caller?.insight ?? "none"}")`);
+    }
+    const needle = query?.trim().toLowerCase();
+    const hits: string[] = [];
+    for (const agent of Object.values(service.workspace.agents)) {
+      const dir = join(agent.memoryDir, "ledgers");
+      let files: string[];
+      try {
+        files = (await readdir(dir)).filter((name) => name.endsWith(".md"));
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        let content: string;
+        try {
+          content = await readFile(join(dir, file), "utf8");
+        } catch {
+          continue;
+        }
+        const entries = content.split(/\n(?=§ )/).filter((entry) => entry.trim());
+        for (const entry of entries) {
+          if (!needle || entry.toLowerCase().includes(needle)) hits.push(`--- ${agent.id} / ${file} ---\n${entry.trim()}`);
+        }
+      }
+    }
+    if (hits.length === 0) return needle ? `no ledger entries matching "${query}"` : "no ledger entries recorded yet";
+    return hits.slice(0, 40).join("\n\n");
+  }
+
   /** Dream v2 propose: a user-triggered consolidation preview for `agentId`
    * (the CLI's `[agent]` argument — may differ from the caller, same as
    * summon's target). Never gated by a GaiaTool grant (see cli-tools.ts's
@@ -1115,6 +1208,19 @@ export class Daemon {
       this.log(`voice: routing @${agent.id}'s call TTS through the ${ttsChoice.engine.id} bridge (voice: ${ttsChoice.voice ?? "default"})`);
     }
 
+    // Replicate is one-shot transcription, so the bridge presents it as the
+    // native unmute streaming STT protocol. kyutai remains the untouched native
+    // default; unknown settings deliberately retain that safe default.
+    let sttEndpoint: string | undefined;
+    if (settings.callSttEngine === "replicate") {
+      const bridge = new SttCallBridge({ log: (message) => this.log(message) });
+      const { wsUrl } = await bridge.start(settings);
+      this.sttBridge?.stop();
+      this.sttBridge = bridge;
+      sttEndpoint = wsUrl;
+      this.log("voice: routing call STT through the Replicate bridge");
+    }
+
     this.voiceStarting = true;
     let unmuteUrl: string;
     try {
@@ -1126,6 +1232,7 @@ export class Daemon {
           startTimeoutMs: settings.startTimeoutSec * 1000,
           silenceTimeoutSec: settings.speakOnSilence ? settings.silenceDelaySec : null,
           ttsEndpoint,
+          sttEndpoint,
         },
         gaiaUrl,
         (message) => {
@@ -1136,6 +1243,8 @@ export class Daemon {
       // A failed stack start must not leak the bridge listener.
       this.ttsBridge?.stop();
       this.ttsBridge = undefined;
+      this.sttBridge?.stop();
+      this.sttBridge = undefined;
       throw error;
     } finally {
       this.voiceStarting = false;
@@ -1168,10 +1277,12 @@ export class Daemon {
       await clearCallOverride().catch(() => {});
       this.broadcast({ type: "voice-status", workspaceId, roomId: ended.info.roomId, voice: null });
     }
-    // Tear down the TTS bridge (if this call used claude-voice), then stop
-    // exactly the services GAIA spawned; external ones are left alone.
+    // Tear down call bridges, then stop exactly the services GAIA spawned;
+    // externally started services are left alone.
     this.ttsBridge?.stop();
     this.ttsBridge = undefined;
+    this.sttBridge?.stop();
+    this.sttBridge = undefined;
     this.voiceStack.stop();
   }
 
@@ -1261,7 +1372,7 @@ export class Daemon {
       }
     }
 
-    this.hintSourcesCache ??= { toolNames: sdkToolNames(this.options.cwd), models: readModelCatalog().models };
+    this.hintSourcesCache ??= { toolNames: sdkToolNames(this.options.cwd), models: (await readModelCatalog()).models };
     const sources: HintSources = {
       agentIds,
       roomIds,
@@ -1336,19 +1447,19 @@ function consolidateLlm(): ConsolidateLlm {
   return async ({ system, user, model }) => {
     const provider = model?.provider ?? DEFAULTS.model.provider;
     const name = model?.name ?? DEFAULTS.model.name;
-    const [{ completeSimple }, { AuthStorage, ModelRegistry }] = await Promise.all([
+    const [{ completeSimple }, { ModelRegistry, ModelRuntime }] = await Promise.all([
       // completeSimple moved to the compat subpath in pi-ai 0.80 (same shape).
       import("@earendil-works/pi-ai/compat"),
       import("@earendil-works/pi-coding-agent"),
     ]);
-    const authStorage = AuthStorage.create();
+    const runtime = await ModelRuntime.create();
     // Alias fallback (RULE #0): short tier names (fable/opus/sonnet/haiku) in an
     // agent's config resolve here too — this direct pi-ai path bypasses the
     // harness CLI, so an un-aliased `find` was silently killing consolidation
     // for any agent configured with a short name (e.g. anthropic/fable).
-    const resolved = findModelWithAlias(ModelRegistry.create(authStorage), provider, name);
+    const resolved = findModelWithAlias(new ModelRegistry(runtime), provider, name);
     if (!resolved) throw new Error(`consolidation model not found: ${provider}/${name}`);
-    const apiKey = await authStorage.getApiKey(provider);
+    const apiKey = (await runtime.getAuth(provider))?.auth.apiKey;
     const message = await completeSimple(
       resolved,
       { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },

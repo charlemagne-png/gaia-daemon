@@ -53,15 +53,15 @@ import { deriveRoomTitle, isAutoRoomId, newRoomEventId, normalizeRoomState, norm
 import { DEFAULT_PET_NAME, listWorkspacePetBindings, loadPet } from "../domain/pets.js";
 import { resolveRoomWorkDir } from "../domain/worktree.js";
 import { effectiveAgentSkills, effectiveAgentTools, effectiveRoleName, listAgentRoles, resolveAgentRole } from "../domain/roles.js";
-import { discoverSkills } from "../domain/skills.js";
+import { resolveSkillRefs } from "../domain/skills.js";
 import type { MemoryStore, MemoryAction, MemoryMutationResult } from "../domain/memory.js";
 import { formatMemoryHits, type ActiveContextRef, type MemorySearchHit } from "../domain/workspace-index.js";
 import type { AgentRuntime, HarnessHost } from "../harness/spec.js";
 import { capabilitiesFor, contextWindowFor, findHarness, harnessIdFor, nativeCommandsFor, usageAccountFor } from "../harness/spec.js";
 import { readOptional, renderAttachmentLines, renderRoomTranscript } from "../harness/prompt.js";
 import { readUserNameSetting } from "./user-name.js";
-import { HELP_TEXT, SLASH_COMMANDS, hasExplicitMention, mentionedAgents, parseCommand, planMentionRoute, type SlashCommand } from "./commands.js";
-import { loadCommandPlugins, type CommandPlugin } from "./plugins.js";
+import { HELP_TEXT, SLASH_COMMANDS, hasExplicitMention, mentionedAgents, parseCommand, planMentionRoute, validateThinkingLevel, type SlashCommand } from "./commands.js";
+import { loadCommandPlugins, type CommandPlugin, type PluginContext, type PluginPanel } from "./plugins.js";
 import { SANITIZE_REVIEWER_ID, buildSanitizePrompt, parseSanitizeProposal, type SanitizeContext } from "./sanitize.js";
 import { applyEventToDetails, finalizeInterruptedTools, runAgentTurn } from "./turns.js";
 import type { EpisodeCapture } from "./memory-service.js";
@@ -325,6 +325,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   roles: (service, command) => service.renderRoles(command.type === "roles" ? command.agent : undefined),
   role: (service, command) => (command.type === "role" ? service.setRole(command.agent, command.role) : Promise.resolve("")),
   thinking: (service, command) => (command.type === "thinking" ? service.runThinkingCommand(command.agent, command.level) : Promise.resolve("")),
+  "thinking-level": (service, command) => (command.type === "thinking-level" ? service.runThinkingLevelCommand(command.level) : Promise.resolve("")),
   model: (service, command) => (command.type === "model" ? service.runModelCommand(command.agent, command.spec) : Promise.resolve("")),
   pet: (service, command) => (command.type === "pet" ? service.runPetCommand(command) : Promise.resolve("")),
   summon: (service, command) => (command.type === "summon" ? service.runSummonCommand(command.agent, command.task) : Promise.resolve("")),
@@ -651,11 +652,11 @@ export class RoomService {
       }
       const target = await this.nativeCommandTarget();
       const agent = this.workspace.agents[target];
-      const commandName = text.trim().replace(/^\/+/, "").split(/\s+/)[0]?.toLowerCase() ?? "";
-      // Honor role-granted native skills too (agentSkillNames merges them for the
-      // prompt); this rare typed-command path can afford the async role resolve.
-      const roleSkills = agent ? await this.activeRoleSkills(target, agent) : [];
-      if (agent && this.agentNativeSkillNames(agent, undefined, roleSkills).has(commandName)) {
+      // The harness owns its command surface. Never duplicate its skill/template
+      // registry here: pass an unclaimed command-shaped token through verbatim
+      // whenever the active harness advertises native command handling. Pi then
+      // resolves its loaded skills and prompt templates in AgentSession.prompt().
+      if (agent && findHarness(harnessIdFor(agent, this.workspace))?.capabilities.supportsNativeCommands) {
         command = { type: "message", text };
         options = { ...options, targets: [target], nativeCommand: true };
       } else if (text.trim().split(/\s+/).length > 1) {
@@ -1400,6 +1401,7 @@ export class RoomService {
       let ambientFiredAt = 0;
 
       const userName = await readUserNameSetting();
+      const pluginContext = await this.pluginPrompt(state, target);
 
       let turn: Awaited<ReturnType<typeof runAgentTurn>>;
       try {
@@ -1415,7 +1417,9 @@ export class RoomService {
             skills: effectiveAgentSkills(agent, activeRole),
             channel: options.channel,
             thinking: options.thinking ?? state.thinkingOverrides[target],
+            ...(state.thinkingLevel ? { protocolThinkingLevel: state.thinkingLevel } : {}),
             recall,
+            ...(pluginContext ? { pluginContext } : {}),
             ...(options.nativeCommand ? { nativeCommand: true } : {}),
             ...(userName ? { userName } : {}),
           },
@@ -2090,14 +2094,71 @@ export class RoomService {
   /** Runs a local command-plugin's .run(), tolerating a thrown/rejected plugin
    * the same way loadCommandPlugins tolerates a bad module at load time —
    * never crashes the caller. See services/plugins.ts for the contract. */
+  private pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>): PluginContext {
+    return {
+      homedir: homedir(),
+      roomId: this.roomId,
+      workspaceRoot: this.workspace.rootDir,
+      state: state.pluginState?.[plugin.command],
+      agents: Object.values(this.workspace.agents).map((agent) => ({ id: agent.id, displayName: agent.displayName, icon: agent.icon })),
+    };
+  }
+
   private async runPlugin(plugin: CommandPlugin, args: string[]): Promise<{ steer?: string; reply?: string }> {
     try {
-      return (
-        (await plugin.run(args, { homedir: homedir(), roomId: this.roomId, workspaceRoot: this.workspace.rootDir })) ?? {}
-      );
+      const state = await this.room.state();
+      const result = (await plugin.run(args, this.pluginContext(plugin, state))) ?? {};
+      if (result.state || (result.activeAgent && this.workspace.agents[result.activeAgent])) {
+        await this.room.updateState((next) => {
+          if (result.state) {
+            next.pluginState ??= {};
+            next.pluginState[plugin.command] = result.state;
+          }
+          if (result.activeAgent && this.workspace.agents[result.activeAgent]) next.activeAgent = result.activeAgent;
+        });
+        await this.emitSnapshot();
+      }
+      return result;
     } catch (error) {
       return { reply: `plugin ${plugin.command}: ${error instanceof Error ? error.message : String(error)}` };
     }
+  }
+
+  /** Generic API/UI bridge: plugin action args use the exact same durable run
+   * path as a slash command, so extensions never write room state themselves. */
+  async runPluginAction(command: string, args: string[]): Promise<string> {
+    await this.init();
+    const plugin = (await this.pluginsPromise).get(command);
+    if (!plugin) throw new Error(`Unknown plugin: ${command}`);
+    return (await this.runPlugin(plugin, args)).reply ?? "";
+  }
+
+  private async pluginPanels(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<Record<string, PluginPanel> | undefined> {
+    const panels: Record<string, PluginPanel> = {};
+    for (const plugin of (await this.pluginsPromise).values()) {
+      if (!plugin.panel) continue;
+      try {
+        const panel = await plugin.panel(this.pluginContext(plugin, state));
+        if (panel) panels[plugin.command] = panel;
+      } catch (error) {
+        console.warn(`[plugins] panel ${plugin.command}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return Object.keys(panels).length ? panels : undefined;
+  }
+
+  private async pluginPrompt(state: Awaited<ReturnType<RoomHandle["state"]>>, agentId: string): Promise<string | undefined> {
+    const blocks: string[] = [];
+    for (const plugin of (await this.pluginsPromise).values()) {
+      if (!plugin.prompt) continue;
+      try {
+        const block = await plugin.prompt({ ...this.pluginContext(plugin, state), agentId });
+        if (block?.trim()) blocks.push(block.trim());
+      } catch (error) {
+        console.warn(`[plugins] prompt ${plugin.command}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return blocks.length ? blocks.join("\n\n") : undefined;
   }
 
   /** Idle-path fallback for an unrecognized /command: the sendMessage seam
@@ -2820,47 +2881,51 @@ export class RoomService {
     return effectiveAgentSkills(agent, role);
   }
 
-  private agentNativeSkillNames(agent: AgentDef, onDiskLower?: Set<string>, extraSkills: string[] = []): Set<string> {
-    const skills = [...(agent.skills ?? []), ...extraSkills];
-    if (skills.length === 0) return new Set();
+  private agentNativeSkillNames(agent: AgentDef, skillNames: string[], onDiskLower: Set<string>): Set<string> {
+    if (skillNames.length === 0) return new Set();
     const harnessId = harnessIdFor(agent, this.workspace);
     // findHarness (not capabilitiesFor) so an unregistered harness yields "no
     // native support" instead of throwing — the palette runs even mid-boot.
     if (!findHarness(harnessId)?.capabilities.supportsNativeCommands) return new Set();
-    // A native command routes only if it's FILELESS (a builtin) — a name that
-    // also exists on disk inlines as text instead. Caller may pass the on-disk
-    // set so the palette scans once for all agents, not once per agent.
-    const onDisk = onDiskLower ?? new Set(discoverSkills(this.workspace).map((skill) => skill.name.toLowerCase()));
-    const native = new Set(nativeCommandsFor(harnessId).map((command) => command.name.toLowerCase()).filter((name) => !onDisk.has(name)));
-    return new Set(skills.map((skill) => skill.toLowerCase()).filter((name) => native.has(name)));
+    // A native command routes only if it is FILELESS. The resolved on-disk set
+    // comes from this agent's effective skills, so the palette never does a
+    // second registry scan or advertises a builtin over a loaded SKILL.md.
+    const native = new Set(nativeCommandsFor(harnessId).map((command) => command.name.toLowerCase()).filter((name) => !onDiskLower.has(name)));
+    return new Set(skillNames.map((skill) => skill.toLowerCase()).filter((name) => native.has(name)));
   }
 
-  /** The `/`-command palette: gaia commands + the harness-native commands each
-   * agent CHECKED as a skill (deduped, gaia names win) + loaded command plugins
-   * (see ./plugins.js). Native ones are hints — only a checked one passes
-   * through; plugins always pass through (see sendMessage's plugin dispatch). */
+  /** The `/`-command palette: daemon builtins, harness-fileless commands, and
+   * plugins. Pi owns discovery and slash-command presentation for SKILL.md
+   * commands; Gaia only forwards a typed native command to Pi's SDK. */
   private async paletteCommands(): Promise<SlashCommandDefinition[]> {
     const seen = new Set(SLASH_COMMANDS.map((command) => command.name));
-    const native: SlashCommandDefinition[] = [];
-    const onDisk = new Set(discoverSkills(this.workspace).map((skill) => skill.name.toLowerCase()));
-    // Agent-level only (no async role resolve) since this runs per snapshot — a
-    // role-granted native command still ROUTES when typed, just isn't hinted here.
-    for (const agent of Object.values(this.workspace.agents)) {
-      const checked = this.agentNativeSkillNames(agent, onDisk);
-      if (checked.size === 0) continue;
-      for (const command of nativeCommandsFor(harnessIdFor(agent, this.workspace))) {
+    const dynamic: SlashCommandDefinition[] = [];
+    const agents = await Promise.all(
+      Object.values(this.workspace.agents).map(async (agent) => ({
+        agent,
+        harnessId: harnessIdFor(agent, this.workspace),
+        skillNames: await this.activeRoleSkills(agent.id, agent),
+      })),
+    );
+    for (const { agent, harnessId, skillNames } of agents) {
+      if (!findHarness(harnessId)?.capabilities.supportsNativeCommands) continue;
+      // Fileless builtins remain daemon palette entries; on-disk skills belong
+      // exclusively to Pi's own command surface and are never advertised here.
+      const onDisk = new Set(resolveSkillRefs(this.workspace, skillNames).skills.map((skill) => skill.name.toLowerCase()));
+      const checked = this.agentNativeSkillNames(agent, skillNames, onDisk);
+      for (const command of nativeCommandsFor(harnessId)) {
         const name = command.name.toLowerCase();
         if (!checked.has(name) || seen.has(command.name)) continue;
         seen.add(command.name);
-        native.push({ name: command.name, type: "native", description: command.description, native: true });
+        dynamic.push({ name: command.name, type: "native", description: command.description, native: true });
       }
     }
     for (const plugin of (await this.pluginsPromise).values()) {
       if (seen.has(plugin.command)) continue;
       seen.add(plugin.command);
-      native.push({ name: plugin.command, type: "native", description: plugin.description ?? "", native: true });
+      dynamic.push({ name: plugin.command, type: "native", description: plugin.description ?? "", native: true });
     }
-    return native.length ? [...SLASH_COMMANDS, ...native] : SLASH_COMMANDS;
+    return dynamic.length ? [...SLASH_COMMANDS, ...dynamic] : SLASH_COMMANDS;
   }
 
   async renderAgentsList(): Promise<string> {
@@ -2940,6 +3005,25 @@ export class RoomService {
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }
+  }
+
+  /** Room-wide GAIA-THINK protocol level (`/thinking N`, 0-10; `off`=0).
+   * Distinct from the per-agent SDK reasoning-effort override above: this is a
+   * single room value written to RoomState.thinkingLevel that drives the
+   * `# Protocols` section's thinking line for EVERY agent. Rejects out-of-range
+   * (existing validation style). The level rides in the system prompt via
+   * promptCacheKey, so it takes effect on each agent's next turn. */
+  async runThinkingLevelCommand(level: number): Promise<string> {
+    const error = validateThinkingLevel(level);
+    if (error) return error;
+    await this.room.updateState((state) => {
+      if (level === 0) delete state.thinkingLevel;
+      else state.thinkingLevel = level;
+    });
+    await this.emitSnapshot();
+    return level === 0
+      ? "Thinking disabled for this room (GAIA-THINK level 0)."
+      : `Set GAIA-THINK level to ${level}/10 for this room.`;
   }
 
   /** Room-scoped thinking override (mirrors setRole): writes ONLY
@@ -3301,6 +3385,7 @@ export class RoomService {
     const all = (await this.room.eventsFrom(0)).events;
     const events = all.slice(-this.workspace.config.transcriptWindow);
     const state = await this.room.state();
+    const pluginPanels = await this.pluginPanels(state);
     // The selected agent plus any agents actively executing this room's turn
     // are the only identities that can spend here. This is deliberately not
     // the workspace roster: an unrelated agent/account in another room must
@@ -3334,6 +3419,7 @@ export class RoomService {
         ...(usageAccounts.length > 0 ? { usageAccounts: [...new Set(usageAccounts)] } : {}),
         ...(state.agentDialogue ? { agentDialogue: true } : {}),
         ...(state.petBindings ? { petBindings: { ...state.petBindings } } : {}),
+        ...(pluginPanels ? { pluginPanels } : {}),
         ...(this.incognito ? { incognito: true } : {}),
         ...(this.sanitizeStatus ? { sanitize: this.sanitizeStatus } : {}),
         ...(this.contextGate ? { contextGate: this.contextGate } : {}),
@@ -3652,6 +3738,8 @@ export class RoomService {
         return { ...scope, type: "thinking-delta", delta: event.delta };
       case "thinking-end":
         return { ...scope, type: "thinking-end", content: event.content };
+      case "skill-invocation":
+        return { ...scope, type: "skill-invocation", skill: event.skill };
       case "tool-start":
         return { ...scope, type: "tool-start", toolName: event.toolName, toolCallId: event.toolCallId, args: event.args };
       case "tool-update":

@@ -34,9 +34,15 @@ export interface AgentInput {
   channel?: "text" | "voice";
   /** Per-turn thinking override (e.g. voice forcing it off). */
   thinking?: string;
+  /** Room-wide GAIA-THINK protocol level (0-10) from RoomState.thinkingLevel;
+   * rides into the `# Protocols` section of the system prompt. Unset = 0. */
+  protocolThinkingLevel?: number;
   /** Auto-retrieved memory block for this turn ("" / absent = nothing cleared
    * the relevance gate). Turn-level overlay, never part of the session. */
   recall?: string;
+  /** Room-local context supplied by installed command plugins. Resolved once in
+   * RoomService and threaded through every harness by the shared prompt seam. */
+  pluginContext?: string;
   /** This turn is a raw harness-native command (e.g. "/deep-research ..."):
    * the harness hands `message` to its underlying CLI VERBATIM — no prompt
    * wrapping, no memory/transcript overlay — with its own skill/slash-command
@@ -130,7 +136,7 @@ export interface AgentRuntime {
 
 // --- capabilities + ui (data on the spec) --------------------------------------
 
-export type GaiaTool = "memory" | "recall" | "summon" | "resume";
+export type GaiaTool = "memory" | "recall" | "artifact" | "summon" | "resume" | "gaia";
 
 export interface HarnessCapabilities {
   /** Which gaia tools this harness can wire into a session; the agent's
@@ -225,6 +231,8 @@ export interface RuntimeCreateContext {
   memoryStore: MemoryStore;
   /** In-process summon entry (Pi tools); absent when summoning is not allowed. */
   summonCreate?: SummonCreate;
+  /** Existing-room steering entry; same operation as `gaia resume`. */
+  resumeCreate?: ResumeCreate;
   /** Daemon bridge for subprocess harnesses' memory/recall/summon CLI. */
   harnessHost?: HarnessHost;
   /** Hybrid memory search (facts + episodes + room history), daemon-side. */
@@ -237,6 +245,13 @@ export interface RuntimeCreateContext {
 export interface RecallSearch {
   (query: string, limit?: number): Promise<MemorySearchHit[]>;
   scroll?(hitId: number, options?: { span?: number; offset?: number }): Promise<string>;
+  /** INSIGHT "full" tier only (decree 2026-07-28 part 3): pull-based raw read
+   * of ANY currently-incognito room, gated daemon-side on the caller's own
+   * insight tier — absent/denied for every other agent, exactly as today. */
+  ghoulRoom?(roomId: string, options?: { offset?: number; limit?: number }): Promise<string>;
+  /** INSIGHT "full" tier only: substring search over every agent's distilled
+   * summon ledgers (never the raw transcripts — "index the ledgers"). */
+  ghoulLedgers?(query?: string): Promise<string>;
 }
 
 /** Create a background summon from inside a turn. Resolves IMMEDIATELY with a
@@ -245,6 +260,11 @@ export interface RecallSearch {
  * by the summon coordinator when it settles, re-invoking the caller. */
 export interface SummonCreate {
   (params: { roomId: string; agentId: string; task: string }): Promise<string>;
+}
+
+/** Steer an existing room; same daemon endpoint as `gaia resume`. */
+export interface ResumeCreate {
+  (params: { roomId: string; message: string }): Promise<string>;
 }
 
 // --- credential proxy wiring (data, applied uniformly by RunnerHost) ------------

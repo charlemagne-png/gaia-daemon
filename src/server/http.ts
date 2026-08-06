@@ -989,6 +989,14 @@ export class GaiaWebServer {
       return this.respond(response, () => this.daemon.setAgentDefaultRole(params![0], agentId.trim(), (role ?? "").trim()));
     }
 
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/plugins\/([A-Za-z0-9_-]+)$/))) {
+      const body = await parseBody(request);
+      const args = Array.isArray((body as { args?: unknown }).args)
+        ? (body as { args: unknown[] }).args.filter((arg): arg is string => typeof arg === "string").slice(0, 16)
+        : [];
+      return this.respond(response, () => this.daemon.runPluginAction(params![0], params![1], params![2], args));
+    }
+
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/agent-dialogue$/))) {
       const body = await parseBody(request);
       const on = (body as { on?: unknown }).on === true;
@@ -1636,6 +1644,30 @@ export class GaiaWebServer {
         const raw = (body as Record<string, unknown>)[name];
         return typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : undefined;
       };
+      // INSIGHT "full" tier (decree 2026-07-28): pull-based raw read of any
+      // currently-incognito room, gated daemon-side on the caller's own
+      // insight tier — checked before touching disk, never a widened index.
+      const ghoulRoom = stringField(body, "ghoul_room")?.trim();
+      if (ghoulRoom) {
+        try {
+          const result = await this.daemon.harnessGhoulRoomRead(claims, ghoulRoom, { offset: numberField("offset"), limit: numberField("limit") });
+          json(response, 200, { ok: true, result, hits: [] });
+        } catch (error) {
+          json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
+      // INSIGHT "full" tier: search every agent's distilled ledgers (never the
+      // raw transcripts — "index the ledgers, not the transcripts").
+      if ((body as Record<string, unknown>).ghoul_ledgers === true) {
+        try {
+          const result = await this.daemon.harnessGhoulLedgerSearch(claims, stringField(body, "query"));
+          json(response, 200, { ok: true, result, hits: [] });
+        } catch (error) {
+          json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
       // Scroll mode (§8): a raw transcript window around a prior hit id.
       const around = numberField("around");
       if (around !== undefined) {

@@ -43,9 +43,20 @@ export interface MessageAttachment {
  * `tool` references a `ToolDetail` in `EventDetails.tools[]` by id (the tool's
  * live status/args/result stay the single source of truth). Thinking can occur
  * more than once per turn, so multiple `thinking` blocks are expected. */
+export interface SkillInvocation {
+  /** Pi's canonical skill name, parsed from its expanded `<skill>` user message. */
+  name: string;
+  /** Pi's resolved SKILL.md path, carried verbatim from that message. */
+  location: string;
+  /** The Pi-expanded skill body; rendered only when its native-style chip opens. */
+  content: string;
+}
+
 export type MessageBlock =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string }
+  /** Pi's own `/skill:name` expansion, observed from its user-message event. */
+  | { kind: "skill"; skill: SkillInvocation }
   | { kind: "tool"; id: string }
   /** A mid-turn user steer landed HERE in the stream. References the steer's
    * own user RoomEvent by id (the event stays the single source of truth for
@@ -230,10 +241,18 @@ export interface RoomState {
    * off. Each entry binds exactly this room + that agent to one validated pet
    * package; several agents may be bound at once. */
   petBindings?: Record<string, string>;
+  /** Opaque JSON state owned by local command plugins. Plugin code never writes
+   * state.json directly; RoomHandle remains the sole serialized writer. */
+  pluginState?: Record<string, Record<string, unknown>>;
   /** Per-agent room-scoped thinking-level override (mirrors activeRoles):
    * room entry wins; absent inherits the agent.json global default
    * (agent.thinking). Never written to agent.json. */
   thinkingOverrides: Record<string, string>;
+  /** Room-wide GAIA-THINK protocol level (0-10), set via `/thinking N`.
+   * Distinct from thinkingOverrides (per-agent SDK reasoning effort): this is
+   * a single room value driving the `# Protocols` section's thinking line for
+   * ALL agents. Absent/0 = thought blocks disabled. */
+  thinkingLevel?: number;
   agentCursors: Record<string, number>;
   /** Per-agent active-context floor: the transcript line index below which
    * content is NOT in the agent's live context (never loaded via a context-gate
@@ -407,7 +426,7 @@ export interface SanitizeStatus {
 // ---------------------------------------------------------------------------
 // Agents (agent.json + resolved paths)
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface AgentModelConfig {
   provider?: string;
@@ -516,6 +535,10 @@ export interface AgentTtsConfig {
   voice?: string;
 }
 
+/** AgentDef.insight tiers — see the field doc on AgentDef.insight for the
+ * full contract (decree 2026-07-28). */
+export type InsightLevel = "none" | "line" | "full";
+
 export interface AgentDef {
   id: string;
   displayName: string;
@@ -552,6 +575,14 @@ export interface AgentDef {
   skillOverride?: string[];
   model?: AgentModelConfig;
   thinking?: ThinkingLevel;
+  /** Optional agent.json law line appended fresh to EVERY composed turn
+   * prompt ("\n\n" + turnLaw) so it is always the newest tokens. No default
+   * content lives in code — the value comes only from agent.json. */
+  turnLaw?: string;
+  /** Optional agent.json law line prepended as the VERY FIRST tokens of the
+   * composed system prompt (before `# Agent Soul`). No default content lives
+   * in code — the value comes only from agent.json. */
+  promptLaw?: string;
   harness?: string;
   /** Harness permission posture, passed through verbatim. The value vocabulary
    * is each harness's own, declared as DATA on its spec (ui.permissionModes) —
@@ -569,6 +600,19 @@ export interface AgentDef {
   trust?: boolean;
   /** May summon further workers when itself a summon (default false). */
   allowNestedSummon?: boolean;
+  /** How much of THIS agent's summon history it gets to keep, as the caller
+   * (not as the worker — a ghoul's own room is incognito regardless, see
+   * services/summons.ts). Default "none": today's behavior, a summon's child
+   * room leaves no trace once it delivers. "line": a distilled entry (task +
+   * outcome, truncated, never the raw transcript) is appended to
+   * `<memoryDir>/ledgers/<workerAgentId>.md` at each summon's lane close —
+   * readable via the normal `memory` tool (file: "ledgers/<id>.md"). "full":
+   * same ledger, plus this agent is the one persona meant to actually read
+   * its workers' raw rooms (it already has filesystem reach via bash/read;
+   * this documents that as intended, not incidental). Never widens the
+   * SHARED recall index or its PII surface — a ghoul room's incognito bit
+   * (domain/workspace-index.ts roomIsIncognito) is untouched by this. */
+  insight?: InsightLevel;
   /** Per-agent memory overrides applied over the workspace MemoryConfig. */
   memory?: MemoryConfigPatch;
   /** Per-agent MCP servers, merged over the workspace set (agent wins). */
@@ -814,6 +858,8 @@ export type AgentEvent =
   | { type: "thinking-start" }
   | { type: "thinking-delta"; delta: string }
   | { type: "thinking-end"; content?: string }
+  /** Pi emitted an expanded `/skill:name` user message for this turn. */
+  | { type: "skill-invocation"; skill: SkillInvocation }
   | { type: "tool-start"; toolName: string; toolCallId?: string; args?: unknown }
   | { type: "tool-update"; toolName: string; toolCallId?: string; partialResult?: unknown }
   | { type: "tool-end"; toolName: string; toolCallId?: string; result?: unknown; isError: boolean }
@@ -1028,6 +1074,28 @@ export interface SlashCommandDefinition {
   native?: boolean;
 }
 
+/** One field in a room-local plugin popup's form. Mirrors
+ * services/plugins.ts's PluginPanelField — kept as its own named export so
+ * the web client's JSDoc typedefs (web/src/types.js) can reference it. */
+export interface SnapshotPluginPanelField {
+  name: string;
+  label: string;
+  type: "text" | "select";
+  value?: string;
+  options?: Array<{ value: string; label: string }>;
+}
+
+/** A room-local plugin's declarative popup. Mirrors services/plugins.ts's
+ * PluginPanel: forms/items only — no iframe embed. Rendered as a transient,
+ * theme-inheriting overlay dialog (web/src/plugins-panel.js), present only
+ * while the plugin's own state says it's open. */
+export interface SnapshotPluginPanel {
+  title: string;
+  description?: string;
+  forms?: Array<{ action: string; label: string; fields: SnapshotPluginPanelField[] }>;
+  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean }> }>;
+}
+
 export interface Snapshot {
   workspace: {
     id: string;
@@ -1060,6 +1128,8 @@ export interface Snapshot {
     /** Native desktop pet bindings for this room, keyed by agent. Empty/absent
      * means pets are off. Browser/iOS clients do not render an in-chat stand-in. */
     petBindings?: Record<string, string>;
+    /** Declarative room panels supplied by local command plugins. */
+    pluginPanels?: Record<string, SnapshotPluginPanel>;
     /** Incognito room: no memory capture, no auto-recall, not indexed for recall,
      * memory/recall tools stripped. Immutable; drives the client's indicator. */
     incognito?: boolean;
@@ -1117,6 +1187,7 @@ export type UiEvent =
   | ({ type: "thinking-start" } & StreamScope)
   | ({ type: "thinking-delta"; delta: string } & StreamScope)
   | ({ type: "thinking-end"; content?: string } & StreamScope)
+  | ({ type: "skill-invocation"; skill: SkillInvocation } & StreamScope)
   | ({ type: "tool-start"; toolName: string; toolCallId?: string; args?: unknown } & StreamScope)
   | ({ type: "tool-update"; toolName: string; toolCallId?: string; partialResult?: unknown } & StreamScope)
   | ({ type: "tool-end"; toolName: string; toolCallId?: string; result?: unknown; isError: boolean } & StreamScope)

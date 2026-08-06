@@ -10,6 +10,7 @@
 import { deleteQueuedMessage, retryMessage } from "./actions.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
+import { detectArtifacts } from "./design/artifacts.js";
 import { beginEditMessage, humanSize } from "./composer.js";
 import { $, h } from "./dom.js";
 import { LinkedText } from "./links.js";
@@ -579,6 +580,10 @@ registerRegion("transcript", renderTranscript);
 
 /** @param {MessageView} view @returns {HTMLElement} */
 function Message(view) {
+  // Fence detection is intentionally here, at the keyed message boundary: it
+  // sees both committed replies and their streaming updates without changing
+  // markdown rendering or event transport. detectArtifacts is idempotent.
+  if (view.author !== "user" && view.author !== "system") detectArtifacts(view.text, view.details);
   if (view.kind === "compact-complete") return CompactBoundary(view);
   const isUser = view.author === "user";
   const isAgent = !isUser && view.author !== "system";
@@ -699,7 +704,15 @@ function Message(view) {
       : ThinkingActivity(`thinking:${view.id}`, details.thinking ?? "", Boolean(view.streaming)),
     summon || orderedBlocks ? null : details.tools?.length ? ToolActivityList(details.tools) : null,
     view.attachments?.length ? AttachmentGallery(view.attachments) : null,
-    summon || orderedBlocks ? null : text.trim() ? (isAgent || view.author === "system" ? MarkdownMessage(text) : h("pre", {}, LinkedText(text))) : null,
+    summon || orderedBlocks
+      ? null
+      : text.trim()
+        ? isAgent
+          ? AgentText(`gaiathink:${view.id}`, text, Boolean(view.streaming))
+          : view.author === "system"
+            ? MarkdownMessage(text)
+            : h("pre", {}, LinkedText(text))
+        : null,
     showTypingIndicator ? h("span", { class: "stream-pending", text: "…" }) : null,
     showReconnecting
       ? h("span", {
@@ -849,8 +862,18 @@ function SummonResultActivity(view, summon) {
 function OrderedBlocks(view, blocks, tools) {
   const toolsById = new Map(tools.map((tool) => [tool.id, tool]));
   const lastIndex = blocks.length - 1;
+  // Only the FIRST text span can carry a leading <gaia:think> block (the reply's
+  // opening) — later text spans render as plain markdown.
+  const firstTextIndex = blocks.findIndex((block) => block.kind === "text" && block.text.trim());
   return blocks.map((block, index) => {
-    if (block.kind === "text") return block.text.trim() ? MarkdownMessage(block.text) : null;
+    if (block.kind === "text") {
+      if (!block.text.trim()) return null;
+      if (index === firstTextIndex) {
+        const running = Boolean(view.streaming) && index === lastIndex;
+        return AgentText(`gaiathink:${view.id}:${index}`, block.text, running);
+      }
+      return MarkdownMessage(block.text);
+    }
     if (block.kind === "thinking") {
       // A thinking span still filling in is the running one; an empty span that
       // isn't currently streaming carries nothing to show.
@@ -866,6 +889,7 @@ function OrderedBlocks(view, blocks, tools) {
       const steer = view.steers?.get(block.id);
       return steer ? SteerInline(steer) : null;
     }
+    if (block.kind === "skill") return SkillInvocationActivity(block.skill);
     const tool = toolsById.get(block.id);
     return tool ? ToolActivity(tool) : null;
   });
@@ -913,6 +937,57 @@ function ThinkingActivity(id, text, running) {
     { id, className: "thinking", status: running ? "running" : "complete", icon: "💭", title: "thinking" },
     text && text.trim() ? MarkdownMessage(text) : null,
   );
+}
+
+/**
+ * A GAIA agent may open its reply with a literal `<gaia:think>…</gaia:think>`
+ * span (streamed as ordinary text, not native model thinking). Detect a LEADING
+ * such block: return the thought text, the remainder after the close tag, and
+ * whether the close tag was seen. An unclosed tag (streaming/partial) treats
+ * everything after the open as thought with no remainder yet. Only a block at
+ * the very start (leading whitespace allowed) qualifies — any later occurrence
+ * is left in the text and escaped by MarkdownMessage on its normal path.
+ * @param {string} text
+ * @returns {{ thought: string, remainder: string, closed: boolean } | null}
+ */
+export function splitLeadingGaiaThink(text) {
+  const open = /^\s*<gaia:think>/u.exec(text);
+  if (!open) return null;
+  const rest = text.slice(open[0].length);
+  const closeIdx = rest.indexOf("</gaia:think>");
+  if (closeIdx === -1) return { thought: rest, remainder: "", closed: false };
+  return { thought: rest.slice(0, closeIdx), remainder: rest.slice(closeIdx + "</gaia:think>".length), closed: true };
+}
+
+/**
+ * The GAIA `<gaia:think>` expander — visually identical to the native thinking
+ * block (same `thinking` class / ActivityDetails / collapsed-by-default UX),
+ * differing only in the marker symbol (鳴 instead of 💭). An unclosed leading
+ * tag while the turn is still streaming reads as running.
+ * @param {string} id @param {string} thought @param {boolean} running
+ */
+function GaiaThinkActivity(id, thought, running) {
+  return ActivityDetails(
+    { id, className: "thinking gaia-think", status: running ? "running" : "complete", icon: "鳴", title: "thinking" },
+    thought && thought.trim() ? MarkdownMessage(thought) : null,
+  );
+}
+
+/**
+ * Render an agent's message text, peeling a LEADING `<gaia:think>` block into a
+ * collapsed thought expander (marker 鳴) followed by the remainder as normal
+ * markdown. No leading block → plain MarkdownMessage (any inline literal tag is
+ * escaped by that same XSS-safe path). Returns a DocumentFragment so the
+ * expander and the prose land as siblings, exactly like native thinking.
+ * @param {string} id @param {string} text @param {boolean} streaming
+ */
+export function AgentText(id, text, streaming) {
+  const split = splitLeadingGaiaThink(text);
+  if (!split) return MarkdownMessage(text);
+  const frag = document.createDocumentFragment();
+  frag.append(GaiaThinkActivity(id, split.thought, streaming && !split.closed));
+  if (split.remainder.trim()) frag.append(MarkdownMessage(split.remainder));
+  return frag;
 }
 
 /**
@@ -977,6 +1052,16 @@ function ReadAloudButton(eventId) {
 /** @param {ToolDetail[]} tools */
 function ToolActivityList(tools) {
   return h("div", { class: "tool-activity" }, tools.map(ToolActivity));
+}
+
+/** Pi's expanded `/skill:name` user message, mirrored as its native chip.
+ * @param {import("../../src/core/types.js").SkillInvocation} skill
+ */
+export function SkillInvocationActivity(skill) {
+  return ActivityDetails(
+    { id: `skill:${skill.location}`, className: "tool-call skill-call", status: "complete", icon: "🧩", title: `[skill] ${skill.name}` },
+    MarkdownMessage(skill.content),
+  );
 }
 
 /**

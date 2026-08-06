@@ -16,7 +16,7 @@ import {
 } from "./spec.js";
 
 const ANTIGRAVITY_CAPABILITIES: HarnessCapabilities = {
-  gaiaTools: ["memory", "recall", "summon", "resume"],
+  gaiaTools: ["memory", "recall", "artifact", "summon", "resume"],
   nativeTools: ["web"],
   granularTools: true,
   supportsPermissionMode: true,
@@ -313,6 +313,7 @@ class AntigravityRuntime implements AgentRuntime {
       workspace: this.workspace,
       agent: this.agent,
       role: input.activeRole,
+      thinkingLevel: input.protocolThinkingLevel,
       toolPointer: "",
       contextFiles: []
     } as any); // using partial args for now since system prompts vary by harness

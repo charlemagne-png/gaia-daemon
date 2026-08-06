@@ -51,6 +51,9 @@ export interface VoiceSettings {
   /** Default read-aloud TTS engine for the transcript play button; agents
    * override per-persona via agent.json `tts.engine`. */
   ttsEngine: string;
+  /** Append-only archive of rendered read-aloud clips. Empty uses
+   * ~/.gaia/voice-archive/tts, resolved at runtime. */
+  ttsArchiveDir: string;
   /** claude-voice daemon the "claude" read-aloud engine talks to. */
   claudeVoiceUrl: string;
   /** claude-voice checkout to auto-start when its daemon is down ("" = never
@@ -68,9 +71,8 @@ export interface VoiceSettings {
   elevenLabsVoice: string;
   /** Speech-to-text engine for composer dictation (voice INPUT), by id. Swap it
    * like ttsEngine — the shared transcribe path never branches on the engine.
-   * "elevenlabs" (Scribe API) is the default; "openai" hits any
-   * OpenAI-compatible /audio/transcriptions endpoint; "replicate" hits
-   * Replicate Predictions. Live-CALL STT is a separate path (the unmute stack). */
+   * "replicate" is the default; "elevenlabs" remains available as a fallback
+   * option, and "openai" hits any OpenAI-compatible endpoint. */
   sttEngine: string;
   /** Optional spoken-language hint for dictation (ISO 639 code); "" auto-detects. */
   sttLanguage: string;
@@ -86,13 +88,15 @@ export interface VoiceSettings {
   sttOpenAiApiKey: string;
   /** Model for the "openai" STT engine (whisper-1, or a local model name). */
   sttOpenAiModel: string;
-  /** API token for the "replicate" STT engine. Empty falls back to
-   * REPLICATE_API_TOKEN / REPLICATE_API_KEY. */
+  /** Replicate API token for the "replicate" STT engine. Empty falls back to
+   * REPLICATE_API_TOKEN, then REPLICATE_API_KEY. */
   sttReplicateApiKey: string;
   /** Replicate model slug for dictation (owner/name). */
   sttReplicateModel: string;
-  /** Optional Replicate model version. Empty uses the model's default endpoint. */
-  sttReplicateVersion: string;
+  /** Model slug to retry when the primary model is unavailable or rejects input. */
+  sttReplicateFallbackModel: string;
+  /** STT service for live calls: bundled kyutai or the Replicate bridge. */
+  callSttEngine: string;
 }
 
 export const VOICE_SETTINGS_DEFAULTS: VoiceSettings = {
@@ -106,24 +110,32 @@ export const VOICE_SETTINGS_DEFAULTS: VoiceSettings = {
   silenceDelaySec: 7,
   disableThinking: true,
   ttsEngine: "kyutai",
+  // Empty = ~/.gaia/voice-archive/tts, resolved at runtime; never persist a
+  // stale absolute home path in voice.json.
+  ttsArchiveDir: "",
   claudeVoiceUrl: "http://127.0.0.1:8778",
   claudeVoiceDir: "",
   elevenLabsApiKey: "",
   elevenLabsModel: "eleven_v3",
   // Premade "Rachel" — a neutral default; agents set their own tts.voice.
   elevenLabsVoice: "21m00Tcm4TlvDq8ikWAM",
-  // API-based STT is the default: local models are unreliable under memory
-  // pressure (why the user asked for this), and elevenlabs reuses the key the
-  // TTS engine already has.
-  sttEngine: "elevenlabs",
+  // Replicate hosts Whisper off-process, avoiding local-model memory pressure
+  // and the blocked ElevenLabs STT endpoint.
+  sttEngine: "replicate",
   sttLanguage: "",
   elevenLabsSttModel: "scribe_v1",
   sttOpenAiBaseUrl: "https://api.openai.com/v1",
   sttOpenAiApiKey: "",
   sttOpenAiModel: "whisper-1",
   sttReplicateApiKey: "",
-  sttReplicateModel: "openai/whisper",
-  sttReplicateVersion: "",
+  // OpenAI's gpt-4o-mini-transcribe, proxied by Replicate as an "official"
+  // CPU model (Replicate's own backend, not a shared community GPU queue) --
+  // consistent latency and cleaner transcripts than the community Whisper
+  // models, which sit behind a scale-to-zero worker pool (07-31/08-01: same
+  // clip ranged 8s-60s+ on incredibly-fast-whisper vs a steady ~9s here).
+  sttReplicateModel: "openai/gpt-4o-mini-transcribe",
+  sttReplicateFallbackModel: "openai/whisper",
+  callSttEngine: "kyutai",
 };
 
 /** The ElevenLabs API key (xi-api-key), shared by the TTS and STT engines:
@@ -132,6 +144,14 @@ export const VOICE_SETTINGS_DEFAULTS: VoiceSettings = {
 export function elevenLabsKey(settings: VoiceSettings): string {
   const key = settings.elevenLabsApiKey?.trim() || process.env.ELEVENLABS_API_KEY?.trim();
   if (!key) throw new Error("ElevenLabs API key not set (voice.json elevenLabsApiKey or ELEVENLABS_API_KEY env)");
+  return key;
+}
+
+/** Replicate token for the dictation engine: voice.json first, then the
+ * standard REPLICATE_API_TOKEN / legacy REPLICATE_API_KEY environment names. */
+export function replicateKey(settings: VoiceSettings): string {
+  const key = settings.sttReplicateApiKey?.trim() || process.env.REPLICATE_API_TOKEN?.trim() || process.env.REPLICATE_API_KEY?.trim();
+  if (!key) throw new Error("Replicate STT API key not set (voice.json sttReplicateApiKey, REPLICATE_API_TOKEN, or REPLICATE_API_KEY env)");
   return key;
 }
 
@@ -153,6 +173,8 @@ export async function readVoiceSettings(): Promise<VoiceSettings> {
   if (typeof raw.silenceDelaySec === "number" && raw.silenceDelaySec > 0) settings.silenceDelaySec = raw.silenceDelaySec;
   if (typeof raw.disableThinking === "boolean") settings.disableThinking = raw.disableThinking;
   if (typeof raw.ttsEngine === "string" && raw.ttsEngine.trim()) settings.ttsEngine = raw.ttsEngine.trim();
+  // Empty explicitly selects the runtime default archive path.
+  if (typeof raw.ttsArchiveDir === "string") settings.ttsArchiveDir = raw.ttsArchiveDir.trim();
   if (typeof raw.claudeVoiceUrl === "string" && raw.claudeVoiceUrl.trim()) settings.claudeVoiceUrl = raw.claudeVoiceUrl.trim();
   if (typeof raw.claudeVoiceDir === "string" && raw.claudeVoiceDir.trim()) settings.claudeVoiceDir = raw.claudeVoiceDir.trim();
   if (typeof raw.elevenLabsApiKey === "string" && raw.elevenLabsApiKey.trim()) settings.elevenLabsApiKey = raw.elevenLabsApiKey.trim();
@@ -167,10 +189,12 @@ export async function readVoiceSettings(): Promise<VoiceSettings> {
   if (typeof raw.sttOpenAiModel === "string" && raw.sttOpenAiModel.trim()) settings.sttOpenAiModel = raw.sttOpenAiModel.trim();
   if (typeof raw.sttReplicateApiKey === "string" && raw.sttReplicateApiKey.trim()) settings.sttReplicateApiKey = raw.sttReplicateApiKey.trim();
   if (typeof raw.sttReplicateModel === "string" && raw.sttReplicateModel.trim()) settings.sttReplicateModel = raw.sttReplicateModel.trim();
-  if (typeof raw.sttReplicateVersion === "string") settings.sttReplicateVersion = raw.sttReplicateVersion.trim();
+  if (typeof raw.sttReplicateFallbackModel === "string" && raw.sttReplicateFallbackModel.trim()) settings.sttReplicateFallbackModel = raw.sttReplicateFallbackModel.trim();
+  if (typeof raw.callSttEngine === "string" && raw.callSttEngine.trim()) settings.callSttEngine = raw.callSttEngine.trim();
   // No explicit override → resolve the bundled checkout now, so the path tracks
   // wherever the daemon currently runs from instead of a value frozen at seed time.
   if (!settings.unmuteDir) settings.unmuteDir = bundledUnmuteDir();
+  if (!settings.ttsArchiveDir) settings.ttsArchiveDir = globalPaths.ttsArchiveDir();
   return settings;
 }
 
@@ -196,6 +220,9 @@ export interface VoiceStackSettings {
   // a call through a read-aloud engine (e.g. claude-voice). When set, the stack
   // never resolves or spawns its own tts service.
   ttsEndpoint?: string;
+  // An already-running STT server (ws://…) to point unmute at instead of
+  // spawning bundled Moshi — the Replicate call bridge implements its stream.
+  sttEndpoint?: string;
 }
 
 export interface VoiceHealth {
@@ -381,19 +408,21 @@ export class VoiceStackManager {
 
     mkdirSync(this.logDir, { recursive: true });
     // The services probe independently; resolving them in parallel keeps the
-    // worst case at one probe round. An external TTS server (the gaia bridge,
-    // e.g. claude-voice) replaces the bundled moshi service entirely: we neither
-    // resolve nor spawn a tts child, and point the backend straight at it.
+    // worst case at one probe round. An external bridge replaces its bundled
+    // Moshi service entirely: we neither resolve nor spawn that child, and point
+    // the backend straight at the bridge.
+    const externalStt = settings.sttEndpoint?.trim();
     const externalTts = settings.ttsEndpoint?.trim();
     const [stt, tts, backend] = await Promise.all([
-      this.resolveService("stt", STT_PORT, onStatus),
+      externalStt ? Promise.resolve(null) : this.resolveService("stt", STT_PORT, onStatus),
       externalTts ? Promise.resolve(null) : this.resolveService("tts", TTS_PORT, onStatus),
       this.resolveService("backend", configuredBackendPort(settings.unmuteUrl), onStatus),
     ]);
+    const sttUrl = externalStt ?? `ws://localhost:${stt!.port}`;
     const ttsUrl = externalTts ?? `ws://localhost:${tts!.port}`;
 
     const specs: ServiceSpec[] = [
-      { name: "stt", script: "macos/start_stt_metal.sh", port: stt.port, env: { STT_PORT: String(stt.port) } },
+      ...(stt ? [{ name: "stt", script: "macos/start_stt_metal.sh", port: stt.port, env: { STT_PORT: String(stt.port) } }] : []),
       ...(tts ? [{ name: "tts", script: "macos/start_tts_mlx.sh", port: tts.port, env: { TTS_MLX_PORT: String(tts.port) } }] : []),
       {
         name: "backend",
@@ -402,14 +431,14 @@ export class VoiceStackManager {
         env: {
           KYUTAI_LLM_URL: gaiaUrl,
           KYUTAI_LLM_MODEL: "gaia",
-          KYUTAI_STT_URL: `ws://localhost:${stt.port}`,
+          KYUTAI_STT_URL: sttUrl,
           KYUTAI_TTS_URL: ttsUrl,
           KYUTAI_BACKEND_PORT: String(backend.port),
           KYUTAI_USER_SILENCE_TIMEOUT: String(settings.silenceTimeoutSec ?? 1_000_000_000),
         },
       },
     ];
-    const needsSpawn: Record<string, boolean> = { stt: stt.spawn, backend: backend.spawn, ...(tts ? { tts: tts.spawn } : {}) };
+    const needsSpawn: Record<string, boolean> = { backend: backend.spawn, ...(stt ? { stt: stt.spawn } : {}), ...(tts ? { tts: tts.spawn } : {}) };
     const spawnService = this.hooks.spawnService ?? defaultSpawnService;
     for (const spec of specs) {
       if (!needsSpawn[spec.name]) continue;

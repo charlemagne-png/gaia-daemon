@@ -8,17 +8,20 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync,
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
   ModelRegistry,
+  ModelRuntime,
+  parseSkillBlock,
+  readStoredCredential,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { loadNativeImages } from "../core/attachments.js";
-import { NO_SESSION_TO_COMPACT, type AgentDef, type AgentEvent, type CompactResult, type MessageAttachment, type UsageProbeResult, type Workspace } from "../core/types.js";
+import { NO_SESSION_TO_COMPACT, type AgentDef, type AgentEvent, type CompactResult, type MessageAttachment, type ThinkingLevel, type UsageProbeResult, type Workspace } from "../core/types.js";
 import { gaiaHome, workspacePaths } from "../core/paths.js";
 import type { MemoryStore } from "../domain/memory.js";
 import type { ResolvedRole } from "../domain/roles.js";
@@ -31,14 +34,22 @@ import {
   registerHarness,
   type RuntimeCreateContext,
   type RecallSearch,
+  type ResumeCreate,
   type SummonCreate,
 } from "./spec.js";
 import { createEventChannel } from "./events.js";
 import { SessionMap } from "./sessions.js";
 import { RUNNER_ENV } from "./protocol.js";
 import { ModelLabel } from "./model-label.js";
+
+// pi-ai 0.82 lazy-loads OAuth flow modules through a bundler-opaque dynamic
+// import; inside the `bun build --compile` binary that import cannot resolve
+// ("Cannot find module './anthropic.js'") and every stored-OAuth toAuth dies
+// with "OAuth auth derivation failed". Register the statically bundled flows
+// up front, same as pi's own compiled CLI entry (dist/bun/cli.js).
+registerBunOAuthFlows();
 import { findModelWithAlias } from "./model-aliases.js";
-import { buildBaseSystemPrompt, buildTurnPromptFor } from "./prompt.js";
+import { buildBaseSystemPrompt, buildTurnPromptFor, promptCacheKey } from "./prompt.js";
 import { emailFromJwt, expiryMsFromJwt, fetchAnthropicUsage, fetchChatGptUsage } from "./usage.js";
 
 // ---------------------------------------------------------------------------
@@ -143,6 +154,16 @@ export interface PiSessionLike {
      * message (no parent entry to branch to). Mutates the manager in place. */
     newSession(options?: { parentSession?: string }): string | undefined;
   };
+  /** The session's own read-only SettingsManager (the instance gaia passes to
+   * createAgentSession). compact() reaches it to force a smaller recent-keep
+   * window when an explicit /compact would otherwise no-op as "session too
+   * small". applyOverrides only mutates the in-memory merged settings — it never
+   * writes to disk — so it is safe on the read-only manager. Already present at
+   * runtime; declared here so the typed cast can reach it. */
+  readonly settingsManager?: {
+    getCompactionKeepRecentTokens(): number;
+    applyOverrides(overrides: { compaction?: { keepRecentTokens?: number } }): void;
+  };
   abort(): Promise<void>;
   reload(): Promise<void>;
   dispose(): void;
@@ -186,6 +207,13 @@ export function piRoomSessionDir(workspace: Pick<Workspace, "rootDir">, roomId: 
 // session (fresh room or a room that never sent this agent a turn). Shared by
 // the harness spec's hasDurableSession (host.ts's pre-spawn gate) and compact()'s
 // own lazy-restore decision below — one on-disk truth, read twice.
+/** Forced recent-keep window (tokens) for an EXPLICIT /compact that would
+ * otherwise no-op because the whole session sits under pi's default 20000
+ * keepRecentTokens floor (findCutPoint then finds nothing outside the kept
+ * window). A user who runs /compact wants the session shrunk NOW, so the retry
+ * keeps only a small live tail and summarizes the rest. Restored immediately. */
+const FORCE_COMPACT_KEEP_RECENT_TOKENS = 2000;
+
 function hasPersistedPiSession(rootDir: string, roomId: string, agentId: string): boolean {
   try {
     return readdirSync(piRoomSessionDir({ rootDir }, roomId, agentId)).length > 0;
@@ -216,8 +244,32 @@ function skillPathsKey(paths: string[]): string {
   return JSON.stringify(paths);
 }
 
+/** Text payload from Pi's SDK user-message event. Skill expansion always emits
+ * one text content part; malformed/foreign messages stay invisible here. */
+function piUserMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content.find((part): part is { type: "text"; text: string } =>
+    Boolean(part && typeof part === "object" && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string"),
+  );
+  return text?.text;
+}
+
+// GAIA's ThinkingLevel adds "max" on top of pi's own ceiling (pi-agent-core's
+// ThinkingLevel tops at "xhigh" — Claude CLI is the only harness that has a
+// literal "max" effort). Clamp at the pi SDK boundary so a session never gets
+// handed a level pi doesn't know: an unmapped string falls back to pi-ai's
+// internal default ("high") inside mapThinkingLevelToEffort, which is WORSE
+// than xhigh, not a safe no-op. Used both for session creation (thinkingLevel)
+// and the hot per-turn override (setThinkingLevel) so pi always receives the
+// same clamped vocabulary either way.
+function toPiThinking(level: ThinkingLevel | string | undefined): any {
+  return level === "max" ? "xhigh" : level;
+}
+
 const PI_CAPABILITIES: HarnessCapabilities = {
-  gaiaTools: ["memory", "recall", "summon", "resume"],
+  gaiaTools: ["memory", "recall", "artifact", "summon", "resume", "gaia"],
   nativeTools: ["web"],
   granularTools: true,
   supportsPermissionMode: false,
@@ -233,8 +285,10 @@ const PI_CAPABILITIES: HarnessCapabilities = {
   // edit/retry actually change the model's context, and it's durable (a new
   // file, unlike an in-place rewind) so it survives a runner respawn.
   supportsForkAtMessage: true,
-  // Pi has no claude-style slash-command passthrough surface.
-  supportsNativeCommands: false,
+  // AgentSession.prompt() natively expands loaded `/skill:name` commands and
+  // prompt templates. RoomService passes unclaimed slash tokens through; this
+  // runtime dynamically aliases `/name` to its loaded `/skill:name` command.
+  supportsNativeCommands: true,
   // Pi's only fan-out surface IS the gaia summon tool — nothing to suppress.
   fanOutTools: [],
 };
@@ -246,9 +300,17 @@ export class PiRuntime implements AgentRuntime {
   private readonly memoryStore: MemoryStore;
   private readonly sessionFactory?: PiRuntimeSessionFactory;
   private readonly summonCreate?: SummonCreate;
+  private readonly resumeCreate?: ResumeCreate;
   private readonly recallSearch?: RecallSearch;
-  private readonly authStorage = AuthStorage.create();
-  private readonly modelRegistry = ModelRegistry.create(this.authStorage);
+  // ModelRuntime.create() is async (it can touch the network for catalog
+  // refresh), but HarnessSpec.create() must return synchronously — so
+  // construction kicks it off here and every path that touches the registry
+  // awaits `modelRuntimeReady` first. `ensureSession` is the ONE choke point
+  // every public entry (send/compact/forkAtMessage) already funnels through,
+  // so gating there covers all of them without repeating the await.
+  private modelRuntime!: ModelRuntime;
+  private modelRegistry!: ModelRegistry;
+  private readonly modelRuntimeReady: Promise<void>;
   private readonly sessions = new SessionMap<PiSessionMeta>((meta) => meta.session.dispose());
   private readonly label: ModelLabel;
   private readonly cwd: string;
@@ -265,10 +327,17 @@ export class PiRuntime implements AgentRuntime {
     this.memoryStore = options.memoryStore;
     this.sessionFactory = options.sessionFactory;
     this.summonCreate = options.summonCreate;
+    this.resumeCreate = options.resumeCreate;
     this.recallSearch = options.recallSearch;
     this.cwd = options.workspace.rootDir;
     this.workDir = process.cwd();
-    this.applyCredentialProxy();
+    this.modelRuntimeReady = ModelRuntime.create().then((runtime) => {
+      this.modelRuntime = runtime;
+      this.modelRegistry = new ModelRegistry(runtime);
+      this.applyCredentialProxy();
+    });
+    // Registry-independent: a real resolution failure surfaces later, loudly,
+    // from resolveModel() once the turn actually runs (see its comment below).
     this.label = new ModelLabel(this.resolveModelLabel());
   }
 
@@ -304,7 +373,7 @@ export class PiRuntime implements AgentRuntime {
   }
 
   async *send(input: AgentInput): AsyncIterable<AgentEvent> {
-    const meta = await this.ensureSession(input.roomId, input.activeRole);
+    const meta = await this.ensureSession(input.roomId, input.activeRole, input.protocolThinkingLevel);
     const session = meta.session;
     this.applyThinkingLevel(meta, input.thinking);
 
@@ -320,6 +389,15 @@ export class PiRuntime implements AgentRuntime {
     const channel = createEventChannel();
 
     const unsubscribe = session.subscribe((event) => {
+      // Pi emits the expanded `/skill:name` as the turn's user message. Mirror
+      // that SDK event, rather than inferring a skill from the slash text, so
+      // the room renders precisely the invocation Pi accepted (including its
+      // resolved SKILL.md path and body).
+      if (event.type === "message_start" && event.message.role === "user") {
+        const text = piUserMessageText(event.message);
+        const skill = text && parseSkillBlock(text);
+        if (skill) channel.push({ type: "skill-invocation", skill: { name: skill.name, location: skill.location, content: skill.content } });
+      }
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         channel.push({ type: "text-delta", delta: event.assistantMessageEvent.delta });
       }
@@ -362,7 +440,9 @@ export class PiRuntime implements AgentRuntime {
     // The uniform turn-prompt composition (memory travels only when it changed
     // — SessionMap's diff — so memory-tool writes never force a session
     // reload), shared with every runtime via buildTurnPromptFor.
-    const prompt = await buildTurnPromptFor(this.agent, input, this.memoryStore, this.sessions, { workDir: this.workDir, rootDir: this.cwd });
+    const prompt = input.nativeCommand
+      ? this.nativeCommandPrompt(meta, input.message)
+      : await buildTurnPromptFor(this.agent, input, this.memoryStore, this.sessions, { workDir: this.workDir, rootDir: this.cwd });
     // Pasted images ride the SDK's native channel (PromptOptions.images, the
     // same ImageContent[] the pi CLI builds for clipboard pastes); the prompt
     // text keeps the uniform path breadcrumbs for non-image files.
@@ -380,6 +460,21 @@ export class PiRuntime implements AgentRuntime {
       });
 
     for await (const event of channel.stream()) yield event;
+  }
+
+  /**
+   * Pi owns skill-command expansion in AgentSession.prompt(): its canonical
+   * syntax is `/skill:name`. Gaia accepts the terse `/name` spelling only as a
+   * dynamic convenience alias: resolve against THIS session's ResourceLoader,
+   * which is the same loaded-skill list Pi will expand. Templates and unknown
+   * commands remain untouched for Pi to handle as-is.
+   */
+  private nativeCommandPrompt(meta: PiSessionMeta, message: string): string {
+    const trimmed = message.trim();
+    const match = /^\/([^\s]+)([\s\S]*)$/.exec(trimmed);
+    if (!match || match[1].startsWith("skill:")) return trimmed;
+    const skill = meta.loader.getSkills().skills.find(({ name }) => name === match[1]);
+    return skill ? `/skill:${skill.name}${match[2]}` : trimmed;
   }
 
   dispose(): void {
@@ -406,7 +501,7 @@ export class PiRuntime implements AgentRuntime {
     if (!session.setThinkingLevel) return;
     const target = override ?? this.agent.thinking ?? meta.baseThinking;
     if (target === undefined || session.thinkingLevel === target) return;
-    session.setThinkingLevel(target);
+    session.setThinkingLevel(toPiThinking(target));
   }
 
   async abort(): Promise<void> {
@@ -454,37 +549,62 @@ export class PiRuntime implements AgentRuntime {
     }
     const session = meta.session;
     if (!session.compact) return NO_SESSION_TO_COMPACT;
-    let result: { summary: string; tokensBefore: number; estimatedTokensAfter?: number };
+
+    const toResult = (result: { summary: string; tokensBefore: number; estimatedTokensAfter?: number }): CompactResult => {
+      const after = result.estimatedTokensAfter !== undefined ? ` → ~${result.estimatedTokensAfter}` : "";
+      return {
+        compacted: true,
+        message: `session compacted (${result.tokensBefore} tokens before${after}).`,
+        ...(result.summary ? { summary: result.summary } : {}),
+      };
+    };
+
     try {
-      result = await session.compact();
+      return toResult(await session.compact());
     } catch (error) {
       // pi-ai's own session.compact() throws (rather than returning a result)
       // when its cutPoint search finds nothing outside the always-kept "recent"
       // window (default keepRecentTokens: 20000 tokens — see
       // @earendil-works/pi-coding-agent dist/core/compaction/compaction.js
-      // prepareCompaction/findCutPoint). A session whose ENTIRE history is
-      // smaller than that floor is genuinely too small to shrink — this is not
-      // a session-loss/restore bug (that case is NO_SESSION_TO_COMPACT above,
-      // fixed by 64cff59's lazy restore). It commonly fires well under 20% of a
-      // model's context window: e.g. a 200k-token model's session sits under
-      // the 20000-token floor at roughly ctx ≤10%, so a small ctx% chip and
-      // this message are CONSISTENT, not contradictory. Surface it as the same
-      // clean no-op contract other harnesses use instead of letting it read as
-      // a failure (room-service's catch wraps any thrown compact() error as
-      // "Compaction failed for @agent: …", which reads like a crash for what
-      // is actually "there's nothing to trim yet").
+      // prepareCompaction/findCutPoint). "Already compacted" (last entry is a
+      // compaction boundary) is a real no-op. But "too small" only means the
+      // WHOLE session fits under that 20000-token floor — NOT that there's
+      // nothing worth trimming: for an EXPLICIT /compact the user wants it
+      // shrunk NOW (a poisoned/heavy tail the model keeps re-reading, a room
+      // that won't reply). So retry ONCE with a small forced recent-keep window
+      // (FORCE_COMPACT_KEEP_RECENT_TOKENS) so findCutPoint has something to cut,
+      // then restore the real floor — the override is in-memory only
+      // (applyOverrides never writes to disk, safe on the read-only manager).
+      // This is not a session-loss/restore bug (that case is NO_SESSION_TO_COMPACT
+      // above, fixed by 64cff59's lazy restore).
       const msg = error instanceof Error ? error.message : String(error);
-      if (/too small/i.test(msg) || /already compacted/i.test(msg)) {
+      if (/already compacted/i.test(msg)) {
         return { compacted: false, message: `nothing to compact — ${msg.toLowerCase()}.` };
       }
-      throw error;
+      if (!/too small/i.test(msg)) throw error;
+
+      // "too small" = the whole session fits under pi's 20000-token
+      // keepRecentTokens floor. For an EXPLICIT /compact the user still wants it
+      // shrunk, so retry once with a small forced recent-keep window so
+      // findCutPoint has something to cut, then restore the real floor (the
+      // override is in-memory only — applyOverrides never writes to disk). If we
+      // can't reach the settings manager, or even the forced window finds
+      // nothing (a genuinely tiny one-turn session), fall through to the same
+      // clean no-op contract the other harnesses use.
+      if (session.settingsManager) {
+        const original = session.settingsManager.getCompactionKeepRecentTokens();
+        session.settingsManager.applyOverrides({ compaction: { keepRecentTokens: FORCE_COMPACT_KEEP_RECENT_TOKENS } });
+        try {
+          return toResult(await session.compact());
+        } catch (retryError) {
+          const rmsg = retryError instanceof Error ? retryError.message : String(retryError);
+          if (!/too small/i.test(rmsg) && !/already compacted/i.test(rmsg)) throw retryError;
+        } finally {
+          session.settingsManager.applyOverrides({ compaction: { keepRecentTokens: original } });
+        }
+      }
+      return { compacted: false, message: `nothing to compact — ${msg.toLowerCase()}.` };
     }
-    const after = result.estimatedTokensAfter !== undefined ? ` → ~${result.estimatedTokensAfter}` : "";
-    return {
-      compacted: true,
-      message: `session compacted (${result.tokensBefore} tokens before${after}).`,
-      ...(result.summary ? { summary: result.summary } : {}),
-    };
   }
 
   /** Native pi fork (backs edit/retry — capabilities.supportsForkAtMessage).
@@ -571,13 +691,15 @@ export class PiRuntime implements AgentRuntime {
     return { ok: true, message: `forked pi session at user message ${userOrdinal} (entry ${target.entryId})` };
   }
 
-  private async ensureSession(roomId: string, activeRole: ResolvedRole | undefined): Promise<PiSessionMeta> {
-    const roleKey = activeRole?.name ?? "";
+  private async ensureSession(roomId: string, activeRole: ResolvedRole | undefined, thinkingLevel?: number): Promise<PiSessionMeta> {
+    await this.modelRuntimeReady;
+    const roleKey = promptCacheKey(activeRole?.name, thinkingLevel);
     const systemPrompt = await this.sessions.systemPrompt(roomId, roleKey, () =>
       buildBaseSystemPrompt({
         agent: this.agent,
         role: activeRole,
         workspaceRoot: this.workspace.rootDir,
+        thinkingLevel,
       }),
     );
     const skillNames = agentSkillNames(this.agent, activeRole);
@@ -624,8 +746,10 @@ export class PiRuntime implements AgentRuntime {
       agent: this.agent,
       roomId,
       roomDir,
+      workDir: this.workDir,
       availableAgents: agentRoster(this.workspace),
       summonCreate: this.summonCreate,
+      resumeCreate: this.resumeCreate,
       recallSearch: this.recallSearch,
     });
     const systemPromptRef = { current: systemPrompt };
@@ -640,17 +764,26 @@ export class PiRuntime implements AgentRuntime {
       // GAIA, so only those stay disabled here.
       noExtensions: false,
       noSkills: true,
-      noPromptTemplates: true,
+      // Keep Pi's template discovery enabled: AgentSession.prompt() expands
+      // these itself when RoomService passes a native slash command through.
       noThemes: true,
       noContextFiles: true,
-      // Pi's own base system prompt (tool usage, conventions, docs pointers)
-      // must stay — gaia's assembled layer (soul+AGENTS.md+role+style law from
-      // buildBaseSystemPrompt) rides APPENDED via pi's append mechanism, never
-      // replacing pi's base. systemPromptOverride left unset so
-      // DefaultResourceLoader falls through to its discovered/undefined base,
-      // which makes pi's system-prompt.js build its own default prompt
-      // (customPrompt undefined) and then append this section + skills.
-      appendSystemPromptOverride: () => [systemPromptRef.current],
+      // Two modes, keyed on agent.json `promptLaw`:
+      // - promptLaw UNSET (default): pi's own base system prompt (tool usage,
+      //   conventions, docs pointers) stays — gaia's assembled layer rides
+      //   APPENDED via pi's append mechanism (customPrompt undefined ⇒ pi
+      //   builds its default base, then appends this section + skills).
+      // - promptLaw SET: the law must be the ABSOLUTE FIRST tokens, so the
+      //   daemon-built prompt (promptLaw already at index 0) REPLACES pi's
+      //   base entirely via systemPromptOverride (system-prompt.js customPrompt
+      //   path: our prompt first, then skills/cwd suffix). Tool-use with the
+      //   replaced base is UNVERIFIED live.
+      // Replace mode also pins the append channel to [] — otherwise the
+      // loader discovers ~/.pi/agent/APPEND_SYSTEM.md and injects arbitrary
+      // user-dir content above/after the law.
+      ...(this.agent.promptLaw
+        ? { systemPromptOverride: () => systemPromptRef.current, appendSystemPromptOverride: () => [] }
+        : { appendSystemPromptOverride: () => [systemPromptRef.current] }),
     });
     if (!this.sessionFactory) await loader.reload();
 
@@ -670,10 +803,9 @@ export class PiRuntime implements AgentRuntime {
         })
       : await createAgentSession({
           cwd: this.workDir,
-          authStorage: this.authStorage,
-          modelRegistry: this.modelRegistry,
+          modelRuntime: this.modelRuntime,
           model,
-          thinkingLevel: this.agent.thinking,
+          thinkingLevel: toPiThinking(this.agent.thinking),
           // Pi treats `tools` as an allowlist over built-in AND custom tools,
           // so the custom tool names (memory, recall) must stay in the list.
           tools: this.agent.tools,
@@ -726,9 +858,7 @@ export class PiRuntime implements AgentRuntime {
   private resolveModelLabel(): string {
     const provider = this.agent.model?.provider;
     const name = this.agent.model?.name;
-    if (!provider || !name) return "Pi default";
-    const resolved = findModelWithAlias(this.modelRegistry, provider, name);
-    return resolved ? `${provider}/${name}` : "Pi default";
+    return provider && name ? `${provider}/${name}` : "Pi default";
   }
 }
 
@@ -752,11 +882,14 @@ async function probePiUsage(provider: "anthropic" | "openai-codex"): Promise<Usa
   let cred: { type?: string; accountId?: unknown } | undefined;
   let token: string | undefined;
   try {
-    const storage = AuthStorage.create();
-    cred = storage.get(provider) as typeof cred;
+    // readStoredCredential is a one-off raw read (no refresh) — enough to tell
+    // api-key/no-login (skip) from oauth (probe further) before paying for a
+    // full ModelRuntime spin-up.
+    cred = readStoredCredential(provider);
     if (!cred || cred.type !== "oauth") return { status: "none" }; // API-key or no login — no subscription meter.
-    // getApiKey auto-refreshes an expired OAuth token (with file locking).
-    token = await storage.getApiKey(provider);
+    // ModelRuntime.getAuth auto-refreshes an expired OAuth token (locked, like the old AuthStorage.getApiKey).
+    const runtime = await ModelRuntime.create();
+    token = (await runtime.getAuth(provider))?.auth.apiKey;
   } catch {
     return { status: "error" }; // store unreadable / refresh raced — transient, keep last-known.
   }

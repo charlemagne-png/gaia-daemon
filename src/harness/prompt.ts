@@ -6,7 +6,9 @@
 // CLI harnesses additionally inline role-skill text + a `gaia` CLI pointer
 // (buildInlineSystemPrompt) because they cannot load Pi-style skill files.
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { globalPaths } from "../core/paths.js";
 import type { AgentDef, ContextFile, MessageAttachment, RoomEvent, Workspace } from "../core/types.js";
 import type { MemoryStore } from "../domain/memory.js";
 import type { ResolvedRole } from "../domain/roles.js";
@@ -22,6 +24,43 @@ export interface SystemPromptInput {
   role?: ResolvedRole;
   intentText?: string;
   contextFiles: ContextFile[];
+  /** Concatenated verbatim text of ~/.gaia/protocols/*.md (buildBaseSystemPrompt
+   * reads it). ""/undefined = no `# Protocols` section at all (zero change). */
+  protocolsText?: string;
+  /** Room-scoped GAIA-THINK level 0-10. Only affects the trailing line of the
+   * Protocols section, and only when protocolsText is present. Unset = 0. */
+  thinkingLevel?: number;
+}
+
+/** Cache key for the per-session system prompt: role name plus the room's
+ * protocol thinking level, so changing the level invalidates the cached prompt
+ * on the next turn (the level rides IN the system prompt). */
+export function promptCacheKey(roleName: string | undefined, thinkingLevel?: number): string {
+  return `${roleName ?? ""}#t${thinkingLevel ?? 0}`;
+}
+
+/** The `# Protocols` section (or "" when no protocol text is loaded). When
+ * loaded, a trailing line always states the room's GAIA-THINK level: level 0
+ * (or unset) disables thought blocks, level N announces `N/10`. */
+export function buildProtocolsSection(protocolsText?: string, thinkingLevel?: number): string {
+  const body = protocolsText?.trim();
+  if (!body) return "";
+  const level = thinkingLevel ?? 0;
+  const levelLine = level > 0 ? `Current thinking level: ${level}/10` : "Thinking disabled — do not emit <gaia:think> blocks.";
+  return `# Protocols\n\n${body}\n\n${levelLine}`;
+}
+
+/** Read every *.md in the protocols dir (sorted by filename) and join their
+ * verbatim contents with blank lines. Missing dir / no *.md → "". */
+export async function readProtocolsText(dir: string = globalPaths.protocolsDir()): Promise<string> {
+  let names: string[];
+  try {
+    names = (await readdir(dir)).filter((name) => name.toLowerCase().endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  const parts = await Promise.all(names.map((name) => readOptional(join(dir, name))));
+  return parts.map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
 export interface TurnPromptInput {
@@ -34,6 +73,8 @@ export interface TurnPromptInput {
   memory?: string;
   /** Auto-retrieved memories for THIS turn; already fenced by the service. */
   recall?: string;
+  /** Context returned by room-local command plugins. */
+  pluginContext?: string;
   channel?: "text" | "voice";
   /** Files attached to the newest message (pasted into the composer). */
   attachments?: MessageAttachment[];
@@ -46,6 +87,9 @@ export interface TurnPromptInput {
   rootDir?: string;
   /** Settings ▸ General ▸ "Your name" — see renderRoomTranscript. */
   userName?: string;
+  /** Agent-declared law line (agent.json `turnLaw`) appended as the very last
+   * tokens of the composed turn prompt so it is always freshest. */
+  turnLaw?: string;
 }
 
 // Turn-level overlay (not the system prompt) so entering/leaving a call never
@@ -58,6 +102,17 @@ const VOICE_MODE_INSTRUCTIONS = [
   "Write numbers, abbreviations and symbols the way they should be spoken.",
   "You can still use your tools; the user only hears your final text.",
 ].join("\n");
+
+/** Render an event timestamp (stored as ISO UTC) in the host's local
+ * timezone for prompt injection. Timezone is auto-detected via Intl; pass
+ * `timeZone` to override (never hardcoded). Falls back to the raw string for
+ * unparseable input. */
+export function formatEventTimestamp(timestamp: string, timeZone?: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  const tz = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return date.toLocaleString("sv-SE", { timeZone: tz, timeZoneName: "short" });
+}
 
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -88,7 +143,7 @@ export function renderRoomTranscript(events: RoomEvent[], userName?: string): st
           ? `${who} -> ${event.targets.map((target: string) => `@${target}`).join(", ")}`
           : `@${event.author}`;
       const attachments = "attachments" in event && event.attachments?.length ? `\n${renderAttachmentLines(event.attachments)}` : "";
-      return `[${event.timestamp}] ${header}:\n${event.text}${attachments}`;
+      return `[${formatEventTimestamp(event.timestamp)}] ${header}:\n${event.text}${attachments}`;
     })
     .join("\n\n");
 }
@@ -102,6 +157,19 @@ function renderProjectContext(contextFiles: ContextFile[]): string {
 // Standing style law (Pascal, 2026-07-13): context artifacts live at
 // machine-recall density, not human-prose density (07-09 compression research
 // — "episodes born terse"). Rides in EVERY agent's system prompt, uniformly.
+// Harness usage (Pascal, 2026-07-18, whip 169): every agent KNOWS its own
+// harness — in the system prompt itself, never in soul/memory files.
+const HARNESS_LAW =
+  '# Harness (GAIA) — you already know this; never rediscover it\n' +
+  'CLI `gaia` (in PATH) — the room system\'s full surface, usable from bash any turn:\n' +
+  '- `gaia summon` … — launch worker lanes (also a native tool).\n' +
+  '- `gaia resume <roomId> "<message>"` — STEER a running lane mid-flight: append orders, correct specs, redirect, stop. Lanes are steerable, never fire-and-forget. Spec changed? `resume`, don\'t wait for the wall + relaunch.\n' +
+  '- `gaia mem|recall` — memory/recall from bash.\n' +
+  '- `gaia dream [agent] [--apply]` — memory consolidation (user-triggered).\n' +
+  '- `gaia caryll compress|expand|stats <file>` — lossless context compression.\n' +
+  '- `gaia serve <room>` — expose a monad room as one model.\n' +
+  'Laws: summon timeouts eat the ROOM, not committed work → workers commit every stage; salvage from disk before relaunching. Never invent harness limitations — this section IS the surface.';
+
 const STYLE_LAW =
   '# Style law (Pascal, 2026-07-13)\nEverything you WRITE INTO CONTEXT — memory files, skills, roles, docs, specs, summon tasks — uses telegraphic notation: fragments + arrows + § pointers, no filler sentences, no prose grammar. State once, point after; NEVER re-explain in different wording. Exemplar: your MEMORY.md format. Replies: dense, zero repetition, zero bloat.';
 
@@ -115,9 +183,14 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   // system prompt so it is the most recent instruction, not buried under
   // context files.
   return [
+    // agent.json `promptLaw`: the ABSOLUTE FIRST tokens of the prompt —
+    // measured to suppress native thinking only at char 0, not at the end.
+    input.agent.promptLaw?.trim() ?? "",
     `# Agent Soul\n\n${input.soulText.trim()}`,
+    buildProtocolsSection(input.protocolsText, input.thinkingLevel),
     input.intentText?.trim() ? `# Project Agent Intent\n\n${input.intentText.trim()}` : "",
     `# Project Context (AGENTS.md)\n\n${renderProjectContext(input.contextFiles)}`,
+    HARNESS_LAW,
     STYLE_LAW,
     roleSection,
     roleDiagnostics,
@@ -146,11 +219,16 @@ export async function buildBaseSystemPrompt(params: {
   agent: AgentDef;
   role: ResolvedRole | undefined;
   workspaceRoot: string;
+  /** Room-scoped GAIA-THINK level (0-10). Unset = 0. */
+  thinkingLevel?: number;
+  /** Override the protocols source dir (tests); defaults to ~/.gaia/protocols. */
+  protocolsDir?: string;
 }): Promise<string> {
-  const [soulText, intentText, contextFiles] = await Promise.all([
+  const [soulText, intentText, contextFiles, protocolsText] = await Promise.all([
     readFile(params.agent.soulPath, "utf8"),
     readOptional(params.agent.projectIntentPath),
     discoverContextFiles(params.workspaceRoot),
+    readProtocolsText(params.protocolsDir),
   ]);
   return buildSystemPrompt({
     agent: params.agent,
@@ -158,6 +236,8 @@ export async function buildBaseSystemPrompt(params: {
     role: params.role,
     intentText,
     contextFiles,
+    protocolsText,
+    thinkingLevel: params.thinkingLevel,
   });
 }
 
@@ -169,11 +249,14 @@ export async function buildInlineSystemPrompt(params: {
   agent: AgentDef;
   role: ResolvedRole | undefined;
   toolPointer: string;
+  /** Room-scoped GAIA-THINK level (0-10). Unset = 0. */
+  thinkingLevel?: number;
 }): Promise<string> {
   const base = await buildBaseSystemPrompt({
     agent: params.agent,
     role: params.role,
     workspaceRoot: params.workspace.rootDir,
+    thinkingLevel: params.thinkingLevel,
   });
   // A harness's native commands (claude builtins like deep-research) have no
   // SKILL.md to inline — they reach the agent by passthrough. Pass their names as
@@ -219,7 +302,7 @@ export function gaiaCliPointer(
  * calling harness composed — never a harness-id branch.
  */
 export async function buildTurnPromptFor(
-  agent: Pick<AgentDef, "id" | "memoryDir">,
+  agent: Pick<AgentDef, "id" | "memoryDir" | "turnLaw">,
   input: AgentInput,
   memoryStore: Pick<MemoryStore, "promptBlock">,
   sessions: { memoryChanged(roomId: string, memory: string): boolean },
@@ -236,11 +319,13 @@ export async function buildTurnPromptFor(
     events: input.transcript,
     memory: memoryChanged ? memory : undefined,
     recall: input.recall,
+    pluginContext: input.pluginContext,
     channel: input.channel,
     attachments: input.attachments,
     workDir: paths?.workDir,
     rootDir: paths?.rootDir,
     userName: input.userName,
+    turnLaw: agent.turnLaw,
   });
 }
 
@@ -256,10 +341,12 @@ export function buildTurnPrompt(input: TurnPromptInput): string {
     input.channel === "voice" ? VOICE_MODE_INSTRUCTIONS : "",
     input.memory?.trim() ? `# Your persistent memory\n\n${input.memory.trim()}` : "",
     input.recall?.trim() ?? "",
+    input.pluginContext?.trim() ?? "",
     "New room events since your last turn:",
     renderRoomTranscript(input.events, input.userName),
     "Newest user message:",
     [input.message, input.attachments?.length ? renderAttachmentLines(input.attachments) : ""].filter(Boolean).join("\n"),
+    input.turnLaw?.trim() ?? "",
   ]
     .filter(Boolean)
     .join("\n\n");

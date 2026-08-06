@@ -25,6 +25,7 @@ import {
   type AgentRuntime,
   type HarnessCapabilities,
   type RecallSearch,
+  type ResumeCreate,
   registerHarness,
   type RuntimeCreateContext,
   type SummonCreate,
@@ -33,7 +34,7 @@ import { createEventChannel } from "./events.js";
 import { fileSessionStore, SessionMap } from "./sessions.js";
 import { missingBinaryError, spawnLineReader } from "./proc.js";
 import { configuredModelLabel, ModelLabel } from "./model-label.js";
-import { buildInlineSystemPrompt, buildTurnPromptFor } from "./prompt.js";
+import { buildInlineSystemPrompt, buildTurnPromptFor, promptCacheKey } from "./prompt.js";
 import { agentRoster, buildPiTools } from "./tools.js";
 import { emailFromJwt, fetchChatGptUsage } from "./usage.js";
 
@@ -298,6 +299,9 @@ function effortFor(level: string | undefined): string | undefined {
       return "high";
     case "xhigh":
       return "xhigh";
+    // Codex CLI tops at xhigh; GAIA "max" clamps down to it.
+    case "max":
+      return "xhigh";
     default:
       return undefined;
   }
@@ -334,7 +338,7 @@ export interface CodexRuntimeOptions extends RuntimeCreateContext {
 // (see CODEX_SANDBOX_MODE), so the tools field is a real control surface and
 // stays visible in settings (granularTools: true).
 const CODEX_CAPABILITIES: HarnessCapabilities = {
-  gaiaTools: ["memory", "recall", "summon", "resume"],
+  gaiaTools: ["memory", "recall", "artifact", "summon", "resume", "gaia"],
   nativeTools: ["web"],
   granularTools: true,
   supportsPermissionMode: false,
@@ -357,6 +361,7 @@ export class CodexRuntime implements AgentRuntime {
   private readonly workspace: Workspace;
   private readonly memoryStore: MemoryStore;
   private readonly summonCreate?: SummonCreate;
+  private readonly resumeCreate?: ResumeCreate;
   private readonly recallSearch?: RecallSearch;
   private client: CodexClient | null = null;
   private initPromise: Promise<CodexClient> | null = null;
@@ -383,6 +388,7 @@ export class CodexRuntime implements AgentRuntime {
     this.agent = options.agent;
     this.memoryStore = options.memoryStore;
     this.summonCreate = options.summonCreate;
+    this.resumeCreate = options.resumeCreate;
     this.recallSearch = options.recallSearch;
     this.cwd = options.workspace.rootDir;
     this.workDir = process.cwd();
@@ -408,7 +414,7 @@ export class CodexRuntime implements AgentRuntime {
     let thread = this.threads.get(input.roomId);
     let announce = false;
     if (thread && !this.attachedThreads.has(thread.threadId)) {
-      thread = await this.resumeThread(client, thread, input.roomId, input.activeRole);
+      thread = await this.resumeThread(client, thread, input.roomId, input.activeRole, input.protocolThinkingLevel);
       announce = Boolean(thread);
     }
     if (!thread) {
@@ -909,12 +915,13 @@ export class CodexRuntime implements AgentRuntime {
   private async startThread(client: CodexClient, input: AgentInput): Promise<ThreadState> {
     // Gaia tools are native dynamic tools here (self-describing, like Pi's
     // in-process tools), so the system prompt carries no CLI pointer.
-    const roleKey = input.activeRole?.name ?? "";
+    const roleKey = promptCacheKey(input.activeRole?.name, input.protocolThinkingLevel);
     const baseInstructions = await this.threads.systemPrompt(input.roomId, roleKey, () =>
       buildInlineSystemPrompt({
         workspace: this.workspace,
         agent: this.agent,
         role: input.activeRole,
+        thinkingLevel: input.protocolThinkingLevel,
         toolPointer: "",
       }),
     );
@@ -951,14 +958,16 @@ export class CodexRuntime implements AgentRuntime {
     state: ThreadState,
     roomId: string,
     activeRole?: ResolvedRole,
+    thinkingLevel?: number,
   ): Promise<ThreadState | undefined> {
     try {
-      const roleKey = activeRole?.name ?? "";
+      const roleKey = promptCacheKey(activeRole?.name, thinkingLevel);
       const baseInstructions = await this.threads.systemPrompt(roomId, roleKey, () =>
         buildInlineSystemPrompt({
           workspace: this.workspace,
           agent: this.agent,
           role: activeRole,
+          thinkingLevel,
           toolPointer: "",
         }),
       );
@@ -996,8 +1005,10 @@ export class CodexRuntime implements AgentRuntime {
       agent: this.agent,
       roomId,
       roomDir: workspacePaths.roomDir(this.cwd, roomId),
+      workDir: this.workDir,
       availableAgents: agentRoster(this.workspace),
       summonCreate: this.summonCreate,
+      resumeCreate: this.resumeCreate,
       recallSearch: this.recallSearch,
     })) as PiToolLike[];
     const tools = new Map(built.map((tool) => [tool.name, tool]));

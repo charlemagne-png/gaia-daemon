@@ -26,6 +26,8 @@ interface RawAgentConfig {
   skills?: unknown;
   model?: AgentModelConfig;
   thinking?: ThinkingLevel;
+  turnLaw?: unknown;
+  promptLaw?: unknown;
   role?: unknown;
   harness?: unknown;
   /** Legacy alias for `harness`; some seed configs use "runtime". */
@@ -38,6 +40,7 @@ interface RawAgentConfig {
   sandbox?: unknown;
   trust?: unknown;
   allowNestedSummon?: unknown;
+  insight?: unknown;
   memory?: unknown;
   mcpServers?: unknown;
   env?: unknown;
@@ -404,10 +407,13 @@ export async function loadAgentDefinitions(globalAgentsDir: string, projectAgent
       ...(raw.skills !== undefined ? { skillOverride: stringList(raw.skills, []) } : {}),
       model: raw.model,
       thinking: raw.thinking,
+      turnLaw: typeof raw.turnLaw === "string" && raw.turnLaw.trim() ? raw.turnLaw.trim() : undefined,
+      promptLaw: typeof raw.promptLaw === "string" && raw.promptLaw.trim() ? raw.promptLaw.trim() : undefined,
       harness: typeof raw.harness === "string" && raw.harness.trim() ? raw.harness : undefined,
       sandbox: parseSandboxConfig(raw.sandbox),
       trust: raw.trust === false ? false : undefined,
       allowNestedSummon: raw.allowNestedSummon === true,
+      insight: raw.insight === "line" || raw.insight === "full" ? raw.insight : undefined,
       permissionMode: normalizePermissionMode(raw.permissionMode),
       account: typeof raw.account === "string" && raw.account.trim() ? raw.account.trim() : undefined,
       memory: parseMemoryPatch(raw.memory),

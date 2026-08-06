@@ -10,6 +10,7 @@ import { DEFAULTS } from "../src/core/config.js";
 import { readJson } from "../src/core/store.js";
 import { workspacePaths } from "../src/core/paths.js";
 import type { AgentDef, AgentEvent, QueuedMessage, SanitizeProposal, Snapshot, UiEvent, Workspace, WorkspaceConfig } from "../src/core/types.js";
+import "../src/harness/index.js"; // register Pi: its resolved SKILL.md commands are palette entries
 import { RunnerHost } from "../src/harness/host.js";
 import { registerHarness, type AgentInput, type AgentRuntime } from "../src/harness/spec.js";
 import type { SummonHost } from "../src/services/summons.js";
@@ -322,6 +323,26 @@ test("stopBackgroundTask reports false for an unknown id and removes a known one
 
   assert.equal(await service.stopBackgroundTask("bg-1"), true);
   assert.deepEqual((await service.getSnapshot()).backgroundTasks, []);
+});
+
+test("snapshot command palette leaves resolved Pi skills to Pi's native command surface", async () => {
+  const { service, workspace, root } = await makeService();
+  workspace.agents.gaia.harness = "pi";
+  workspace.agents.gaia.skills = ["stoner-mode"];
+  workspace.agents.terry.harness = "pi";
+  await mkdir(join(root, ".gaia", "skills", "stoner-mode"), { recursive: true });
+  await writeFile(join(root, ".gaia", "skills", "stoner-mode", "SKILL.md"), "---\nname: stoner-mode\ndescription: mellow, expansive analysis\n---\n", "utf8");
+  await mkdir(workspace.agents.terry.rolesDir, { recursive: true });
+  await writeFile(join(workspace.agents.terry.rolesDir, "cosmic.md"), "---\nskills: [gaiago-seal]\n---\n", "utf8");
+  await mkdir(join(root, ".gaia", "skills", "gaiago-seal"), { recursive: true });
+  await writeFile(join(root, ".gaia", "skills", "gaiago-seal", "SKILL.md"), "---\nname: gaiago-seal\ndescription: seal the Gaia protocol\n---\n", "utf8");
+  await service.room.updateState((state) => {
+    state.activeRoles.terry = "cosmic";
+  });
+
+  const commands = (await service.getSnapshot()).commands;
+  assert.equal(commands[0]?.name, "help", "daemon commands remain first");
+  assert.deepEqual(commands.filter((command) => ["stoner-mode", "gaiago-seal"].includes(command.name)), []);
 });
 
 test("snapshot usage scope contains only accounts of agents active in this room", async () => {
@@ -988,8 +1009,39 @@ test("slash commands emit a system room-event and settle synchronously", async (
   assert.equal(task.status, "complete");
   const system = events.find((event) => event.type === "room-event" && event.event.author === "system");
   assert.ok(system, "system reply emitted");
-  const unknown = await service.sendMessage("/nonsense");
-  assert.equal(unknown.status, "complete");
+  // Unclaimed slash commands are no longer daemon errors; the native-harness
+  // regression below verifies their asynchronous command turn.
+});
+
+test("unclaimed slash commands defer verbatim to the active native harness", async () => {
+  let received: AgentInput | undefined;
+  const { service, root, events } = await makeService({
+    runtimeFactory: (agent) => {
+      const runtime = scriptedRuntime(agent, () => [{ type: "text-delta", delta: "native" }]);
+      runtime.send = async function* (input: AgentInput) {
+        received = input;
+        // The Pi runtime maps this directly from Pi's expanded user-message
+        // event; room plumbing preserves it as an ordered native skill chip.
+        yield { type: "skill-invocation", skill: { name: "stoner-mode", location: "/skills/stoner-mode/SKILL.md", content: "# stoner" } };
+        yield { type: "text-delta", delta: "native" };
+      };
+      return runtime;
+    },
+  });
+
+  // `stoner-mode` is deliberately absent from daemon commands and this test's
+  // agent config. The active Pi harness owns resolution from its loaded list.
+  const task = await service.sendMessage("/stoner-mode 7");
+  assert.equal(task.status, "running");
+  await service.waitForIdle();
+  assert.equal(received?.message, "/stoner-mode 7");
+  assert.equal(received?.nativeCommand, true);
+  assert.ok(events.some((event) => event.type === "skill-invocation" && event.skill.name === "stoner-mode"));
+  const transcript = (await RoomHandle.open(root, "default")).eventsFrom(0);
+  assert.deepEqual((await transcript).events.at(-1)?.details?.blocks, [
+    { kind: "skill", skill: { name: "stoner-mode", location: "/skills/stoner-mode/SKILL.md", content: "# stoner" } },
+    { kind: "text", text: "native" },
+  ]);
 });
 
 test("/pet persists independent room+agent bindings, validates, lists, removes, and emits a workspace snapshot", async () => {

@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename as pathBasename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { AuthStorage, ModelRegistry, createCodingTools, type ToolsOptions } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime, createCodingTools, type ToolsOptions } from "@earendil-works/pi-coding-agent";
 import type { EditableFileContent, EditableFileDescriptor, EditableScope, FieldHint, FieldHintOption, FileHints, HarnessHintsMeta, ThinkingLevel, Workspace } from "../core/types.js";
 import { agentPaths, gaiaHome, globalPaths, workspacePaths } from "../core/paths.js";
 import { writeTextAtomic } from "../core/store.js";
@@ -74,7 +74,7 @@ export interface HintSources {
 
 // The list is validated against the core ThinkingLevel union so a compiler
 // error flags any drift.
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] satisfies ThinkingLevel[];
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] satisfies ThinkingLevel[];
 
 // grep/find/ls are valid session tools but not part of createCodingTools();
 // the ToolName annotation keeps this list checked against the SDK union.
@@ -188,9 +188,9 @@ export interface ModelCatalog {
  * Read the model catalog from the Pi SDK. Includes API-key, subscription
  * (OAuth), and local/custom models (~/.pi/agent/models.json providers).
  */
-export function readModelCatalog(): ModelCatalog {
-  const authStorage = AuthStorage.create();
-  const registry = ModelRegistry.create(authStorage);
+export async function readModelCatalog(): Promise<ModelCatalog> {
+  const runtime = await ModelRuntime.create();
+  const registry = new ModelRegistry(runtime);
   const models = registry.getAll().map((model) => ({
     provider: model.provider,
     providerLabel: registry.getProviderDisplayName(model.provider),
@@ -284,16 +284,13 @@ function harnessSelectOptions(): FieldHintOption[] {
  * even when the spawn path would (correctly) fail loudly. No harness id given
  * = every account, labeled with its owning harness. */
 function accountSelectOptions(harnessId?: string): FieldHintOption[] {
-  // Filter by harness: cross-harness selection causes runtime crash at spawn.
-  // Label includes email for identification.
   try {
-    return listAccounts().filter((account) => !harnessId || account.harness === harnessId).map((account) => ({
-      value: account.id,
-      label: account.email
-        ? `${account.label ?? account.id} (${account.email})`
-        : (account.label ?? account.id),
-      group: account.workspace,
-    }));
+    return listAccounts()
+      .filter((account) => !harnessId || account.harness === harnessId)
+      .map((account) => ({
+        value: account.id,
+        label: harnessId ? (account.label ?? account.id) : `${account.label ?? account.id} (${account.harness})`,
+      }));
   } catch {
     return [];
   }
@@ -309,7 +306,7 @@ function harnessHintsMeta(): HarnessHintsMeta {
       permissionModes: spec.ui.permissionModes,
       hiddenFields: hiddenFieldsFor(spec.id),
       accountsLabel: spec.accounts?.label,
-      accountOptions: accountSelectOptions(spec.id),
+      accountOptions: spec.accounts ? accountSelectOptions(spec.id) : undefined,
     };
   }
   return { configs };
@@ -453,7 +450,7 @@ function configJsonHints(sources: HintSources): FileHints {
   };
 }
 
-function agentJsonHints(sources: HintSources, parsed?: Record<string, unknown>, agentId?: string, workspaceId?: string): FileHints {
+function agentJsonHints(sources: HintSources, parsed?: Record<string, unknown>, agentId?: string): FileHints {
   const rawHarness = typeof parsed?.harness === "string" ? parsed.harness : undefined;
   const currentHarnessUi = rawHarness ? findHarness(rawHarness)?.ui : undefined;
 
@@ -478,10 +475,6 @@ function agentJsonHints(sources: HintSources, parsed?: Record<string, unknown>, 
   const roleDefaults = agentId ? globalRoleDefaults(agentId) : {};
   const roleToolDefaults = Object.fromEntries(Object.entries(roleDefaults).flatMap(([name, defaults]) => (defaults.tools ? [[name, defaults.tools]] : [])));
   const roleSkillDefaults = Object.fromEntries(Object.entries(roleDefaults).flatMap(([name, defaults]) => (defaults.skills ? [[name, defaults.skills]] : [])));
-
-  // Auto-select account based on workspace match
-  const workspaceAccounts = accountSelectOptions(rawHarness).filter(opt => opt.group === workspaceId);
-  const defaultAccount = workspaceAccounts.length === 1 ? workspaceAccounts[0].value : undefined;
 
   return {
     thinking: select(values(sources.thinkingLevels), { optional: true }),
@@ -512,7 +505,6 @@ function agentJsonHints(sources: HintSources, parsed?: Record<string, unknown>, 
       label: "Account",
       description: "named provider account this agent runs under (add accounts in the global accounts.json settings file); unset = the shared login",
       hidden: hiddenByHarness.has("account"),
-      ...(defaultAccount ? { defaultValue: defaultAccount } : {}),
     }),
     harness: select(harnessSelectOptions(), { optional: true }),
     "model.provider": select(providerOptionList, { optional: true, hidden: providerLocked }),
@@ -574,6 +566,7 @@ function voiceJsonHints(): FileHints {
       label: "Voice mode (default TTS engine)",
       description: "Which voice speaks — kyutai (local), claude (claude.ai voices), or elevenlabs. This is the workspace default; an agent overrides it in its own settings (tts.engine).",
     }),
+    ttsArchiveDir: { input: "text", optional: true, label: "Read-aloud archive", description: "Append-only archive of rendered read-aloud audio; empty = ~/.gaia/voice-archive/tts. Never cache-evicted." },
     disableThinking: { input: "boolean", label: "Auto-disable thinking on calls", description: "Turn the agent's thinking off for the duration of a voice call (lower latency); it reverts on hang-up." },
     speakOnSilence: { input: "boolean", label: "Speak up during silences", description: "When you go quiet on a call, let the agent check back in on its own instead of waiting." },
     silenceDelaySec: { input: "number", label: "Silence before speaking up (seconds)", description: "How long you can be quiet before the agent speaks up (only when 'Speak up during silences' is on)." },
@@ -593,16 +586,21 @@ function voiceJsonHints(): FileHints {
     sttEngine: select(values(sttEngineIds()), {
       optional: true,
       label: "Voice input (dictation) engine",
-      description: "Which speech-to-text engine the composer mic uses — elevenlabs (Scribe API), openai (OpenAI-compatible /audio/transcriptions), or replicate (Replicate Predictions API). Swappable like the TTS engine.",
+      description: "Which speech-to-text engine the composer mic uses — replicate (hosted Whisper; default), elevenlabs (Scribe API), or openai (any OpenAI-compatible /audio/transcriptions endpoint, including a local whisper-server). Swappable like the TTS engine.",
+    }),
+    callSttEngine: select(values(["kyutai", "replicate"]), {
+      optional: true,
+      label: "Live-call STT engine",
+      description: "kyutai runs bundled streaming Moshi; replicate routes call audio through the hosted Whisper bridge.",
     }),
     sttLanguage: { input: "text", optional: true, label: "Dictation language", description: "optional spoken-language hint (ISO code like 'en'); empty auto-detects" },
     elevenLabsSttModel: { input: "text", optional: true, label: "ElevenLabs STT model", description: "ElevenLabs speech-to-text model for the elevenlabs dictation engine (default scribe_v1)" },
     sttOpenAiBaseUrl: { input: "text", optional: true, label: "OpenAI STT base URL", description: "base URL for the openai dictation engine — default OpenAI, or a local whisper-server (http://127.0.0.1:8080/v1) to keep dictation fully local" },
     sttOpenAiApiKey: { input: "text", optional: true, label: "OpenAI STT API key", description: "API key for the openai dictation engine; empty falls back to OPENAI_API_KEY (a localhost base URL may need none)" },
     sttOpenAiModel: { input: "text", optional: true, label: "OpenAI STT model", description: "model for the openai dictation engine (default whisper-1, or a local model name)" },
-    sttReplicateApiKey: { input: "text", optional: true, label: "Replicate API token", description: "API token for the replicate dictation engine; empty falls back to REPLICATE_API_TOKEN" },
-    sttReplicateModel: { input: "text", optional: true, label: "Replicate STT model", description: "model slug for the replicate dictation engine (owner/name; default openai/whisper)" },
-    sttReplicateVersion: { input: "text", optional: true, label: "Replicate STT version", description: "optional pinned model version; empty uses the model's default endpoint" },
+    sttReplicateApiKey: { input: "text", optional: true, label: "Replicate API token", description: "API token for hosted Whisper; empty falls back to REPLICATE_API_TOKEN or REPLICATE_API_KEY" },
+    sttReplicateModel: { input: "text", optional: true, label: "Replicate STT model", description: "primary Replicate owner/model slug (default vaibhavs10/incredibly-fast-whisper)" },
+    sttReplicateFallbackModel: { input: "text", optional: true, label: "Replicate STT fallback model", description: "retry model if the primary is unavailable or rejects input (default openai/whisper)" },
   };
 }
 
@@ -631,7 +629,7 @@ function accountsJsonHints(): FileHints {
   return hints;
 }
 
-export function buildFileHints(file: { label: string; kind: string; content?: string; workspaceId?: string }, sources: HintSources): FileHints | undefined {
+export function buildFileHints(file: { label: string; kind: string; content?: string }, sources: HintSources): FileHints | undefined {
   if (file.kind !== "json") return undefined;
   const basename = file.label.split("/").pop() ?? file.label;
   let parsed: Record<string, unknown> | undefined;
@@ -643,7 +641,7 @@ export function buildFileHints(file: { label: string; kind: string; content?: st
     }
   }
   if (basename === "config.json") return configJsonHints(sources);
-  if (basename === "agent.json") return agentJsonHints(sources, parsed, agentIdFromAgentJsonLabel(file.label), file.workspaceId);
+  if (basename === "agent.json") return agentJsonHints(sources, parsed, agentIdFromAgentJsonLabel(file.label));
   if (basename === "voice.json") return voiceJsonHints();
   if (basename === "schedules.json") return schedulesJsonHints(sources);
   if (basename === "accounts.json") return accountsJsonHints();

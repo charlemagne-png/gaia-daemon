@@ -8,6 +8,7 @@
 // use the registry for verb dispatch without paying for pi-coding-agent.
 
 import type { AgentDef, Workspace } from "../core/types.js";
+import type { ResumeCreate } from "./spec.js";
 import type { MemoryStore } from "../domain/memory.js";
 import type { GaiaTool, RecallSearch, SummonCreate } from "../harness/spec.js";
 
@@ -34,9 +35,13 @@ export interface PiToolContext {
   agent: AgentDef;
   roomId: string;
   roomDir: string;
+  /** Harness execution cwd; native Pi tools resolve relative paths here. */
+  workDir?: string;
   /** Live workspace roster used to constrain self-describing tool schemas. */
   availableAgents?: readonly AgentRosterEntry[];
   summonCreate?: SummonCreate;
+  /** Existing-room steer implementation shared with `gaia resume`. */
+  resumeCreate?: ResumeCreate;
   /** Daemon-side hybrid search; absent → the tool falls back to the local
    * transcript index (works without a bridge, lexical room-only). */
   recallSearch?: RecallSearch;
@@ -57,6 +62,13 @@ export interface GaiaToolSpec {
 
 export const GAIA_TOOLS: GaiaToolSpec[] = [
   {
+    id: "gaia",
+    cliVerbs: [],
+    grant: "",
+    pointer: "- `gaia` custom tool — unified verb dispatcher: bash/read/write/edit/web/summon/resume/mem/recall/artifact/caryll; set raw:true for unformatted output.",
+    makePiTool: async (ctx) => (await import("./tools-pi.js")).createGaiaTool(ctx),
+  },
+  {
     id: "memory",
     cliVerbs: ["mem", "memory"],
     grant: "Bash(gaia mem:*)",
@@ -71,10 +83,17 @@ export const GAIA_TOOLS: GaiaToolSpec[] = [
     makePiTool: async (ctx) => {
       const factory = await import("./tools-pi.js");
       return factory.createRecallTool(
-        ctx.recallSearch ?? factory.localRecallSearch(ctx.roomDir, ctx.roomId, { id: ctx.agent.id, memoryDir: ctx.agent.memoryDir }),
+        ctx.recallSearch ?? factory.localRecallSearch(ctx.roomDir, ctx.roomId, { id: ctx.agent.id, memoryDir: ctx.agent.memoryDir, insight: ctx.agent.insight }),
         ctx.roomId,
       );
     },
+  },
+  {
+    id: "artifact",
+    cliVerbs: ["artifact"],
+    grant: "Bash(gaia artifact:*)",
+    pointer: "- `gaia artifact create|update|list|read` — durable html/json/design payloads owned by the current room",
+    makePiTool: async (ctx) => (await import("./tools-pi.js")).createArtifactTool(ctx),
   },
   {
     id: "summon",

@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MemoryStore } from "../src/domain/memory.js";
 import { findHarness, type SummonCreate } from "../src/harness/spec.js";
@@ -24,6 +24,15 @@ class FakeSession implements PiSessionLike {
   thinkingChanges: string[] = [];
   /** Optional per-test native compaction (PiSessionLike.compact). */
   compact?: (customInstructions?: string) => Promise<{ summary: string; tokensBefore: number; estimatedTokensAfter?: number }>;
+  /** Optional per-test SettingsManager slice — mirrors the read-only manager
+   * gaia passes the real AgentSession. Records applyOverrides so a test can
+   * assert compact()'s forced recent-keep window is applied then restored. */
+  settingsManager?: {
+    getCompactionKeepRecentTokens(): number;
+    applyOverrides(overrides: { compaction?: { keepRecentTokens?: number } }): void;
+  };
+  /** keepRecentTokens history recorded by the fixture settingsManager below. */
+  keepRecentHistory: number[] = [];
   /** Per-test fixture for PiSessionLike.getUserMessagesForForking. */
   userMessagesForForking: Array<{ entryId: string; text: string }> = [];
   /** Calls recorded against PiSessionLike.navigateTree. */
@@ -106,6 +115,66 @@ test("PiRuntime reuses one persistent session for repeated room-agent turns", as
     assert.equal(sessions.length, 1);
     runtime.dispose();
     assert.equal(sessions[0].disposed, true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("PiRuntime dynamically aliases a loaded terse skill command into Pi's native skill pipeline", async () => {
+  const fx = await harnessFixture();
+  try {
+    await mkdir(join(fx.home, "skills", "stoner-mode"), { recursive: true });
+    await writeFile(
+      join(fx.home, "skills", "stoner-mode", "SKILL.md"),
+      "---\nname: stoner-mode\ndescription: native skill command fixture\n---\n# stoner\n",
+      "utf8",
+    );
+    const agent = { ...fx.agent, skills: ["stoner-mode"] };
+    const workspace = { ...fx.workspace, agents: { gaia: agent } };
+    let session: FakeSession | undefined;
+    const factory: PiRuntimeSessionFactory = async (options) => {
+      // This is the real Pi ResourceLoader path; the runtime must ask its
+      // loaded skills rather than carrying a daemon-side command registry.
+      await options.loader.reload();
+      session = new FakeSession("s1");
+      session.prompt = async (text, promptOptions) => {
+        session?.prompts.push(text);
+        session?.promptOptions.push(promptOptions);
+        const skill = options.loader.getSkills().skills.find((candidate) => text.startsWith(`/skill:${candidate.name}`));
+        if (skill) {
+          const body = (await readFile(skill.filePath, "utf8")).replace(/^---[\s\S]*?---\s*/, "").trim();
+          for (const listener of session?.listeners ?? []) {
+            listener({
+              type: "message_start",
+              message: { role: "user", content: [{ type: "text", text: `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>\n\n7` }] },
+            });
+            listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ok" } });
+          }
+        }
+      };
+      return { session };
+    };
+    const runtime = new PiRuntime({ workspace, agent, memoryStore: new MemoryStore(), sessionFactory: factory });
+
+    const expanded = await collect(runtime.send({ roomId: "default", message: "/stoner-mode 7", transcript: [], nativeCommand: true }));
+    assert.equal(session?.prompts[0], "/skill:stoner-mode 7");
+    assert.deepEqual(expanded, [
+      {
+        type: "skill-invocation",
+        skill: {
+          name: "stoner-mode",
+          location: join(fx.home, "skills", "stoner-mode", "SKILL.md"),
+          content: `References are relative to ${join(fx.home, "skills", "stoner-mode")}.\n\n# stoner`,
+        },
+      },
+      { type: "text-delta", delta: "ok" },
+    ]);
+
+    // Unknown/template-shaped tokens stay verbatim for AgentSession.prompt(),
+    // whose native template and unknown-command behavior remains authoritative.
+    await collect(runtime.send({ roomId: "default", message: "/not-a-daemon-command", transcript: [], nativeCommand: true }));
+    assert.equal(session?.prompts[1], "/not-a-daemon-command");
+    runtime.dispose();
   } finally {
     await fx.cleanup();
   }
@@ -282,6 +351,40 @@ test("PiRuntime appends gaia's assembled prompt onto pi's own base instead of re
   }
 });
 
+test("PiRuntime replaces pi's base with the daemon prompt when promptLaw is set", async () => {
+  const fx = await harnessFixture();
+  try {
+    let seenSystemPrompt: string | undefined;
+    let seenAppendSystemPrompt: string[] = [];
+    let seenSystemPromptRef: { current: string } | undefined;
+    const factory: PiRuntimeSessionFactory = async (options) => {
+      await options.loader.reload();
+      seenSystemPrompt = options.loader.getSystemPrompt();
+      seenAppendSystemPrompt = options.loader.getAppendSystemPrompt();
+      seenSystemPromptRef = options.systemPromptRef;
+      return { session: new FakeSession("s1") };
+    };
+    const runtime = new PiRuntime({
+      workspace: fx.workspace,
+      agent: { ...fx.agent, promptLaw: "思開→即閉" },
+      memoryStore: new MemoryStore(),
+      sessionFactory: factory,
+    });
+
+    await collect(runtime.send({ roomId: "default", message: "one", transcript: [] }));
+
+    // Replace mode: loader's customPrompt IS the daemon-built prompt — pi's
+    // hardcoded default base never gets built — and the law sits at char 0.
+    assert.equal(seenSystemPrompt, seenSystemPromptRef?.current);
+    assert.match(seenSystemPrompt ?? "", /^思開→即閉/);
+    // Append channel stays empty — nothing rides above or duplicates the prompt.
+    assert.deepEqual(seenAppendSystemPrompt, []);
+    runtime.dispose();
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test("PiRuntime reports the session's actual model as a model-info event", async () => {
   const fx = await harnessFixture();
   try {
@@ -441,6 +544,84 @@ test("PiRuntime.compact turns pi-ai's 'session too small' throw into a clean no-
     await collect(runtime.send({ roomId: "default", message: "hi", transcript: [] }));
     const result = await runtime.compact("default");
     assert.deepEqual(result, { compacted: false, message: "nothing to compact — nothing to compact (session too small)." });
+    runtime.dispose();
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("PiRuntime.compact forces a smaller recent-keep window and retries when the session is under pi's 20000-token floor", async () => {
+  const fx = await harnessFixture();
+  try {
+    // An EXPLICIT /compact on a session that fits under pi's default
+    // keepRecentTokens floor must still shrink it (the poisoned/heavy tail case)
+    // — pi throws "too small" on the first pass, so compact() retries once with
+    // a forced small recent-keep window, then restores the real floor.
+    const factory: PiRuntimeSessionFactory = async () => {
+      const session = new FakeSession("s1");
+      let keepRecent = 20000;
+      session.settingsManager = {
+        getCompactionKeepRecentTokens: () => keepRecent,
+        applyOverrides: (overrides) => {
+          if (overrides.compaction?.keepRecentTokens !== undefined) {
+            keepRecent = overrides.compaction.keepRecentTokens;
+            session.keepRecentHistory.push(keepRecent);
+          }
+        },
+      };
+      session.compact = async () => {
+        // Refuse until the recent-keep floor is lowered (mirrors findCutPoint
+        // finding nothing to cut above the default floor).
+        if (keepRecent >= 20000) throw new Error("Nothing to compact (session too small)");
+        return { summary: "trimmed the heavy tail", tokensBefore: 8000, estimatedTokensAfter: 2000 };
+      };
+      return { session };
+    };
+    const runtime = new PiRuntime({ workspace: fx.workspace, agent: fx.agent, memoryStore: new MemoryStore(), sessionFactory: factory });
+
+    await collect(runtime.send({ roomId: "default", message: "hi", transcript: [] }));
+    const result = await runtime.compact("default");
+    assert.equal(result.compacted, true);
+    assert.match(result.message, /8000 tokens before → ~2000/);
+    assert.equal(result.summary, "trimmed the heavy tail");
+    runtime.dispose();
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("PiRuntime.compact still no-ops cleanly when even the forced window finds nothing", async () => {
+  const fx = await harnessFixture();
+  try {
+    // A genuinely tiny session (one short turn under the forced floor): both the
+    // default pass AND the forced retry throw "too small". The floor must be
+    // restored and the clean no-op surfaced — never a scary failure.
+    const factory: PiRuntimeSessionFactory = async () => {
+      const session = new FakeSession("s1");
+      let keepRecent = 20000;
+      session.settingsManager = {
+        getCompactionKeepRecentTokens: () => keepRecent,
+        applyOverrides: (overrides) => {
+          if (overrides.compaction?.keepRecentTokens !== undefined) {
+            keepRecent = overrides.compaction.keepRecentTokens;
+            session.keepRecentHistory.push(keepRecent);
+          }
+        },
+      };
+      session.compact = async () => {
+        throw new Error("Nothing to compact (session too small)");
+      };
+      return { session };
+    };
+    const runtime = new PiRuntime({ workspace: fx.workspace, agent: fx.agent, memoryStore: new MemoryStore(), sessionFactory: factory });
+
+    await collect(runtime.send({ roomId: "default", message: "hi", transcript: [] }));
+    const session = (runtime as unknown as { sessions: Map<string, { session: FakeSession }> }).sessions.get("default")!.session;
+    const result = await runtime.compact("default");
+    assert.deepEqual(result, { compacted: false, message: "nothing to compact — nothing to compact (session too small)." });
+    // The floor was lowered for the retry, then restored to its original value.
+    assert.equal(session.keepRecentHistory[0], 2000);
+    assert.equal(session.keepRecentHistory[session.keepRecentHistory.length - 1], 20000);
     runtime.dispose();
   } finally {
     await fx.cleanup();

@@ -23,6 +23,10 @@ export const globalPaths = {
   appSettings: () => join(gaiaHome(), "app.json"),
   accounts: () => join(gaiaHome(), "accounts.json"),
   agentsDir: () => join(gaiaHome(), "agents"),
+  /** Always-loaded global prompt protocols: every *.md here (sorted by
+   * filename) loads verbatim into EVERY agent's system prompt as a
+   * `# Protocols` section. Missing/empty dir = section omitted, zero change. */
+  protocolsDir: () => join(gaiaHome(), "protocols"),
   agentDir: (agentId: string) => join(gaiaHome(), "agents", agentId),
   /** Shared role definitions available to every agent. Agent-local and project
    * role files may layer on top of these defaults. */
@@ -50,6 +54,8 @@ export const globalPaths = {
   usageCache: () => join(gaiaHome(), "usage.json"),
   /** Derived read-aloud audio, content-addressed per speech chunk. */
   ttsCacheDir: () => join(gaiaHome(), "cache", "tts"),
+  /** Append-only copy of every rendered read-aloud clip; never cache-swept. */
+  ttsArchiveDir: () => join(gaiaHome(), "voice-archive", "tts"),
   /** Local model files (embedding/reranker GGUFs) pulled once, checksummed. */
   modelsCacheDir: () => join(gaiaHome(), "cache", "models"),
 };
@@ -92,6 +98,12 @@ export const workspacePaths = {
   memoryIndexDb: (rootDir: string) => join(rootDir, ".gaia", "memory", "index.db"),
   memoryEval: (rootDir: string) => join(rootDir, ".gaia", "memory", "eval.json"),
   roomFilesDir: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "files"),
+  roomArtifactsDir: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "artifacts"),
+  roomArtifactDir: (rootDir: string, roomId: string, artifactId: string) => join(rootDir, ".gaia", "rooms", roomId, "artifacts", artifactId),
+  roomArtifactManifest: (rootDir: string, roomId: string, artifactId: string) =>
+    join(rootDir, ".gaia", "rooms", roomId, "artifacts", artifactId, "manifest.json"),
+  roomArtifactPayload: (rootDir: string, roomId: string, artifactId: string) =>
+    join(rootDir, ".gaia", "rooms", roomId, "artifacts", artifactId, "payload"),
   piSessionsDir: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "pi-sessions"),
   /** Rewound-away transcript lines (edit/retry fork), append-only beside the transcript. */
   roomRewound: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "rewound.jsonl"),
