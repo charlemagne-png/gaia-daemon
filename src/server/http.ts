@@ -593,7 +593,19 @@ export class GaiaWebServer {
       // an old terminal session, ...) — self-contained means /rebuild must not
       // carry it forward forever. Strip it; a user who genuinely wants a
       // custom gateway sets it fresh at launch, not implicitly via reload.
-      const { ANTHROPIC_BASE_URL: _droppedGateway, ...childEnv } = process.env;
+      //
+      // Also drop GAIA_PARENT_PID: it names the shell that spawned the CURRENT
+      // daemon, but the re-exec'd child is detached and reparented to launchd,
+      // and across a /rebuild the shell itself is torn down/relaunched — so that
+      // pid is stale the instant the child starts. Carrying it forward makes
+      // installParentWatchdog shadow a doomed pid and exit(0) when it dies,
+      // freeing :8787 with no daemon behind it → the reloading app window hits a
+      // refused port and blanks (see installParentWatchdog + df409b7). Absent,
+      // the child installs no watchdog at all (no-op when the var is missing);
+      // the shell reclaims :8787 on its next launch. Kills the stale-pid trap
+      // at the source; the ppid===1 guard in installParentWatchdog stays as a
+      // backstop for any transitional re-exec that still inherited it.
+      const { ANTHROPIC_BASE_URL: _droppedGateway, GAIA_PARENT_PID: _droppedParentPid, ...childEnv } = process.env;
 
       const child = migrateToCompiled
         ? spawn(compiledBinary, flagsOnly, {
