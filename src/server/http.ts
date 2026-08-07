@@ -97,7 +97,28 @@ function pidfilePath(): string {
 function installParentWatchdog(): void {
   const parentPid = Number.parseInt(process.env.GAIA_PARENT_PID ?? "", 10);
   if (!Number.isInteger(parentPid) || parentPid <= 0) return;
+  // Flips from "is my parent alive?" to "am I still the app's daemon?" once we
+  // decide to keep serving as a detached re-exec'd survivor, so we retire the
+  // instant a newer daemon supersedes us instead of lingering forever (that
+  // leak stacked orphan daemons racing on state.json across a night of
+  // rebuilds, 2026-08-07).
+  let orphaned = false;
   const timer = setInterval(() => {
+    if (orphaned) {
+      // Detached survivor: exit as soon as another daemon owns the app. Every
+      // daemon rewrites the pidfile on boot (writePidfile), so a value that is
+      // not our pid means a fresh daemon took over :8787.
+      try {
+        const owner = Number.parseInt(readFileSync(pidfilePath(), "utf8").trim(), 10);
+        if (Number.isInteger(owner) && owner !== process.pid) {
+          console.error(`[daemon] superseded by daemon pid ${owner} — exiting orphaned re-exec'd daemon (pid ${process.pid})`);
+          process.exit(0);
+        }
+      } catch {
+        // No/unreadable pidfile — we're still the daemon; keep serving.
+      }
+      return;
+    }
     try {
       process.kill(parentPid, 0);
     } catch {
@@ -112,12 +133,11 @@ function installParentWatchdog(): void {
       // hits ERR_CONNECTION_REFUSED and parks on a blank screen the user can
       // only escape by force-quitting (observed 2026-08-06: every rebuild
       // logged "parent shell gone — exiting", pid chain 53572→55224→57563→…).
-      // The shell reclaims :8787 on its next launch (kills the owner, spawns a
-      // fresh daemon), so a re-exec'd daemon is safe — even correct — to keep
-      // serving. Stop watching a pid that can never be ours again and stay up.
+      // Keep serving instead — but as an orphan that RETIRES when superseded
+      // (the branch above) so rebuilds never stack daemons on one state.json.
       if (process.ppid === 1) {
-        console.error(`[daemon] parent GAIA shell (pid ${parentPid}) is gone, but this is a re-exec'd/detached daemon (ppid=1) — staying up so the reloaded webview / next shell can use :8787`);
-        clearInterval(timer);
+        console.error(`[daemon] parent GAIA shell (pid ${parentPid}) is gone, but this is a re-exec'd/detached daemon (ppid=1) — staying up until superseded so the reloaded webview / next shell can use :8787`);
+        orphaned = true;
         return;
       }
       console.error(`[daemon] parent GAIA shell (pid ${parentPid}) is gone — exiting`);
