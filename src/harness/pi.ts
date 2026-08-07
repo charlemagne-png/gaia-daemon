@@ -976,14 +976,16 @@ function shQuote(value: string): string {
 
 function piTerminalLoginCommand(configDir: string, initialInput: string[] | undefined): { argv: string[]; env?: Record<string, string> } {
   const provider = initialInput?.[0]?.includes("anthropic") ? "anthropic" : "openai-codex";
+  const piBin = process.env.PI_BIN || join(homedir(), ".local", "bin", "pi");
   const terminalCommand = [
+    `export PATH=${shQuote(`${join(homedir(), ".local", "bin")}:/opt/homebrew/bin:/usr/local/bin:$PATH`)}`,
     `export PI_CODING_AGENT_DIR=${shQuote(configDir)}`,
     `export PI_OFFLINE=0`,
     `clear`,
     `echo ${shQuote(`GAIA add-account login: type /login ${provider} in Pi, then complete the browser/subscription flow.`)}`,
     `echo ${shQuote(`This window is isolated; existing Pi accounts are not touched.`)}`,
     `echo`,
-    `pi --no-approve`,
+    `${shQuote(piBin)} --no-approve`,
   ].join("; ");
   const script = [
     `osascript -e ${shQuote(`tell application "Terminal" to activate`)} -e ${shQuote(`tell application "Terminal" to do script ${JSON.stringify(terminalCommand)}`)}`,

@@ -200,7 +200,11 @@ function renderSettingsModal() {
     void loadAccounts();
     refreshAccountsCatalog();
   }
+  const currentModal = slot.querySelector(".settings2-modal");
+  const scrollTop = currentModal instanceof HTMLElement ? currentModal.scrollTop : 0;
   slot.replaceChildren(SettingsModal());
+  const nextModal = slot.querySelector(".settings2-modal");
+  if (nextModal instanceof HTMLElement && scrollTop > 0) nextModal.scrollTop = scrollTop;
 }
 
 registerRegion("settings", renderSettingsModal);
@@ -811,7 +815,8 @@ function AccountsSection() {
                   accountsNotice = `Starting ${harness.label} login...`;
                   markDirty("settings");
                   try {
-                    const result = await api("/api/accounts/login", { method: "POST", body: JSON.stringify({ harness: harnessId }) });
+                    const variant = account?.providers?.includes("anthropic") ? "anthropic" : account?.providers?.includes("openai-codex") ? "openai-codex" : undefined;
+                    const result = await api("/api/accounts/login", { method: "POST", body: JSON.stringify({ harness: harnessId, accountId: limits.account, ...(variant ? { variant } : {}) }) });
                     applyLoginSession(result.session);
                     if (isActiveLoginStatus(result.session.status)) startLoginPolling(result.session.sessionId);
                   } catch (err) {

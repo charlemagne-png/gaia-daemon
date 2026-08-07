@@ -135,6 +135,19 @@ export function addAccount(record: AccountRecord): void {
   writeFileSync(path, JSON.stringify({ ...raw, accounts: list }, null, 2) + "\n", { mode: 0o600 });
 }
 
+export function replaceAccountCredentials(id: string, credentials: Record<string, string>, email?: string): AccountRecord | undefined {
+  const path = accountsPath();
+  if (!existsSync(path)) return undefined;
+  const raw = JSON.parse(readFileSync(path, "utf8")) as { accounts?: unknown };
+  const list = Array.isArray(raw.accounts) ? (raw.accounts as unknown[]) : [];
+  const index = list.findIndex((entry) => (entry as Partial<AccountRecord>)?.id === id);
+  if (index < 0) return undefined;
+  const current = list[index] as Record<string, unknown>;
+  list[index] = { ...current, ...(email ? { email } : {}), credentials };
+  writeFileSync(path, JSON.stringify({ ...raw, accounts: list }, null, 2) + "\n", { mode: 0o600 });
+  return listAccounts().find((account) => account.id === id);
+}
+
 export function removeAccount(id: string): boolean {
   const path = accountsPath();
   if (!existsSync(path)) return false;

@@ -568,8 +568,9 @@ export class GaiaWebServer {
       const harness = stringField(body, "harness");
       const label = stringField(body, "label");
       const variant = stringField(body, "variant");
+      const accountId = stringField(body, "accountId");
       return this.respond(response, async () => ({
-        session: this.daemon.accountLogins.start((harness ?? "").trim(), label?.trim() || undefined, variant?.trim() || undefined),
+        session: this.daemon.accountLogins.start((harness ?? "").trim(), label?.trim() || undefined, variant?.trim() || undefined, accountId?.trim() || undefined),
       }));
     }
 

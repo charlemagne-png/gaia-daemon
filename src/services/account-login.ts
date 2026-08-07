@@ -16,7 +16,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { gaiaHome } from "../core/paths.js";
 import { newId } from "../core/ids.js";
-import { addAccount, newAccountId } from "../domain/accounts.js";
+import { addAccount, newAccountId, replaceAccountCredentials } from "../domain/accounts.js";
 import { harnessSpecFor, type AccountLoginSpec, type HarnessSpec } from "../harness/spec.js";
 
 /** Strip ANSI CSI + OSC sequences so the extractors see plain text. Previously
@@ -54,6 +54,7 @@ interface LoginSession {
   output: string;
   configDir: string;
   label?: string;
+  replaceAccountId?: string;
   killTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -63,7 +64,7 @@ const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 export class AccountLoginService {
   private readonly sessions = new Map<string, LoginSession>();
 
-  start(harnessId: string, label?: string, variantKey?: string): AccountLoginState {
+  start(harnessId: string, label?: string, variantKey?: string, replaceAccountId?: string): AccountLoginState {
     const spec = harnessSpecFor(harnessId);
     if (!spec.accounts) throw new Error(`harness '${harnessId}' has no account support`);
     const baseLogin = spec.accounts.login;
@@ -105,6 +106,7 @@ export class AccountLoginService {
       output: "",
       configDir,
       ...(label ? { label } : {}),
+      ...(replaceAccountId ? { replaceAccountId } : {}),
       killTimer: setTimeout(() => {
         if (!TERMINAL.has(session.state.status)) {
           session.state.status = "error";
@@ -169,16 +171,19 @@ export class AccountLoginService {
   }
 
   private finish(session: LoginSession, creds: Record<string, string>): void {
-    const id = newAccountId(session.state.harness, session.label);
     const email = session.spec.accounts?.email?.(creds);
-    addAccount({
-      id,
-      harness: session.state.harness,
-      ...(session.label ? { label: session.label } : {}),
-      ...(email ? { email } : {}),
-      credentials: creds,
-    });
-    session.state.account = { id, harness: session.state.harness, ...(session.label ? { label: session.label } : {}), ...(email ? { email } : {}) };
+    const existing = session.replaceAccountId ? replaceAccountCredentials(session.replaceAccountId, creds, email) : undefined;
+    const id = existing?.id ?? newAccountId(session.state.harness, session.label);
+    if (!existing) {
+      addAccount({
+        id,
+        harness: session.state.harness,
+        ...(session.label ? { label: session.label } : {}),
+        ...(email ? { email } : {}),
+        credentials: creds,
+      });
+    }
+    session.state.account = { id, harness: session.state.harness, ...(existing?.label || session.label ? { label: existing?.label ?? session.label } : {}), ...(email || existing?.email ? { email: email ?? existing?.email } : {}) };
     session.state.status = "done";
     this.cleanup(session);
   }
