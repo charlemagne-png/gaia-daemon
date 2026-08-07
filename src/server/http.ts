@@ -2,16 +2,17 @@
 // OpenAI-compatible voice endpoints. No business logic lives here — if a
 // handler grows past parsing and delegating, it belongs on the Daemon.
 
-import { createReadStream, existsSync, openSync, readFileSync, writeSync, rmSync } from "node:fs";
-import { access, appendFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { access, appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { DEFAULTS, gaiaCodesignIdentity, gaiaHost, gaiaPort } from "../core/config.js";
-import { bundledDir, gaiaHome, globalPaths, workspacePaths } from "../core/paths.js";
+
+import { DEFAULTS, gaiaHost, gaiaPort } from "../core/config.js";
+import { bundledDir, globalPaths, workspacePaths } from "../core/paths.js";
 import { newId } from "../core/ids.js";
 import { ATTACHMENT_MAX_BYTES, attachmentMime } from "../core/attachments.js";
 import { bearerToken, json, parseBody, readRawBody, text } from "../core/http.js";
@@ -29,6 +30,14 @@ import { forwardLlmRequest, LLM_PROXY_MOUNT, llmProxySubpath } from "../services
 import { configureRoomServiceReload } from "../services/room-service.js";
 import { summonAck } from "../services/summons.js";
 import { DEFAULT_PET_NAME, loadPet } from "./pet.js";
+import {
+  installParentWatchdog,
+  installPortOwnershipCheck,
+  pidfilePath,
+  removePidfile,
+  requestReload,
+  writePidfile,
+} from "./reload.js";
 import type { ReadAloudDelivery } from "../services/read-aloud.js";
 import { completionChunk, completionDone, completionPayload, isStreamingRequest, modelListPayload, newCompletionId } from "../services/voice.js";
 import { checkCredential, importCredential, normalizeWorkspaceId, readKeymakerState, setRoomWorkspaceBinding } from "../services/keymaker.js";
@@ -61,103 +70,11 @@ const MIME: Record<string, string> = {
 // opus is minutes of speech. Cap well below the attachment limit.
 const TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024;
 const bootId = randomUUID();
-const RELOAD_DELAY_MS = 250;
-// Upper bound on the graceful close inside a reload. closeServer awaits
-// daemon.dispose(), and one wedged runner (an agent turn stuck retrying a dead
-// upstream socket) hangs that await forever — observed live 2026-07-11 20:03:
-// /rebuild stopped after keep-awake teardown, never rebuilt, never re-exec'd,
-// port dead until the app was force-quit. Reload's contract is "the app always
-// comes back", so past this deadline we abandon graceful teardown and proceed.
-// Kept short (Pascal 2026-07-13): a wedged runner is common (mid-turn agent,
-// dead upstream socket retry loop) and this is a pure wait with no durability
-// payoff — pending turns persist to state.json and resume on next boot
-// regardless, and the orphan sweep on boot reaps any child a skipped dispose
-// left behind. 5s here was measured making /rebuild take ~7s end-to-end on a
-// busy daemon vs ~2.5s idle; 1s caps that same worst case near the idle time.
-const RELOAD_CLOSE_TIMEOUT_MS = 1_000;
 const LISTEN_RETRY_DELAY_MS = 300;
 const LISTEN_RETRIES = 10;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
-}
-
-/** Total death (cmd+Q / SIGTERM) needs an authoritative pid: the shell reads
- * this file rather than trusting the pid of whatever it originally spawned,
- * because /reload re-execs the daemon into a NEW process that rewrites this
- * same file on its own boot (see writePidfile/removePidfile below). */
-function pidfilePath(port?: number): string {
-  // Port-scoped: only the daemon on the DEFAULT app port owns `daemon.pid`
-  // (the file the Tauri shell watches/kills). A daemon on any other port
-  // (GAIA_PORT diag instance, second checkout) writes `daemon-<port>.pid` —
-  // it must NEVER stomp the app's pidfile (observed 2026-08-07: a second
-  // instance on :8797 rewrote daemon.pid → shell fired spurious mid-boot
-  // reloads + the real daemon's orphan-retire saw a foreign pid and exited).
-  if (port === undefined || port === DEFAULTS.port) return join(gaiaHome(), "daemon.pid");
-  return join(gaiaHome(), `daemon-${port}.pid`);
-}
-
-/** A daemon spawned by the Tauri shell with GAIA_PARENT_PID must never outlive
- * that shell: poll every 2s and exit as soon as the parent is gone (a signal-0
- * kill throws once the pid no longer exists). No-op when the env var is
- * absent or not a positive integer — e.g. a daemon started standalone. */
-function installParentWatchdog(pidfile: string, isServing: () => boolean): void {
-  const parentPid = Number.parseInt(process.env.GAIA_PARENT_PID ?? "", 10);
-  if (!Number.isInteger(parentPid) || parentPid <= 0) return;
-  // Flips from "is my parent alive?" to "am I still the app's daemon?" once we
-  // decide to keep serving as a detached re-exec'd survivor, so we retire the
-  // instant a newer daemon supersedes us instead of lingering forever (that
-  // leak stacked orphan daemons racing on state.json across a night of
-  // rebuilds, 2026-08-07).
-  let orphaned = false;
-  const timer = setInterval(() => {
-    if (orphaned) {
-      // Detached survivor: exit as soon as another daemon owns the app. Every
-      // daemon rewrites the pidfile on boot (writePidfile), so a value that is
-      // not our pid means a fresh daemon took over :8787.
-      // While we still HOLD the listen socket no other daemon can serve the
-      // app port — a foreign pid in the pidfile then means someone ELSE
-      // (second instance, manual write) stomped the file, not a takeover.
-      // Exiting on that killed the live daemon (2026-08-07). Only retire
-      // once we no longer serve AND another pid claims the file.
-      if (isServing()) return;
-      try {
-        const owner = Number.parseInt(readFileSync(pidfile, "utf8").trim(), 10);
-        if (Number.isInteger(owner) && owner !== process.pid) {
-          console.error(`[daemon] superseded by daemon pid ${owner} — exiting orphaned re-exec'd daemon (pid ${process.pid})`);
-          process.exit(0);
-        }
-      } catch {
-        // No/unreadable pidfile — we're still the daemon; keep serving.
-      }
-      return;
-    }
-    try {
-      process.kill(parentPid, 0);
-    } catch {
-      // The shell we were told to shadow is gone. A FIRST-GENERATION daemon
-      // spawned directly by the shell (its immediate parent is the shell / its
-      // bun launcher, so process.ppid !== 1) must die with it — that is how a
-      // quit avoids leaking a daemon. But a daemon produced by a /reload
-      // re-exec is spawned detached and reparented to launchd (process.ppid ===
-      // 1), and across a /rebuild the shell ITSELF is torn down and relaunched
-      // — so the pre-rebuild GAIA_PARENT_PID we inherited is stale. Suiciding
-      // there frees :8787 with NO daemon behind it; the reloading webview then
-      // hits ERR_CONNECTION_REFUSED and parks on a blank screen the user can
-      // only escape by force-quitting (observed 2026-08-06: every rebuild
-      // logged "parent shell gone — exiting", pid chain 53572→55224→57563→…).
-      // Keep serving instead — but as an orphan that RETIRES when superseded
-      // (the branch above) so rebuilds never stack daemons on one state.json.
-      if (process.ppid === 1) {
-        console.error(`[daemon] parent GAIA shell (pid ${parentPid}) is gone, but this is a re-exec'd/detached daemon (ppid=1) — staying up until superseded so the reloaded webview / next shell can use :8787`);
-        orphaned = true;
-        return;
-      }
-      console.error(`[daemon] parent GAIA shell (pid ${parentPid}) is gone — exiting`);
-      process.exit(0);
-    }
-  }, 2000);
-  timer.unref();
 }
 
 function stringField(body: unknown, field: string): string | undefined {
@@ -256,16 +173,7 @@ function pathInside(path: string, root: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-/** Walk up from a path to the nearest ancestor directory named "*.app" (a macOS bundle root), if any. */
-function findAppBundleRoot(path: string): string | undefined {
-  let dir = resolve(path);
-  while (true) {
-    if (dir.endsWith(".app")) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
-}
+
 
 async function openWithSystem(target: string): Promise<void> {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
@@ -335,8 +243,12 @@ export class GaiaWebServer {
     const address = server.address();
     const boundPort = address && typeof address === "object" ? address.port : port;
     this.boundPort = boundPort;
-    await this.writePidfile();
-    installParentWatchdog(pidfilePath(boundPort), () => this.server === server && server.listening);
+    await writePidfile(boundPort);
+    installParentWatchdog({
+      pidfile: pidfilePath(boundPort),
+      isServing: () => this.server === server && server.listening,
+    });
+    installPortOwnershipCheck(boundPort, () => this.server === server && server.listening);
     this.boundUrl = `http://${host}:${boundPort}`;
     // Boot provenance: pid + ppid + timestamp on every start, so reload.log
     // (and any log this lands in) can attribute each daemon generation — a
@@ -392,275 +304,15 @@ export class GaiaWebServer {
       server.close((error) => (error ? reject(error) : resolveClose()));
       server.closeAllConnections?.();
     });
-    await this.removePidfile();
+    await removePidfile(this.boundPort);
   }
 
-  /** Write <gaia home>/daemon.pid after a successful bind — the authority the
-   * Tauri shell (and `kill -TERM`) uses to find and terminate the daemon.
-   * Best-effort: a pidfile write failure must not stop the daemon serving. */
-  private async writePidfile(): Promise<void> {
-    try {
-      await mkdir(gaiaHome(), { recursive: true });
-      await writeFile(pidfilePath(this.boundPort), `${process.pid}\n`, "utf8");
-    } catch (error) {
-      console.error(`gaia: failed to write pidfile: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
 
-  /** Delete the pidfile on graceful shutdown. The /reload re-exec child
-   * rewrites it on its own boot (writePidfile runs on every listen()), so
-   * deleting here — before the new process comes up — is correct: there is
-   * a brief window with no pidfile, never a stale one pointing at a dead pid. */
-  private async removePidfile(): Promise<void> {
-    try {
-      await unlink(pidfilePath(this.boundPort));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.error(`gaia: failed to remove pidfile: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
 
   private requestReload(): void {
-    if (this.reloadStarted) return;
-    this.reloadStarted = true;
-    // Restart provenance (standing rule: ONLY /reload — the user — restarts the
-    // daemon; nothing self-triggers). Every re-exec logs a timestamped line so
-    // any boot in reload.log without a matching "reload requested" line above
-    // it is immediately visible as an external kill/spawn, not ours.
-    console.log(`[gaia] ${new Date().toISOString()} reload requested via /reload — re-exec in ${RELOAD_DELAY_MS}ms (pid ${process.pid})`);
-    setTimeout(() => {
-      void this.reloadNow();
-    }, RELOAD_DELAY_MS);
-  }
-
-  private async reloadNow(): Promise<void> {
-    try {
-      // Bounded graceful close (see RELOAD_CLOSE_TIMEOUT_MS): a hung or failed
-      // dispose must never block the re-exec. process.exit(0) below frees the
-      // port either way, and the next boot's orphan sweep (daemon.serviceFor
-      // invariant) reaps any runner subprocess a skipped dispose left behind.
-      if (this.server) {
-        const closed = this.closeServer(this.server).then(
-          () => "closed" as const,
-          (error) => {
-            console.error(`[gaia] reload: graceful close failed: ${error instanceof Error ? error.message : String(error)} — proceeding with re-exec`);
-            return "failed" as const;
-          },
-        );
-        const deadline = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), RELOAD_CLOSE_TIMEOUT_MS).unref());
-        if ((await Promise.race([closed, deadline])) === "timeout") {
-          console.error(`[gaia] reload: graceful close still pending after ${RELOAD_CLOSE_TIMEOUT_MS}ms — proceeding with re-exec (pid ${process.pid})`);
-        }
-      }
-      const reloadLog = openSync(join(gaiaHome(), "reload.log"), "a");
-
-      // A reload doesn't just re-exec the running process — when a build
-      // recipe is reachable it rebuilds first, so a source checkout picks up
-      // the code that triggered the reload, and a compiled install picks up
-      // a fresh binary. Two ways to find that recipe: running from source
-      // (this file's own repo has scripts/build-daemon.mjs), or running a
-      // compiled binary that was built alongside a gaia-source.json pointing
-      // back at the source repo that built it.
-      const repoRootFromSource = fileURLToPath(new URL("../..", import.meta.url));
-      const fromSourceScript = join(repoRootFromSource, "scripts/build-daemon.mjs");
-      let plan: { script: string; out: string; bun: string } | undefined;
-      let fromSource = false;
-      if (existsSync(fromSourceScript)) {
-        fromSource = true;
-        // process.execPath, not the bare "bun" name: this process IS bun
-        // running src/cli.ts (package.json's "start": "bun src/cli.ts"), so
-        // its own execPath is a guaranteed-correct absolute path. A bare
-        // "bun" instead depends on PATH containing bun's install dir, which
-        // a GUI-launched app's stripped LaunchServices PATH does not always
-        // have — silent, output-less spawnSync failure observed live 2026-07-11.
-        plan = { script: fromSourceScript, out: join(repoRootFromSource, "dist"), bun: process.execPath };
-      } else {
-        const sourceJsonPath = join(dirname(process.execPath), "gaia-source.json");
-        if (existsSync(sourceJsonPath)) {
-          try {
-            const parsed = JSON.parse(readFileSync(sourceJsonPath, "utf8")) as { root: string; bun: string };
-            const script = join(parsed.root, "scripts/build-daemon.mjs");
-            if (existsSync(script)) plan = { script, out: dirname(process.execPath), bun: parsed.bun };
-          } catch (error) {
-            console.error(`gaia: failed to read gaia-source.json: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
-      }
-
-      let rebuildOk = false;
-      const stagingDir = plan ? `${plan.out}.staging-${Date.now()}` : undefined;
-      if (plan && stagingDir) {
-        try {
-          // Build into a staging directory, OUTSIDE the .app bundle (if bundled).
-          // This keeps the app's code signature intact during the build.
-          await mkdir(stagingDir, { recursive: true });
-          const build = spawnSync(plan.bun, [plan.script, "--out", stagingDir], {
-            stdio: ["ignore", reloadLog, reloadLog],
-            timeout: 120_000,
-          });
-          if (build.status === 0) {
-            // Build succeeded. Atomically swap web/ and setups/ from staging
-            // into plan.out. This is atomic from TCC's perspective — it never
-            // sees the bundle in an inconsistent state.
-            //
-            // A packaged (!fromSource) install ALSO swaps the compiled
-            // `gaia-daemon` binary + `gaia-source.json` — otherwise the app
-            // rebuilds a fresh binary into staging on every /rebuild and then
-            // discards it, re-execing the SAME OLD BINARY forever (daemon
-            // code changes never take effect on a compiled install). Renaming
-            // the running binary aside then moving the new one into its path
-            // is a plain POSIX rename — never a write into the open inode —
-            // so it never hits ETXTBSY, and the process currently executing
-            // out of the old (now unlinked-from-the-directory) inode keeps
-            // running fine until it re-execs below. The from-source (tsx) dev
-            // flow is untouched: only web/setups swap, exactly as before.
-            const names = fromSource ? ["web", "setups"] : ["web", "setups", "gaia-daemon", "gaia-source.json"];
-            for (const name of names) {
-              const src = join(stagingDir, name);
-              const dst = join(plan.out, name);
-              const tmp = `${dst}.old-${Date.now()}`;
-              try {
-                // Move current (if exists) to .old, then move staging into place.
-                // This is as atomic as POSIX rename gets.
-                if (existsSync(dst)) await rename(dst, tmp);
-                await rename(src, dst);
-              } catch (error) {
-                writeSync(reloadLog, `[gaia] reload: atomic swap FAILED for ${name}: ${error instanceof Error ? error.message : String(error)}\n`);
-                throw error;
-              }
-              // Clean up the .old backup, best-effort. `gaia-daemon.old-*`
-              // may still be the inode THIS process is executing out of —
-              // some filesystems refuse to unlink an in-use executable.
-              // That must never fail the reload; the swap itself (the
-              // renames above) already succeeded.
-              if (existsSync(tmp)) {
-                try {
-                  rmSync(tmp, { recursive: true, force: true });
-                } catch (error) {
-                  writeSync(reloadLog, `[gaia] reload: cleanup of stale ${tmp} failed (tolerated): ${error instanceof Error ? error.message : String(error)}\n`);
-                }
-              }
-            }
-            rebuildOk = true;
-          } else {
-            writeSync(reloadLog, "[gaia] reload rebuild FAILED — relaunching previous build\n");
-          }
-        } finally {
-          // Clean up staging directory.
-          if (existsSync(stagingDir)) rmSync(stagingDir, { recursive: true, force: true });
-        }
-      }
-
-      // After atomic swap, re-sign the bundle (macOS only). Code signature is
-      // only broken momentarily if a rename fails; normal case is fully safe.
-      if (rebuildOk && plan && !fromSource && process.platform === "darwin") {
-        const appRoot = findAppBundleRoot(plan.out);
-        if (appRoot) {
-          const parsed = (() => {
-            try {
-              return JSON.parse(readFileSync(join(dirname(process.execPath), "gaia-source.json"), "utf8")) as { root: string };
-            } catch {
-              return undefined;
-            }
-          })();
-          const entitlements = parsed ? join(parsed.root, "src-tauri/Entitlements.plist") : undefined;
-          // Prefer a stable named identity over ad-hoc ("-") signing: ad-hoc
-          // keys the TCC designated requirement to the binary's cdhash, which
-          // changes on every rebuild and orphans every mic/camera grant. A
-          // named identity keys it to the certificate leaf instead, which
-          // stays stable across rebuilds. Fall back to ad-hoc only when the
-          // configured identity isn't actually present in the keychain.
-          const wantIdentity = gaiaCodesignIdentity();
-          const probe = spawnSync("security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" });
-          const identity = probe.status === 0 && probe.stdout.includes(`"${wantIdentity}"`) ? wantIdentity : "-";
-          if (identity === "-" && wantIdentity !== "-") {
-            writeSync(reloadLog, `[gaia] reload: codesign identity "${wantIdentity}" not found in keychain — falling back to ad-hoc (TCC grants will be orphaned)\n`);
-          }
-          const codesignArgs = ["--force", "--deep", "--sign", identity];
-          if (entitlements && existsSync(entitlements)) codesignArgs.push("--entitlements", entitlements);
-          codesignArgs.push(appRoot);
-          const sign = spawnSync("codesign", codesignArgs, { stdio: ["ignore", reloadLog, reloadLog] });
-          if (sign.status === 0) {
-            writeSync(reloadLog, `[gaia] reload: re-signed ${appRoot} after rebuild\n`);
-          } else {
-            writeSync(reloadLog, `[gaia] reload: codesign FAILED (status ${sign.status}) — mic/camera permission will likely break until fixed\n`);
-          }
-        } else {
-          writeSync(reloadLog, `[gaia] reload: installed binary not inside a .app bundle — skipping re-sign\n`);
-        }
-      }
-
-      // Re-exec. tsx's --require/--import live in process.execArgv, NOT
-      // process.argv — without them a source re-exec is plain `node
-      // src/cli.ts`, which dies instantly and leaves the port dead (the
-      // exact "/reload froze the app" failure). And never stdio:"ignore"
-      // here: a crashing reload child must leave a corpse we can read.
-      // In a compiled bun binary argv[1] is the virtual "/$bunfs/..." entry
-      // script (verified 2026-07-11) — it must never be passed to the child,
-      // where the CLI would parse it as a command.
-      const args = process.argv
-        .slice(1)
-        .filter((arg) => arg !== "--dev" && !arg.startsWith("/$bunfs") && !arg.includes("~BUN"));
-      // When the child is the COMPILED binary, argv[1] of a source run
-      // ("src/cli.ts") must be dropped too — the binary would parse the
-      // script path as a CLI command and print --help instead of booting
-      // (observed live 2026-07-11 14:01: reload went dark). Flags only.
-      const flagsOnly = process.argv
-        .slice(2)
-        .filter((arg) => arg !== "--dev" && !arg.startsWith("/$bunfs") && !arg.includes("~BUN"));
-      const compiledBinary = plan ? join(plan.out, "gaia-daemon") : undefined;
-      // Not gated on `fromSource`: a packaged (!fromSource) install now
-      // installs its freshly-built binary into plan.out above, so
-      // compiledBinary IS the new build there too — re-exec it the same way
-      // a source checkout re-execs onto a pre-existing dist/gaia-daemon.
-      // From-source dev behavior is unchanged: it only ever finds a compiled
-      // binary here if one was separately built into dist/ (e.g. `bun run
-      // build`), exactly as before.
-      const migrateToCompiled = rebuildOk && compiledBinary !== undefined && existsSync(compiledBinary);
-
-      // gaia never sets ANTHROPIC_BASE_URL on its OWN process env — the only
-      // writer is the per-turn thinking-proxy shim, which sets it on a spawned
-      // CHILD's env object, not here. Any value present in process.env at
-      // rebuild time is therefore foreign pollution inherited from whatever
-      // launched the app (a stale `launchctl setenv`, a dead local proxy from
-      // an old terminal session, ...) — self-contained means /rebuild must not
-      // carry it forward forever. Strip it; a user who genuinely wants a
-      // custom gateway sets it fresh at launch, not implicitly via reload.
-      //
-      // Also drop GAIA_PARENT_PID: it names the shell that spawned the CURRENT
-      // daemon, but the re-exec'd child is detached and reparented to launchd,
-      // and across a /rebuild the shell itself is torn down/relaunched — so that
-      // pid is stale the instant the child starts. Carrying it forward makes
-      // installParentWatchdog shadow a doomed pid and exit(0) when it dies,
-      // freeing :8787 with no daemon behind it → the reloading app window hits a
-      // refused port and blanks (see installParentWatchdog + df409b7). Absent,
-      // the child installs no watchdog at all (no-op when the var is missing);
-      // the shell reclaims :8787 on its next launch. Kills the stale-pid trap
-      // at the source; the ppid===1 guard in installParentWatchdog stays as a
-      // backstop for any transitional re-exec that still inherited it.
-      const { ANTHROPIC_BASE_URL: _droppedGateway, GAIA_PARENT_PID: _droppedParentPid, ...childEnv } = process.env;
-
-      const child = migrateToCompiled
-        ? spawn(compiledBinary, flagsOnly, {
-            detached: true,
-            stdio: ["ignore", reloadLog, reloadLog],
-            cwd: process.cwd(),
-            env: childEnv,
-          })
-        : spawn(process.execPath, [...process.execArgv, ...args], {
-            detached: true,
-            stdio: ["ignore", reloadLog, reloadLog],
-            cwd: process.cwd(),
-            env: childEnv,
-          });
-      console.log(`[gaia] reload exec: ${migrateToCompiled ? compiledBinary : process.execPath}`);
-      child.unref();
-      process.exit(0);
-    } catch (error) {
-      console.error(`gaia: reload failed: ${error instanceof Error ? error.message : String(error)}`);
-      process.exit(1);
-    }
+    const reloadStartedRef = { current: this.reloadStarted };
+    requestReload(reloadStartedRef, () => this.closeServer(this.server!));
+    this.reloadStarted = reloadStartedRef.current;
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
