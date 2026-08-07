@@ -124,6 +124,16 @@ export async function closeCurrentWindow() {
   }
 }
 
+/** Minimize the current native window. */
+export async function minimizeCurrentWindow() {
+  if (!isNative()) return;
+  try {
+    await T().window.getCurrentWindow().minimize();
+  } catch (err) {
+    console.error("[native] minimize window failed", err);
+  }
+}
+
 /**
  * Parse the launch hash the shell attaches to spawned windows:
  *   #gaia?mode=torn&room=<id>   — a torn-off chat (start with panels collapsed)

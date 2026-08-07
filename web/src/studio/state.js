@@ -5,7 +5,7 @@
  * @typedef {{project:StudioProject,effectiveDesignPath?:string,version?:StudioVersion,headVersion?:StudioVersion,currentHashes?:Record<string,string>,views?:StudioView[],previewUrl?:string,eventsUrl?:string,activeIteration?:{status:string,taskId?:string,error?:string}}} StudioProjectResponse
  */
 
-/** @type {{project:StudioProject|null, effectiveDesignPath:string, version:StudioVersion|null, views:StudioView[], selectedViewId:string, previewNonce:number, loading:boolean, saving:boolean, iterating:boolean, error:string, stale:string, editor:{path:string,content:string,baseVersionId:string,sha256:string,dirty:boolean,loaded:boolean}, prompt:string, iterationStatus:string, popout:boolean}} */
+/** @type {{project:StudioProject|null, effectiveDesignPath:string, version:StudioVersion|null, views:StudioView[], selectedViewId:string, previewNonce:number, loading:boolean, saving:boolean, iterating:boolean, error:string, stale:string, editor:{path:string,content:string,baseVersionId:string,sha256:string,dirty:boolean,loaded:boolean}, prompt:string, iterationStatus:string, popout:boolean, minimized:boolean}} */
 export const studio = {
   project: null,
   effectiveDesignPath: "",
@@ -22,6 +22,7 @@ export const studio = {
   prompt: "",
   iterationStatus: "idle",
   popout: false,
+  minimized: false,
 };
 
 /** @param {StudioProjectResponse} body */
@@ -33,6 +34,24 @@ export function applyStudioProject(body) {
   studio.selectedViewId = studio.selectedViewId || body.project.defaultViewId || studio.views[0]?.id || "";
   studio.iterationStatus = body.activeIteration?.status ?? studio.iterationStatus;
   studio.error = "";
+}
+
+export function closeStudioState() {
+  studio.project = null;
+  studio.effectiveDesignPath = "";
+  studio.version = null;
+  studio.views = [];
+  studio.selectedViewId = "";
+  studio.previewNonce++;
+  studio.loading = false;
+  studio.saving = false;
+  studio.iterating = false;
+  studio.error = "";
+  studio.stale = "";
+  studio.editor = { path: "", content: "", baseVersionId: "", sha256: "", dirty: false, loaded: false };
+  studio.prompt = "";
+  studio.iterationStatus = "idle";
+  studio.minimized = false;
 }
 
 export function selectedStudioView() {

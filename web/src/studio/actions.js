@@ -2,8 +2,8 @@ import { api } from "../api.js";
 import { promptText } from "../prompt.js";
 import { markDirty, setError } from "../render.js";
 import { state } from "../state.js";
-import { openWindow } from "../native.js";
-import { applyStudioProject, studio, selectedStudioView } from "./state.js";
+import { closeCurrentWindow, minimizeCurrentWindow, openWindow } from "../native.js";
+import { applyStudioProject, closeStudioState, studio, selectedStudioView } from "./state.js";
 
 /** @param {string} projectId */
 export async function loadStudioProject(projectId) {
@@ -131,6 +131,27 @@ export async function openStudioPopout(artifact) {
   const url = `/studio?project=${encodeURIComponent(projectId)}&view=${encodeURIComponent(studio.selectedViewId)}&mode=popout${artifactId ? `&artifact=${encodeURIComponent(artifactId)}` : ""}`;
   const opened = await openWindow({ mode: "studio", projectId, viewId: studio.selectedViewId, artifactId });
   if (!opened) window.open(url, "_blank", "noopener");
+}
+
+export async function closeStudioSurface() {
+  const popout = studio.popout;
+  closeStudioState();
+  markDirty("studio", "artifacts");
+  if (popout) await closeCurrentWindow();
+}
+
+export async function minimizeStudioSurface() {
+  if (studio.popout) {
+    await minimizeCurrentWindow();
+    return;
+  }
+  studio.minimized = true;
+  markDirty("studio", "artifacts");
+}
+
+export function restoreStudioSurface() {
+  studio.minimized = false;
+  markDirty("studio", "artifacts");
 }
 
 export function refreshStudioPreview() {

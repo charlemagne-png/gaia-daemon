@@ -1,9 +1,16 @@
 import { $, h } from "../dom.js";
 import { registerRegion } from "../render.js";
-import { openStudioPath, openStudioPopout, saveStudioFile, selectStudioView, sendStudioPrompt, updateStudioDraft, updateStudioPrompt } from "./actions.js";
+import { closeStudioSurface, minimizeStudioSurface, openStudioPath, openStudioPopout, restoreStudioSurface, saveStudioFile, selectStudioView, sendStudioPrompt, updateStudioDraft, updateStudioPrompt } from "./actions.js";
 import { selectedStudioView, studio, studioPreviewUrl } from "./state.js";
 
 registerRegion("studio", renderStudioPanel);
+
+window.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !studio.project) return;
+  if (event.target instanceof HTMLElement && event.target.closest("iframe")) return;
+  event.preventDefault();
+  void closeStudioSurface();
+});
 
 export function renderStudioPanel() {
   const root = $(studio.popout ? "#app" : "#studio-root");
@@ -21,11 +28,24 @@ function renderPanel() {
       studio.error ? h("p", { class: "studio-error", role: "alert", text: studio.error }) : null,
     );
   }
+  if (studio.minimized) return renderMinimized(false);
   return h("section", { class: "studio-panel", "aria-label": "Design Studio" }, renderHeader(false), renderTabs(), renderWorkspace(), renderPrompt());
 }
 
 function renderPopout() {
+  if (studio.minimized) return renderMinimized(true);
   return h("main", { class: "studio-popout", "aria-label": "Design Studio popout" }, renderHeader(true), h("div", { class: "studio-popout-preview" }, renderPreview()), renderPrompt());
+}
+
+/** @param {boolean} compact */
+function renderMinimized(compact) {
+  return h("section", { class: compact ? "studio-popout minimized" : "studio-panel minimized", "aria-label": "Design Studio minimized" },
+    h("div", {}, h("strong", { text: studio.project?.relativePath || studio.project?.designPath || "Design Studio" }), h("small", { text: statusText() })),
+    h("div", { class: "studio-actions" },
+      h("button", { type: "button", onclick: () => restoreStudioSurface(), text: "Restore" }),
+      h("button", { type: "button", onclick: () => void closeStudioSurface(), text: compact ? "Close window" : "Close Studio" }),
+    ),
+  );
 }
 
 /** @param {boolean} compact */
@@ -36,6 +56,8 @@ function renderHeader(compact) {
     h("div", { class: "studio-actions" },
       compact ? null : h("button", { type: "button", onclick: () => void openStudioPath(), text: "Open" }),
       compact ? null : h("button", { type: "button", onclick: () => void openStudioPopout(), disabled: !studio.project, text: "Pop out" }),
+      h("button", { type: "button", onclick: () => void minimizeStudioSurface(), text: "Minimize" }),
+      h("button", { type: "button", onclick: () => void closeStudioSurface(), text: compact ? "Close window" : "Close Studio" }),
       h("button", { class: "primary", type: "button", onclick: () => void saveStudioFile(), disabled: !studio.editor.dirty || studio.saving, text: studio.saving ? "Saving…" : "Save" }),
     ),
     studio.stale ? h("p", { class: "studio-error", role: "alert", text: studio.stale }) : null,
