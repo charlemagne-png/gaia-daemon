@@ -302,7 +302,15 @@ export interface AccountFieldDef {
  * `command`, feeds ANSI-stripped output through the extractors, forwards the
  * user's paste-back input, and stores the resulting credential bag — never
  * learning what any of it means (RULE #0). */
+export interface AccountLoginVariant {
+  key: string;
+  label: string;
+  initialInput?: string[];
+}
+
 export interface AccountLoginSpec {
+  /** Optional alternate terminal flows for the same harness. */
+  variants?: AccountLoginVariant[];
   /** The interactive command. ctx.configDir is a THROWAWAY isolated dir the
    * flow must be pointed at so it can never disturb the machine's ambient
    * login (e.g. claude's keychain session). */

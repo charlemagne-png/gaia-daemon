@@ -953,14 +953,17 @@ function piLoginAuthCredentials(configDir: string): Record<string, string> | und
     return undefined;
   }
   if (!auth || typeof auth !== "object") return undefined;
-  const record = (auth as Record<string, unknown>)["openai-codex"];
+  const all = auth as Record<string, unknown>;
+  const provider = typeof all["openai-codex"] === "object" ? "openai-codex" : typeof all.anthropic === "object" ? "anthropic" : undefined;
+  const record = provider ? all[provider] : undefined;
   if (!record || typeof record !== "object") return undefined;
   const credential = record as Record<string, unknown>;
   const accessToken = typeof credential.access === "string" ? credential.access : typeof credential.accessToken === "string" ? credential.accessToken : undefined;
   const refreshToken = typeof credential.refresh === "string" ? credential.refresh : typeof credential.refreshToken === "string" ? credential.refreshToken : undefined;
   const accountId = typeof credential.accountId === "string" ? credential.accountId : undefined;
+  const expires = typeof credential.expires === "number" ? String(credential.expires) : typeof credential.expires === "string" ? credential.expires : undefined;
   if (!accessToken || !refreshToken) return undefined;
-  return { accessToken, refreshToken, ...(accountId ? { accountId } : {}) };
+  return { accessToken, refreshToken, ...(accountId ? { accountId } : {}), ...(expires ? { expires } : {}) };
 }
 
 function piLoginUrl(output: string): string | undefined {
@@ -1066,7 +1069,7 @@ registerHarness({
   // by RunnerHost BEFORE the credential-proxy block — a proxied (sandboxed)
   // turn strips it with every other provider key.
   accounts: {
-    label: "Pi account (ChatGPT OAuth)",
+    label: "Pi account (terminal subscription login)",
     fields: [
       { key: "accessToken", label: "Access token", secret: true, hint: "~/.pi/agent/auth.json → openai-codex.access (or a codex account's tokens.access_token)" },
       { key: "refreshToken", label: "Refresh token", secret: true, hint: "~/.pi/agent/auth.json → openai-codex.refresh (codex: tokens.refresh_token)" },
@@ -1077,6 +1080,10 @@ registerHarness({
     login: {
       command: ({ configDir }) => ({ argv: ["pi", "--no-approve"], env: { PI_CODING_AGENT_DIR: configDir, PI_OFFLINE: "0" } }),
       initialInput: ["/login openai-codex"],
+      variants: [
+        { key: "openai-codex", label: "Add ChatGPT via Pi terminal", initialInput: ["/login openai-codex"] },
+        { key: "anthropic", label: "Add Claude via Pi terminal", initialInput: ["/login anthropic"] },
+      ],
       signInUrl: piLoginUrl,
       awaitingInput: () => false,
       credentials: ({ configDir }) => piLoginAuthCredentials(configDir),

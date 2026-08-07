@@ -63,11 +63,14 @@ const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 export class AccountLoginService {
   private readonly sessions = new Map<string, LoginSession>();
 
-  start(harnessId: string, label?: string): AccountLoginState {
+  start(harnessId: string, label?: string, variantKey?: string): AccountLoginState {
     const spec = harnessSpecFor(harnessId);
     if (!spec.accounts) throw new Error(`harness '${harnessId}' has no account support`);
-    const login = spec.accounts.login;
-    if (!login) throw new Error(`harness '${harnessId}' has no in-app login — add the account in accounts.json`);
+    const baseLogin = spec.accounts.login;
+    if (!baseLogin) throw new Error(`harness '${harnessId}' has no in-app login — add the account in accounts.json`);
+    const variant = variantKey ? baseLogin.variants?.find((item) => item.key === variantKey) : undefined;
+    if (variantKey && !variant) throw new Error(`unknown login option '${variantKey}' for harness '${harnessId}'`);
+    const login = variant ? { ...baseLogin, initialInput: variant.initialInput } : baseLogin;
 
     const sessionId = newId("login");
     const configDir = join(gaiaHome(), "logins", sessionId);

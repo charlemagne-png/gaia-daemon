@@ -20,7 +20,8 @@ import { state } from "./state.js";
 /** @typedef {(string|number)[]} JsonPath */
 /** @typedef {{ key: string, hint: FieldHint, path: JsonPath }} FieldEntry */
 /** @typedef {{ id: string, harness: string, label?: string, email?: string, workspace?: string, providers?: string[] }} Account */
-/** @typedef {{ id: string, label?: string, login: boolean }} AccountHarness */
+/** @typedef {{ key: string, label: string }} AccountLoginVariant */
+/** @typedef {{ id: string, label?: string, login: boolean, loginVariants?: AccountLoginVariant[] }} AccountHarness */
 /** @typedef {{ accounts: Account[], harnesses: AccountHarness[] }} AccountsCatalog */
 /** @typedef {{
  *   sessionId: string,
@@ -461,8 +462,8 @@ function applyLoginSession(session) {
   markDirty("settings");
 }
 
-/** @param {string} harnessId */
-async function startLogin(harnessId) {
+/** @param {string} harnessId @param {string | undefined} [variant] */
+async function startLogin(harnessId, variant) {
   if (loginSession) return; // only one active login session at a time
   accountsError = "";
   accountsNotice = "";
@@ -470,7 +471,7 @@ async function startLogin(harnessId) {
   try {
     const body = await api("/api/accounts/login", {
       method: "POST",
-      body: JSON.stringify({ harness: harnessId, ...(label ? { label } : {}) }),
+      body: JSON.stringify({ harness: harnessId, ...(label ? { label } : {}), ...(variant ? { variant } : {}) }),
     });
     applyLoginSession(body.session);
     if (isActiveLoginStatus(body.session.status)) startLoginPolling(body.session.sessionId);
@@ -619,11 +620,14 @@ function LoginControls(harness) {
       loginLabelDrafts[harness.id] = /** @type {HTMLInputElement} */ (event.target).value;
     },
   });
+  const buttons = harness.loginVariants?.length
+    ? harness.loginVariants.map((variant) => h("button", { disabled, onclick: () => void startLogin(harness.id, variant.key), text: variant.label }))
+    : [h("button", { disabled, onclick: () => void startLogin(harness.id), text: "Add account" })];
   return h(
     "div",
     { class: "settings2-field-control" },
     input,
-    h("button", { disabled, onclick: () => void startLogin(harness.id), text: "Add account" }),
+    ...buttons,
   );
 }
 
@@ -652,7 +656,7 @@ function LoginSessionPanel(session) {
         cancelButton,
       ),
       session.code ? h("div", { class: "settings2-row" }, h("span", { text: "Enter this code on the page: " }), h("code", { text: session.code })) : null,
-      h("small", { class: "muted", text: "a browser may also have opened on the machine running gaia — sign in there, then come back" }),
+      h("small", { class: "muted", text: "Pi is running the subscription login in a terminal session; use the shown link/code only if Pi asks for it." }),
     );
   }
   // "awaiting-code"

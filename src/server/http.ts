@@ -559,7 +559,7 @@ export class GaiaWebServer {
         accounts: redactedAccounts(),
         harnesses: harnessSpecs()
           .filter((s) => s.accounts)
-          .map((s) => ({ id: s.id, label: s.accounts?.label, login: Boolean(s.accounts?.login) })),
+          .map((s) => ({ id: s.id, label: s.accounts?.label, login: Boolean(s.accounts?.login), loginVariants: s.accounts?.login?.variants })),
       }));
     }
 
@@ -567,8 +567,9 @@ export class GaiaWebServer {
       const body = await parseBody(request);
       const harness = stringField(body, "harness");
       const label = stringField(body, "label");
+      const variant = stringField(body, "variant");
       return this.respond(response, async () => ({
-        session: this.daemon.accountLogins.start((harness ?? "").trim(), label?.trim() || undefined),
+        session: this.daemon.accountLogins.start((harness ?? "").trim(), label?.trim() || undefined, variant?.trim() || undefined),
       }));
     }
 
