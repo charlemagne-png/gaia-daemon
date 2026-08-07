@@ -497,7 +497,29 @@ export class GaiaWebServer {
     }
 
     const roomArtifactsMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts$/);
-    if (roomArtifactsMatch && method === "GET") return json(response, 200, { roomId: decodeURIComponent(roomArtifactsMatch[1] ?? ""), artifacts: [] });
+    if (roomArtifactsMatch && method === "GET") {
+      try {
+        return json(response, 200, { artifacts: await this.daemon.listRoomArtifacts(decodeURIComponent(roomArtifactsMatch[1] ?? "")) });
+      } catch (error) {
+        return json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const roomArtifactPayloadMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts\/([^/]+)\/payload$/);
+    if (roomArtifactPayloadMatch && method === "GET") {
+      try {
+        const artifact = await this.daemon.readRoomArtifact(decodeURIComponent(roomArtifactPayloadMatch[1] ?? ""), decodeURIComponent(roomArtifactPayloadMatch[2] ?? ""));
+        response.writeHead(200, {
+          "content-type": artifact.manifest.mediaType,
+          "content-length": artifact.manifest.bytes,
+          "cache-control": "no-store",
+          etag: `\"${artifact.manifest.sha256}\"`,
+        });
+        response.end(Buffer.from(artifact.payload));
+      } catch (error) {
+        json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
 
     if (path.startsWith("/api/studio/")) return this.handleStudio(request, response, url);
 
@@ -1342,8 +1364,6 @@ export class GaiaWebServer {
         response.end(asset.bytes);
         return;
       }
-      const artifactsMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts$/);
-      if (artifactsMatch && method === "GET") return json(response, 200, { roomId: decodeURIComponent(artifactsMatch[1] ?? ""), artifacts: [] });
       return json(response, 404, { error: "Not found" });
     } catch (error) {
       if (error instanceof StudioConflictError) return json(response, 409, { error: error.message, currentHead: error.currentHead });

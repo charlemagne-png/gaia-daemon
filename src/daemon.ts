@@ -56,6 +56,8 @@ import { SttCallBridge } from "./services/voice-stt-bridge.js";
 import { KeepAwakeManager, keepAwakeCapability, migrateLegacyLaunchdAgent, readKeepAwakeSetting, writeKeepAwakeSetting } from "./services/keep-awake.js";
 import { readUserNameSetting, writeUserNameSetting } from "./services/user-name.js";
 import { StudioService } from "./services/studio-service.js";
+import { listArtifacts, readArtifact, type ArtifactLocation } from "./services/artifacts.js";
+import type { ArtifactManifest, StoredArtifact } from "./domain/artifacts.js";
 
 // --- workspace registry (recent workspaces in ~/.gaia/app.json) ----------------
 // Registry entries are the WorkspaceRecord wire shape from core/types.ts.
@@ -304,6 +306,22 @@ export class Daemon {
    * subscribed, so without this a fresh tab shows no chip until the next poll). */
   currentUsage(): Extract<UiEvent, { type: "usage-limits" }>[] {
     return this.usageService.currentUsage();
+  }
+
+  async listRoomArtifacts(roomId: string): Promise<ArtifactManifest[]> {
+    return listArtifacts(await this.artifactLocation(roomId));
+  }
+
+  async readRoomArtifact(roomId: string, artifactId: string): Promise<StoredArtifact> {
+    return readArtifact(await this.artifactLocation(roomId), artifactId);
+  }
+
+  private async artifactLocation(roomId: string): Promise<ArtifactLocation> {
+    if (!isValidRoomId(roomId)) throw new Error("Invalid room id");
+    for (const workspace of await this.registry.list()) {
+      if (workspace.isInitialized && existsSync(workspacePaths.roomDir(workspace.path, roomId))) return { rootDir: workspace.path, roomId };
+    }
+    throw new Error(`Room not found: ${roomId}`);
   }
 
   /** Current cached usage keyed by account — the manual-refresh endpoint's

@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { WorkspaceRegistry } from "../src/daemon.js";
+import { workspacePaths } from "../src/core/paths.js";
 import { StudioConflictError, StudioService } from "../src/services/studio-service.js";
 import { GaiaWebServer } from "../src/server/http.js";
-import { initWorkspace } from "../src/domain/workspace.js";
+import { DEFAULT_ROOM, initWorkspace } from "../src/domain/workspace.js";
+import { createArtifact } from "../src/services/artifacts.js";
 import type { RoomService } from "../src/services/room-service.js";
 import type { UiEvent } from "../src/core/types.js";
 
@@ -83,8 +85,20 @@ test("studio HTTP routes delegate and return scoped responses", async () => {
     const listResponse = await fetch(`${running.url}api/studio/projects?workspaceId=${encodeURIComponent(record.id)}`);
     assert.equal(listResponse.status, 200);
     assert.deepEqual(await listResponse.json(), { projects: [] });
-    const artifactsResponse = await fetch(`${running.url}api/rooms/test-room/artifacts`);
+    const manifest = await createArtifact({ rootDir: root, roomId: DEFAULT_ROOM }, { name: "fixture", kind: "html", mediaType: "text/html; charset=utf-8", payload: "<h1>artifact</h1>" }, { id: () => "artifact_fixture", now: () => "2026-01-01T00:00:00.000Z" });
+    const artifactsResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts`);
     assert.equal(artifactsResponse.status, 200);
+    assert.deepEqual(await artifactsResponse.json(), { artifacts: [manifest] });
+    const payloadResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload`);
+    assert.equal(payloadResponse.status, 200);
+    assert.equal(payloadResponse.headers.get("content-type"), manifest.mediaType);
+    assert.equal(payloadResponse.headers.get("etag"), `"${manifest.sha256}"`);
+    assert.equal(await payloadResponse.text(), "<h1>artifact</h1>");
+    await writeFile(workspacePaths.roomArtifactPayload(root, DEFAULT_ROOM, manifest.artifactId), "corrupt");
+    const corruptResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload`);
+    assert.equal(corruptResponse.status, 404);
+    const missingResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/nope/payload`);
+    assert.equal(missingResponse.status, 404);
   } finally {
     await running.close();
     if (originalHome === undefined) delete process.env.GAIA_HOME;
