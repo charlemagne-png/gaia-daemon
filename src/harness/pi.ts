@@ -975,13 +975,19 @@ function shQuote(value: string): string {
 }
 
 function piTerminalLoginCommand(configDir: string, initialInput: string[] | undefined): { argv: string[]; env?: Record<string, string> } {
-  const loginLine = initialInput?.[0] ?? "/login openai-codex";
-  const terminalCommand = `export PI_CODING_AGENT_DIR=${shQuote(configDir)}; export PI_OFFLINE=0; pi --no-approve`;
+  const provider = initialInput?.[0]?.includes("anthropic") ? "anthropic" : "openai-codex";
+  const terminalCommand = [
+    `export PI_CODING_AGENT_DIR=${shQuote(configDir)}`,
+    `export PI_OFFLINE=0`,
+    `clear`,
+    `echo ${shQuote(`GAIA add-account login: type /login ${provider} in Pi, then complete the browser/subscription flow.`)}`,
+    `echo ${shQuote(`This window is isolated; existing Pi accounts are not touched.`)}`,
+    `echo`,
+    `pi --no-approve`,
+  ].join("; ");
   const script = [
     `osascript -e ${shQuote(`tell application "Terminal" to activate`)} -e ${shQuote(`tell application "Terminal" to do script ${JSON.stringify(terminalCommand)}`)}`,
-    `sleep 1`,
-    `osascript -e ${shQuote(`tell application "System Events" to keystroke ${JSON.stringify(loginLine)}`)} -e ${shQuote(`tell application "System Events" to key code 36`)}`,
-    `while ! grep -q ${shQuote(loginLine.includes("anthropic") ? "anthropic" : "openai-codex")} ${shQuote(join(configDir, "auth.json"))} 2>/dev/null; do sleep 1; done`,
+    `while ! grep -q ${shQuote(provider)} ${shQuote(join(configDir, "auth.json"))} 2>/dev/null; do sleep 1; done`,
   ].join("; ");
   return { argv: ["/bin/bash", "-lc", script], env: { PI_CODING_AGENT_DIR: configDir, PI_OFFLINE: "0" } };
 }
