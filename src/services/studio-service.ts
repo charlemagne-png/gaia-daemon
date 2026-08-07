@@ -102,7 +102,12 @@ export class StudioService {
         updatedAt: now,
         ...(input.artifact ? { artifact: input.artifact } : {}),
       };
-      await this.options.serviceFor(input.workspaceId, roomId);
+      try {
+        // Warm the room service; binding must not die on harness init (registry write is the durable contract).
+        await this.options.serviceFor(input.workspaceId, roomId);
+      } catch {
+        // Lazy warm-up: sendMessage() resolves the service when a prompt actually needs it.
+      }
       registry.projects[project.projectId] = project;
       registry.byPath[target] = project.projectId;
       registry.byRoom[roomId] = project.projectId;

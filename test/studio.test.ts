@@ -61,7 +61,7 @@ test("studio save rejects stale base and preserves version chain", async () => {
 });
 
 test("studio artifact payload binding is idempotent and save refreshes manifest", async () => {
-  const { root, registry, service } = await fixture();
+  const { root, registry, service, events } = await fixture();
   const workspaceId = (await registry.list())[0]!.id;
   const roomId = "artifact-room";
   await mkdir(join(root, ".gaia", "rooms", roomId), { recursive: true });
