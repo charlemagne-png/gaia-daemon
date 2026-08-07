@@ -2596,7 +2596,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 .design-name-input:focus { border-color: #F97316; outline: none; background: #FFFFFF; }
 
 /* Design Studio */
-.studio-slot { display: block; }
 .studio-panel {
   display: grid;
   gap: 12px;

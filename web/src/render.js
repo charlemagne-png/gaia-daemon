@@ -79,7 +79,6 @@ export function mountApp() {
           { class: "main-stack" },
           h("div", { class: "error", id: "error", hidden: true }),
           h("section", { class: "transcript", id: "transcript" }),
-          h("section", { class: "studio-slot", id: "studio-root" }),
         ),
         h("form", { class: "composer", id: "composer" }),
       ),
