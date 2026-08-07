@@ -307,6 +307,10 @@ export interface AccountLoginSpec {
    * flow must be pointed at so it can never disturb the machine's ambient
    * login (e.g. claude's keychain session). */
   command(ctx: { configDir: string }): { argv: string[]; env?: Record<string, string> };
+  /** Optional startup keystrokes for CLIs whose login lives behind an
+   * interactive slash command/menu. Sent to the pty after spawn, before user
+   * paste-back input is forwarded. */
+  initialInput?: string[];
   /** Extract the sign-in URL from the output so far, once present. */
   signInUrl(output: string): string | undefined;
   /** True while the flow is waiting for a paste-back code from the user. */

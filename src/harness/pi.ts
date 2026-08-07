@@ -945,6 +945,28 @@ async function probePiAccountUsage(credentials: Record<string, string>): Promise
 // (when present) so custom model definitions still resolve. Handles BOTH
 // OpenAI (accessToken/refreshToken/accountId) and Anthropic (access/refresh/expires)
 // credential structures — detected automatically from field presence.
+function piLoginAuthCredentials(configDir: string): Record<string, string> | undefined {
+  let auth: unknown;
+  try {
+    auth = JSON.parse(readFileSync(join(configDir, "auth.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!auth || typeof auth !== "object") return undefined;
+  const record = (auth as Record<string, unknown>)["openai-codex"];
+  if (!record || typeof record !== "object") return undefined;
+  const credential = record as Record<string, unknown>;
+  const accessToken = typeof credential.access === "string" ? credential.access : typeof credential.accessToken === "string" ? credential.accessToken : undefined;
+  const refreshToken = typeof credential.refresh === "string" ? credential.refresh : typeof credential.refreshToken === "string" ? credential.refreshToken : undefined;
+  const accountId = typeof credential.accountId === "string" ? credential.accountId : undefined;
+  if (!accessToken || !refreshToken) return undefined;
+  return { accessToken, refreshToken, ...(accountId ? { accountId } : {}) };
+}
+
+function piLoginUrl(output: string): string | undefined {
+  return output.match(/https?:\/\/[^\s)]+/)?.[0];
+}
+
 function materializePiAgentDir(credentials: Record<string, string>): string {
   // Detect provider from credential structure:
   // OpenAI: accountId present (or JWT-structured access token)
@@ -1022,7 +1044,7 @@ function materializePiAgentDir(credentials: Record<string, string>): string {
   const currentExpiry = isOpenAI ? expiryMsFromJwt(materialized?.access) : (materialized?.expires ?? 0);
   const newExpiry = isOpenAI ? entry.expires : Number(entry.expires);
   
-  if (!materialized?.refresh || newExpiry > currentExpiry) {
+  if (!materialized?.refresh || materialized.refresh !== entry.refresh || newExpiry > currentExpiry) {
     writeFileSync(authPath, JSON.stringify({ [provider]: entry }, null, 2) + "\n", { mode: 0o600 });
   }
   return dir;
@@ -1052,6 +1074,13 @@ registerHarness({
     ],
     env: (credentials) => ({ PI_CODING_AGENT_DIR: materializePiAgentDir(credentials) }),
     email: (credentials) => emailFromJwt(credentials.accessToken),
+    login: {
+      command: ({ configDir }) => ({ argv: ["pi", "--no-approve"], env: { PI_CODING_AGENT_DIR: configDir, PI_OFFLINE: "0" } }),
+      initialInput: ["/login openai-codex"],
+      signInUrl: piLoginUrl,
+      awaitingInput: () => false,
+      credentials: ({ configDir }) => piLoginAuthCredentials(configDir),
+    },
   },
   // Pi's proxy wiring (the in-process fetch redirect lives in applyCredentialProxy):
   // relocate its agent dir to an empty store so AuthStorage resolves no real key

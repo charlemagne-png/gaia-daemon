@@ -82,9 +82,11 @@ export class AccountLoginService {
     // virtually every Linux, tolerates piped stdio, and the fileevent line
     // below forwards our piped stdin into the pty so the pasted code reaches
     // the CLI. Tcl braces pass each argv element verbatim (no substitution).
+    const initialInput = login.initialInput?.map((line) => `after 1000; send -- {${line.replaceAll("}", "\\}")}}; send -- "\\r"`) ?? [];
     const expectScript = [
       "set timeout -1",
       `spawn -noecho ${cmd.argv.map((arg) => `{${arg}}`).join(" ")}`,
+      ...initialInput,
       "fileevent stdin readable {",
       '  if {[gets stdin line] >= 0} { send -- "$line\\r" } else { fileevent stdin readable {} }',
       "}",

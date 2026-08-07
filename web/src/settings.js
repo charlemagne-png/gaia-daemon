@@ -623,7 +623,7 @@ function LoginControls(harness) {
     "div",
     { class: "settings2-field-control" },
     input,
-    h("button", { disabled, onclick: () => void startLogin(harness.id), text: "Log in" }),
+    h("button", { disabled, onclick: () => void startLogin(harness.id), text: "Add account" }),
   );
 }
 
@@ -808,8 +808,8 @@ function AccountsSection() {
                   markDirty("settings");
                   try {
                     const result = await api("/api/accounts/login", { method: "POST", body: JSON.stringify({ harness: harnessId }) });
-                    loginSession = result.session;
-                    markDirty("settings");
+                    applyLoginSession(result.session);
+                    if (isActiveLoginStatus(result.session.status)) startLoginPolling(result.session.sessionId);
                   } catch (err) {
                     accountsError = err instanceof Error ? err.message : String(err);
                     accountsNotice = "";
