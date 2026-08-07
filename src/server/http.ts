@@ -41,6 +41,7 @@ import {
 import type { ReadAloudDelivery } from "../services/read-aloud.js";
 import { completionChunk, completionDone, completionPayload, isStreamingRequest, modelListPayload, newCompletionId } from "../services/voice.js";
 import { checkCredential, importCredential, normalizeWorkspaceId, readKeymakerState, setRoomWorkspaceBinding } from "../services/keymaker.js";
+import { StudioConflictError, StudioNotFoundError } from "../services/studio-service.js";
 
 export interface WebServerOptions {
   cwd: string;
@@ -494,6 +495,8 @@ export class GaiaWebServer {
       json(response, 200, { accounts: this.daemon.usageSnapshot() });
       return;
     }
+
+    if (path.startsWith("/api/studio/")) return this.handleStudio(request, response, url);
 
     if (method === "GET" && path === "/api/events") {
       const client: SseClient = {
@@ -1289,6 +1292,62 @@ export class GaiaWebServer {
       json(response, 200, await run());
     } catch (error) {
       json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private async handleStudio(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const method = request.method ?? "GET";
+    const path = url.pathname;
+    try {
+      if (method === "POST" && path === "/api/studio/projects/open") {
+        const body = await parseBody(request);
+        const workspaceId = stringField(body, "workspaceId");
+        const target = stringField(body, "path");
+        if (!workspaceId || !target) return json(response, 400, { error: "Missing workspaceId/path" });
+        const result = await this.daemon.studio.open({ workspaceId, path: target });
+        return json(response, result.created ? 201 : 200, result);
+      }
+      if (method === "GET" && path === "/api/studio/projects") {
+        const workspaceId = url.searchParams.get("workspaceId") ?? "";
+        return json(response, 200, await this.daemon.studio.list(workspaceId));
+      }
+      const projectMatch = path.match(/^\/api\/studio\/projects\/([^/]+)$/);
+      if (projectMatch && method === "GET") return json(response, 200, await this.daemon.studio.get(decodeURIComponent(projectMatch[1] ?? "")));
+      if (projectMatch && method === "PATCH") {
+        const body = await parseBody(request);
+        const entryViews = Array.isArray((body as { entryViews?: unknown }).entryViews) ? (body as { entryViews: { id: string; path: string; title: string }[] }).entryViews : undefined;
+        return json(response, 200, await this.daemon.studio.patch(decodeURIComponent(projectMatch[1] ?? ""), { defaultViewId: stringField(body, "defaultViewId"), entryViews }));
+      }
+      const fileMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/files$/);
+      if (fileMatch && method === "GET") return json(response, 200, await this.daemon.studio.readFile(decodeURIComponent(fileMatch[1] ?? ""), url.searchParams.get("path") ?? ""));
+      const saveMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/save$/);
+      if (saveMatch && method === "PUT") return json(response, 200, await this.daemon.studio.save(decodeURIComponent(saveMatch[1] ?? ""), await parseBody(request) as { baseVersionId?: string | null; files: { path: string; content: string; encoding?: string }[]; note?: string }));
+      const versionsMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/versions$/);
+      if (versionsMatch && method === "GET") return json(response, 200, await this.daemon.studio.versions(decodeURIComponent(versionsMatch[1] ?? ""), Number(url.searchParams.get("limit") ?? "50")));
+      const iterateMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/iterate$/);
+      if (iterateMatch && method === "POST") return json(response, 202, await this.daemon.studio.iterate(decodeURIComponent(iterateMatch[1] ?? ""), await parseBody(request) as { text?: string; viewId?: string; baseVersionId?: string | null }));
+      const previewMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/preview\/([^/]+)$/);
+      if (previewMatch && method === "GET") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; frame-src 'self'; style-src 'unsafe-inline'" });
+        response.end(await this.daemon.studio.preview(decodeURIComponent(previewMatch[1] ?? ""), decodeURIComponent(previewMatch[2] ?? "")));
+        return;
+      }
+      const assetMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/assets\/(.+)$/);
+      if (assetMatch && method === "GET") {
+        const asset = await this.daemon.studio.asset(decodeURIComponent(assetMatch[1] ?? ""), decodeURIComponent(assetMatch[2] ?? ""));
+        response.writeHead(200, { "content-type": asset.mediaType, "cache-control": "no-store", etag: `\"${asset.etag}\"`, "content-security-policy": "default-src 'self' data: blob:; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; frame-ancestors 'self'" });
+        response.end(asset.bytes);
+        return;
+      }
+      const artifactsMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts$/);
+      if (artifactsMatch && method === "GET") return json(response, 200, { roomId: decodeURIComponent(artifactsMatch[1] ?? ""), artifacts: [] });
+      return json(response, 404, { error: "Not found" });
+    } catch (error) {
+      if (error instanceof StudioConflictError) return json(response, 409, { error: error.message, currentHead: error.currentHead });
+      if (error instanceof StudioNotFoundError) return json(response, 404, { error: error.message });
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message.includes("Unsupported") ? 415 : message.includes("too large") ? 413 : 400;
+      return json(response, status, { error: message });
     }
   }
 

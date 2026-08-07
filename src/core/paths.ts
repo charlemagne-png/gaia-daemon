@@ -104,6 +104,14 @@ export const workspacePaths = {
     join(rootDir, ".gaia", "rooms", roomId, "artifacts", artifactId, "manifest.json"),
   roomArtifactPayload: (rootDir: string, roomId: string, artifactId: string) =>
     join(rootDir, ".gaia", "rooms", roomId, "artifacts", artifactId, "payload"),
+  studioRegistry: (rootDir: string) => join(rootDir, ".gaia", "design-studio.json"),
+  studioProjectDir: (rootDir: string, roomId: string, projectId: string) => join(rootDir, ".gaia", "rooms", roomId, "studio", projectId),
+  studioHead: (rootDir: string, roomId: string, projectId: string) => join(rootDir, ".gaia", "rooms", roomId, "studio", projectId, "head.json"),
+  studioBlobsDir: (rootDir: string, roomId: string, projectId: string) => join(rootDir, ".gaia", "rooms", roomId, "studio", projectId, "blobs"),
+  studioBlob: (rootDir: string, roomId: string, projectId: string, sha256: string) => join(rootDir, ".gaia", "rooms", roomId, "studio", projectId, "blobs", sha256),
+  studioVersionsDir: (rootDir: string, roomId: string, projectId: string) => join(rootDir, ".gaia", "rooms", roomId, "studio", projectId, "versions"),
+  studioVersion: (rootDir: string, roomId: string, projectId: string, versionId: string) => join(rootDir, ".gaia", "rooms", roomId, "studio", projectId, "versions", `${versionId}.json`),
+  studioScreenshotsDir: (rootDir: string, roomId: string, projectId: string) => join(rootDir, ".gaia", "rooms", roomId, "studio", projectId, "screenshots"),
   piSessionsDir: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "pi-sessions"),
   /** Rewound-away transcript lines (edit/retry fork), append-only beside the transcript. */
   roomRewound: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "rewound.jsonl"),

@@ -1207,6 +1207,10 @@ export type UiEvent =
   | ({ type: "steered"; steerEventId: string } & StreamScope)
   | { type: "settings-saved"; workspaceId?: string; roomId?: string; fileId: string }
   | { type: "canvas-command"; command: string; params: unknown }
+  | { type: "studio-project"; workspaceId: string; roomId: string; project: unknown }
+  | { type: "studio-files-changed"; workspaceId: string; roomId: string; projectId: string; paths: string[]; source: "human" | "agent" | "external"; observedAt: string }
+  | { type: "studio-version-saved"; workspaceId: string; roomId: string; projectId: string; version: unknown }
+  | { type: "studio-iteration"; workspaceId: string; roomId: string; projectId: string; taskId: string; status: "queued" | "running" | "complete" | "error" }
   | { type: "voice-status"; workspaceId: string; roomId: string; voice: VoiceCallInfo | null; pending?: { agentId: string; message: string } }
   // Workspace-TAGGED, globally DELIVERED (NO roomId): the room list of the named
   // workspace changed — a room started or finished a turn, or its activity

@@ -55,6 +55,7 @@ import { TtsCallBridge } from "./services/voice-tts-bridge.js";
 import { SttCallBridge } from "./services/voice-stt-bridge.js";
 import { KeepAwakeManager, keepAwakeCapability, migrateLegacyLaunchdAgent, readKeepAwakeSetting, writeKeepAwakeSetting } from "./services/keep-awake.js";
 import { readUserNameSetting, writeUserNameSetting } from "./services/user-name.js";
+import { StudioService } from "./services/studio-service.js";
 
 // --- workspace registry (recent workspaces in ~/.gaia/app.json) ----------------
 // Registry entries are the WorkspaceRecord wire shape from core/types.ts.
@@ -176,6 +177,12 @@ export class Daemon {
   /** Subscription-usage meter (account-keyed, disk-cached, self-polling) —
    * see services/usage-service.ts. The daemon only wires broadcast + lifecycle. */
   private readonly usageService = new UsageService({ broadcast: (event) => this.broadcast(event) });
+  readonly studio = new StudioService({
+    registry: this.registry,
+    serviceFor: (workspaceId, roomId) => this.serviceFor(workspaceId, roomId),
+    broadcast: (event) => this.broadcast(event),
+    baseUrl: () => this.baseUrl,
+  });
   readonly accountLogins = new AccountLoginService();
   private hintSourcesCache: { toolNames: string[]; models: ModelChoice[] } | undefined;
   private bridge: HarnessBridge | undefined;
@@ -196,6 +203,7 @@ export class Daemon {
   // be alive: the two would race the same transcript/runner slot. Defaults to
   // an already-resolved promise so tests/callers that skip boot() aren't stuck.
   private orphanSweepDone: Promise<void> = Promise.resolve();
+  private baseUrl = "";
 
   constructor(private readonly options: DaemonOptions) {
     ensureAccountsFile(); // seed ~/.gaia/accounts.json so it lists as an editable settings file
@@ -215,6 +223,7 @@ export class Daemon {
     // turn (scheduler tick, summon recovery, serviceFor from HTTP). Otherwise a
     // surviving runner from the previous daemon and the freshly resumed runner
     // can execute the same turn in parallel.
+    this.baseUrl = baseUrl;
     this.orphanSweepDone = reapOrphans({ log: (message) => this.log(message) }).then(() => {});
     await this.orphanSweepDone;
     this.bridge = new HarnessBridge(baseUrl);
