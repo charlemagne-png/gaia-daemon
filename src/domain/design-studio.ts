@@ -70,7 +70,7 @@ export function sha256(data: Uint8Array | string): string {
 
 export function pathInside(child: string, root: string): boolean {
   const rel = relative(resolve(root), resolve(child));
-  return rel === "" || (!!rel && !rel.startsWith("..") && !rel.startsWith(`..${sep}`) && !resolve(rel).startsWith(resolve(child)));
+  return rel === "" || (!!rel && !rel.startsWith("..") && !rel.startsWith(`..${sep}`) && !resolve(rel).startsWith("/.."));
 }
 
 export function relativePathUnder(root: string, target: string): string {

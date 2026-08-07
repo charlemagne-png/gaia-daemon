@@ -496,6 +496,9 @@ export class GaiaWebServer {
       return;
     }
 
+    const roomArtifactsMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts$/);
+    if (roomArtifactsMatch && method === "GET") return json(response, 200, { roomId: decodeURIComponent(roomArtifactsMatch[1] ?? ""), artifacts: [] });
+
     if (path.startsWith("/api/studio/")) return this.handleStudio(request, response, url);
 
     if (method === "GET" && path === "/api/events") {

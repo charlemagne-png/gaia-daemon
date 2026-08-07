@@ -282,7 +282,7 @@ export class StudioService {
   private async workspace(workspaceId: string): Promise<{ id: string; path: string }> {
     const workspace = await this.options.registry.find(workspaceId);
     if (!workspace) throw new StudioNotFoundError("Unknown workspace");
-    return { id: workspace.id, path: workspace.path };
+    return { id: workspace.id, path: await realpath(workspace.path) };
   }
 
   private registryPath(workspacePath: string): string { return join(workspacePath, ".gaia", "design-studio.json"); }
