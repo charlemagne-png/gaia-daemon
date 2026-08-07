@@ -689,25 +689,39 @@ mod webkit {
                             let w = win.clone();
                             let _ = handle.run_on_main_thread(move || {
                                 let _ = w.eval("window.location.reload()");
-                                if let Ok(s) = w.inner_size() {
-                                    let _ = w.set_size(tauri::PhysicalSize::new(
-                                        s.width + 1,
-                                        s.height,
-                                    ));
-                                }
                             });
-                            // Separate main-loop tick so the compositor registers
-                            // the size change, then restore — this is the nudge.
-                            std::thread::sleep(std::time::Duration::from_millis(140));
-                            let w = win.clone();
-                            let _ = handle.run_on_main_thread(move || {
-                                if let Ok(s) = w.inner_size() {
-                                    let _ = w.set_size(tauri::PhysicalSize::new(
-                                        s.width.saturating_sub(1),
-                                        s.height,
-                                    ));
-                                }
-                            });
+                            // The page takes seconds to boot; a SINGLE early
+                            // nudge re-composites a still-blank surface and the
+                            // window freezes on that frame indefinitely
+                            // (observed live 2026-08-07). Nudge repeatedly
+                            // across the boot window instead — each grow/shrink
+                            // pair is a real NSWindow resize, the only event
+                            // that reliably forces WKWebView to re-present.
+                            // Harmless no-op flicker on an already-healthy view.
+                            for delay_ms in [900u64, 2000, 3000, 4000] {
+                                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                                let w = win.clone();
+                                let _ = handle.run_on_main_thread(move || {
+                                    if let Ok(s) = w.inner_size() {
+                                        let _ = w.set_size(tauri::PhysicalSize::new(
+                                            s.width + 1,
+                                            s.height,
+                                        ));
+                                    }
+                                });
+                                // Separate main-loop tick so the compositor
+                                // registers the size change, then restore.
+                                std::thread::sleep(std::time::Duration::from_millis(140));
+                                let w = win.clone();
+                                let _ = handle.run_on_main_thread(move || {
+                                    if let Ok(s) = w.inner_size() {
+                                        let _ = w.set_size(tauri::PhysicalSize::new(
+                                            s.width.saturating_sub(1),
+                                            s.height,
+                                        ));
+                                    }
+                                });
+                            }
                         }
                     });
                 }
