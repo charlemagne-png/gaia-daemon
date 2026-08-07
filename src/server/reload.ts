@@ -257,6 +257,11 @@ async function rebuildDaemon(plan: ReloadPlan, reloadLog: number): Promise<boole
     // running fine until it re-execs below. The from-source (tsx) dev
     // flow is untouched: only web/setups swap, exactly as before.
     const names = plan.fromSource ? ["web", "setups"] : ["web", "setups", "gaia-daemon", "gaia-source.json"];
+    // plan.out may not exist yet: a from-source checkout that has never run
+    // `bun run build` has no dist/ — rename(2) needs the destination's parent
+    // dir, so the swap ENOENT'd and killed the whole reload (observed live
+    // 2026-08-07, daemon running from a fresh worktree). Create it first.
+    await mkdir(plan.out, { recursive: true });
     for (const name of names) {
       const src = join(stagingDir, name);
       const dst = join(plan.out, name);
