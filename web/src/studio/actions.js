@@ -123,10 +123,13 @@ export async function sendStudioPrompt() {
   }
 }
 
-export async function openStudioPopout() {
+/** @param {{ id?: string, projectId?: string }} [artifact] */
+export async function openStudioPopout(artifact) {
   if (!studio.project) return;
-  const url = `/studio?project=${encodeURIComponent(studio.project.projectId)}&view=${encodeURIComponent(studio.selectedViewId)}&mode=popout`;
-  const opened = await openWindow({ mode: "studio", projectId: studio.project.projectId, viewId: studio.selectedViewId });
+  const artifactId = artifact?.id ?? "";
+  const projectId = artifact?.projectId ?? studio.project.projectId;
+  const url = `/studio?project=${encodeURIComponent(projectId)}&view=${encodeURIComponent(studio.selectedViewId)}&mode=popout${artifactId ? `&artifact=${encodeURIComponent(artifactId)}` : ""}`;
+  const opened = await openWindow({ mode: "studio", projectId, viewId: studio.selectedViewId, artifactId });
   if (!opened) window.open(url, "_blank", "noopener");
 }
 
