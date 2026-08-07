@@ -6,9 +6,9 @@
 import { $, h } from "./dom.js";
 import { state } from "./state.js";
 
-/** @typedef {"layout"|"tabs"|"sidebar"|"panel"|"plugins"|"status"|"transcript"|"composer"|"artifacts"|"dario"|"contextgate"|"theme"|"usage"|"search"|"bgtasks"|"settings"|"keymaker"} Region */
+/** @typedef {"layout"|"tabs"|"sidebar"|"panel"|"plugins"|"status"|"transcript"|"composer"|"studio"|"artifacts"|"dario"|"contextgate"|"theme"|"usage"|"search"|"bgtasks"|"settings"|"keymaker"} Region */
 
-const ORDER = /** @type {Region[]} */ (["layout", "tabs", "sidebar", "panel", "plugins", "status", "transcript", "composer", "artifacts", "dario", "contextgate", "theme", "usage", "search", "bgtasks", "settings", "keymaker"]);
+const ORDER = /** @type {Region[]} */ (["layout", "tabs", "sidebar", "panel", "plugins", "status", "transcript", "composer", "studio", "artifacts", "dario", "contextgate", "theme", "usage", "search", "bgtasks", "settings", "keymaker"]);
 
 /** @type {Map<Region, () => void>} */
 const renderers = new Map();
@@ -79,6 +79,7 @@ export function mountApp() {
           { class: "main-stack" },
           h("div", { class: "error", id: "error", hidden: true }),
           h("section", { class: "transcript", id: "transcript" }),
+          h("section", { class: "studio-slot", id: "studio-root" }),
         ),
         h("form", { class: "composer", id: "composer" }),
       ),

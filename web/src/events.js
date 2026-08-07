@@ -12,6 +12,8 @@ import { state, syncReadMarks } from "./state.js";
 import { isStallNotice, syncOlderFromSnapshot } from "./transcript.js";
 import { applyVoiceStatus, voiceTurnCommitted } from "./voice.js";
 import { canvas } from "./canvas.js";
+import { loadStudioProject, refreshStudioPreview } from "./studio/actions.js";
+import { applyStudioProject, studio } from "./studio/state.js";
 
 /** @typedef {import("./types.js").UiEvent} UiEvent */
 /** @typedef {import("./types.js").StreamEntry} StreamEntry */
@@ -100,6 +102,35 @@ export function connectEvents(resyncOnReady = false) {
 
   // Named server keepalive: EventSource does not expose comment-only pings.
   listen("ping", () => {});
+
+  listen("studio-project", (event) => {
+    const payload = JSON.parse(event.data);
+    if (!studio.project || payload.project?.projectId !== studio.project.projectId) return;
+    applyStudioProject({ project: payload.project });
+    markDirty("studio");
+  });
+
+  listen("studio-files-changed", (event) => {
+    const payload = JSON.parse(event.data);
+    if (!studio.project || payload.projectId !== studio.project.projectId) return;
+    refreshStudioPreview();
+    void loadStudioProject(studio.project.projectId);
+  });
+
+  listen("studio-version-saved", (event) => {
+    const payload = JSON.parse(event.data);
+    if (!studio.project || payload.projectId !== studio.project.projectId) return;
+    studio.version = payload.version ?? studio.version;
+    studio.project.headVersionId = payload.version?.versionId ?? studio.project.headVersionId;
+    refreshStudioPreview();
+  });
+
+  listen("studio-iteration", (event) => {
+    const payload = JSON.parse(event.data);
+    if (!studio.project || payload.projectId !== studio.project.projectId) return;
+    studio.iterationStatus = String(payload.status ?? "idle");
+    markDirty("studio");
+  });
 
   listen("snapshot", (event) => {
     const payload = /** @type {Ev<"snapshot">} */ (JSON.parse(event.data));

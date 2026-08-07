@@ -9,6 +9,8 @@ import { installKeybindings } from "./keys.js";
 import { installOpenModifierTracking } from "./links.js";
 import { launchIntent, onNativeEvent } from "./native.js";
 import { markDirty, mountApp } from "./render.js";
+import { loadStudioProject } from "./studio/actions.js";
+import { studio } from "./studio/state.js";
 import { recallLocation, state } from "./state.js";
 import { clockText, initStatusbarPref } from "./statusbar.js";
 import { initTheme } from "./themes.js";
@@ -26,6 +28,7 @@ import "./keymaker.js";
 import "./sidebar.js";
 import "./tabsbar.js";
 import "./transcript.js";
+import "./studio/panel.js";
 import { initCanvas } from "./canvas.js";
 
 // Restore the theme, status-bar visibility, and pane widths before the first
@@ -67,6 +70,15 @@ void boot();
 
 
 async function boot() {
+  const route = studioRoute();
+  if (route) {
+    studio.popout = true;
+    studio.selectedViewId = route.viewId;
+    document.body.classList.add("studio-route");
+    markDirty("studio");
+    await loadStudioProject(route.projectId);
+    return;
+  }
   const last = launchIntent().mode === "torn" ? null : recallLocation();
   // The daemon RE-EXECS on /rebuild (Cmd-R): for ~1-2s the webview may reload
   // while port 8787 refuses connections. Retry across that window instead of
@@ -86,6 +98,14 @@ async function boot() {
     markDirty("layout", "tabs");
   }
   await applyLaunchIntent();
+}
+
+function studioRoute() {
+  if (window.location.pathname !== "/studio") return null;
+  const params = new URLSearchParams(window.location.search);
+  const projectId = params.get("project");
+  if (!projectId) return null;
+  return { projectId, viewId: params.get("view") ?? "" };
 }
 
 /**

@@ -82,10 +82,10 @@ export async function invoke(cmd, args) {
 
 /**
  * Open a native GAIA window pointed at the same daemon UI.
- * @param {{ mode: "new"|"torn", room?: string|null, x?: number|null, y?: number|null }} opts
+ * @param {{ mode: "new"|"torn"|"studio", room?: string|null, x?: number|null, y?: number|null, projectId?: string|null, viewId?: string|null }} opts
  */
-export async function openWindow({ mode, room = null, x = null, y = null }) {
-  return invoke("open_window", { mode, room, x, y });
+export async function openWindow({ mode, room = null, x = null, y = null, projectId = null, viewId = null }) {
+  return invoke("open_window", { mode, room, x, y, projectId, viewId });
 }
 
 /** Merge this (torn) window's chat back into the main window; the shell then
