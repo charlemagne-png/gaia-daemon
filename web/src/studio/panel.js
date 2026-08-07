@@ -82,7 +82,7 @@ function renderWorkspace() {
 function renderPreview() {
   const src = studioPreviewUrl();
   if (!src) return h("div", { class: "studio-preview-empty", text: "No preview selected" });
-  return h("iframe", { class: "studio-preview", title: "Studio preview", src, sandbox: "allow-scripts allow-forms allow-modals allow-pointer-lock", referrerpolicy: "no-referrer" });
+  return h("iframe", { class: "studio-preview", title: "Studio preview", src, sandbox: "allow-scripts allow-forms allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", tabindex: "0" });
 }
 
 function renderPrompt() {

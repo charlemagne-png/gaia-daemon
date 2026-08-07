@@ -1749,6 +1749,14 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* ============================================================
    artifacts: room-local side drawer + simple design canvas
    ============================================================ */
+#overlay-artifacts {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  pointer-events: none;
+  min-height: 0;
+}
+#overlay-artifacts > * { pointer-events: auto; }
 .artifact-panel {
   position: fixed;
   z-index: 35;
@@ -1756,34 +1764,34 @@ body.resizing { cursor: col-resize; user-select: none; }
   right: 18px;
   bottom: 42px;
   width: min(580px, calc(100vw - 36px));
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--accent);
   background: var(--bg2);
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.58), 0 0 24px var(--glow);
 }
-.artifact-panel.maximized { inset: 0; width: auto; z-index: 70; }
-.artifact-panel.minimized { top: auto; bottom: 42px; height: auto; min-height: 0; grid-template-rows: auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
+.artifact-panel.maximized { inset: 0; width: auto; z-index: 70; max-height: 100vh; }
+.artifact-panel.minimized { top: auto; bottom: 42px; height: auto; min-height: 0; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; overflow: visible; }
 .artifact-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border-bottom: 1px solid var(--border); }
 .artifact-panel-head strong { color: var(--accent); letter-spacing: 1px; }
 .artifact-panel-head small { display: block; margin-top: 2px; }
 .artifact-close { flex: none; width: 28px; height: 28px; padding: 0; color: var(--muted); background: transparent; box-shadow: none; }
 .artifact-close:hover { color: var(--danger); border-color: var(--danger); }
-.artifact-list { display: flex; gap: 5px; overflow-x: auto; padding: 8px 10px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg3) 68%, transparent); }
+.artifact-list { flex: none; display: flex; gap: 5px; overflow-x: auto; padding: 8px 10px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg3) 68%, transparent); }
 .artifact-tab { flex: 0 0 auto; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 8px; color: var(--muted); background: var(--ink); }
 .artifact-tab.active { color: var(--accent); border-color: var(--accent); }
 .artifact-list .empty { padding: 2px 0; white-space: nowrap; }
-.artifact-view { min-height: 0; overflow: auto; padding: 12px; background: var(--bg); }
+.artifact-view { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px; background: var(--bg); display: flex; flex-direction: column; }
 .artifact-empty { display: grid; height: 100%; place-items: center; color: var(--muted); }
-.artifact-html { display: block; width: 100%; height: 100%; min-height: 360px; border: 1px solid var(--border); background: white; color: black; overflow: auto; }
-.artifact-panel.maximized .artifact-html { min-height: calc(100vh - 190px); }
-.artifact-studio, .artifact-studio-start { min-height: 0; height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 10px; }
-.artifact-studio { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.artifact-html { display: block; flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; border: 1px solid var(--border); background: white; color: black; overflow: auto; }
+.artifact-panel.maximized .artifact-html { min-height: 0; }
+.artifact-studio, .artifact-studio-start { flex: 1 1 auto; min-height: 0; height: 100%; display: flex; flex-direction: column; gap: 10px; }
+.artifact-studio { min-height: 0; }
 .artifact-studio.minimized { height: auto; display: flex; align-items: center; justify-content: space-between; }
 .artifact-json { min-height: 100%; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); background: var(--ink); color: var(--fg); line-height: 1.45; }
-.artifact-prompt { display: flex; gap: 7px; padding: 10px; border-top: 1px solid var(--border); background: var(--bg2); }
+.artifact-prompt { flex: none; display: flex; gap: 7px; padding: 10px; border-top: 1px solid var(--border); background: var(--bg2); }
 .artifact-prompt-input { min-width: 0; }
 .artifact-prompt-send { flex: none; color: var(--accent); }
 .artifact-canvas-wrap { min-width: 100%; overflow: auto; border: 1px solid var(--border); background: color-mix(in srgb, var(--ink) 72%, var(--bg)); }
@@ -2658,15 +2666,17 @@ body.resizing { cursor: col-resize; user-select: none; }
 .studio-panel button:focus-visible, .studio-popout button:focus-visible, .studio-panel textarea:focus-visible, .studio-prompt input:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
 .studio-tabs { overflow-x: auto; padding-bottom: 2px; }
 .studio-tabs button.active { border-color: #f97316; box-shadow: inset 0 -2px 0 #f97316; }
-.studio-workspace { display: grid; grid-template-columns: minmax(280px, 1.2fr) minmax(260px, .8fr); gap: 12px; min-height: 520px; min-height: 0; overflow: auto; }
+.studio-workspace { flex: 1 1 auto; display: grid; grid-template-columns: minmax(280px, 1.2fr) minmax(260px, .8fr); gap: 12px; min-height: 0; overflow: auto; }
 .studio-preview-card, .studio-editor {
   min-width: 0;
+  min-height: 0;
   border: 1px solid var(--border, #d8dee9);
   border-radius: 14px;
-  overflow: hidden;
+  overflow: auto;
   background: var(--panel, #fff);
 }
-.studio-preview, .studio-preview-empty { width: 100%; height: 100%; min-height: 520px; border: 0; background: #fff; overflow: auto; }
+.studio-preview-card { display: flex; flex-direction: column; }
+.studio-preview, .studio-preview-empty { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; border: 0; background: #fff; overflow: auto; }
 .studio-preview-empty { display: grid; place-items: center; color: var(--muted, #6b7280); }
 .studio-editor { display: grid; grid-template-rows: auto 1fr; }
 .studio-editor-bar { justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--border, #d8dee9); color: var(--muted, #6b7280); font-size: 12px; }
