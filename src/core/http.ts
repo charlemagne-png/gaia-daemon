@@ -5,8 +5,8 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-/** Largest request body we buffer before rejecting (1 MiB). */
-const MAX_BODY_BYTES = 1024 * 1024;
+/** Largest JSON request body we buffer before rejecting (8 MiB). */
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 /** Write `value` as a JSON response with the given status. */
 export function json(response: ServerResponse, status: number, value: unknown): void {
@@ -22,7 +22,7 @@ export function text(response: ServerResponse, status: number, body: string): vo
 
 /**
  * Buffer and JSON-parse a request body. An empty body resolves to `{}`; a body
- * over the 1 MiB cap rejects (and destroys the request); malformed JSON rejects.
+ * over the 8 MiB cap rejects (and destroys the request); malformed JSON rejects.
  */
 export function parseBody(request: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {

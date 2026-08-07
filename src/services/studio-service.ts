@@ -7,7 +7,7 @@ import { readJson, writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "..
 import type { Task, UiEvent } from "../core/types.js";
 import type { WorkspaceRegistry } from "../daemon.js";
 import type { RoomService } from "./room-service.js";
-import { updateArtifact } from "./artifacts.js";
+import { readArtifact, updateArtifact } from "./artifacts.js";
 import {
   discoverEntryViews,
   emptyStudioRegistry,
@@ -185,6 +185,10 @@ export class StudioService {
     await this.writeRegistry(workspacePath, registry);
     this.options.broadcast({ type: "studio-files-changed", workspaceId: project.workspaceId, roomId: project.roomId, projectId, paths: changedPaths, source: "human", observedAt: new Date().toISOString() } as UiEvent);
     this.options.broadcast({ type: "studio-version-saved", workspaceId: project.workspaceId, roomId: project.roomId, projectId, version } as UiEvent);
+    if (project.artifact) {
+      const refreshed = await readArtifact({ rootDir: workspacePath, roomId: project.artifact.roomId }, project.artifact.artifactId);
+      this.options.broadcast({ type: "artifact-updated", workspaceId: project.workspaceId, roomId: project.artifact.roomId, artifactId: project.artifact.artifactId, projectId, version, manifest: refreshed.manifest } as UiEvent);
+    }
     return { project, version, changedPaths };
   }
 
@@ -212,6 +216,22 @@ export class StudioService {
     const task = await service.sendMessage(preamble, { recordUserMessage: true });
     this.options.broadcast({ type: "studio-iteration", workspaceId: project.workspaceId, roomId: project.roomId, projectId, taskId: task.id, status: "queued" } as UiEvent);
     return { task, roomId: project.roomId, projectId };
+  }
+
+  async artifactVersionPayload(roomId: string, artifactId: string, versionId: string): Promise<{ bytes: Uint8Array; mediaType: string; etag: string }> {
+    for (const workspace of await this.options.registry.list()) {
+      const registry = await this.readRegistry(workspace.path);
+      const project = Object.values(registry.projects).find((candidate) => candidate.artifact?.roomId === roomId && candidate.artifact.artifactId === artifactId);
+      if (!project) continue;
+      const versionRaw = await readJson(join(this.versionsDir(workspace.path, project), `${validateRelativePath(versionId)}.json`));
+      if (!versionRaw || typeof versionRaw !== "object") throw new StudioNotFoundError("Studio version not found");
+      const version = versionRaw as StudioVersion;
+      const filePath = project.entryViews[0]?.path ?? basename(project.designPath);
+      const file = version.files[filePath] ?? version.files[basename(project.designPath)];
+      if (!file) throw new StudioNotFoundError("Artifact payload not found in Studio version");
+      return { bytes: await readFile(join(this.blobsDir(workspace.path, project), file.sha256)), mediaType: file.mediaType, etag: file.sha256 };
+    }
+    throw new StudioNotFoundError("Artifact Studio project not found");
   }
 
   async preview(projectId: string, viewId: string): Promise<string> {

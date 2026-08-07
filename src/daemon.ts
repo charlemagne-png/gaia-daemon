@@ -316,6 +316,13 @@ export class Daemon {
     return readArtifact(await this.artifactLocation(roomId), artifactId);
   }
 
+  async readRoomArtifactPayload(roomId: string, artifactId: string, versionId?: string): Promise<{ bytes: Uint8Array; mediaType: string; etag: string }> {
+    const workspace = await this.artifactWorkspace(roomId);
+    if (versionId) return this.studio.artifactVersionPayload(roomId, artifactId, versionId);
+    const artifact = await readArtifact({ rootDir: workspace.path, roomId }, artifactId);
+    return { bytes: artifact.payload, mediaType: artifact.manifest.mediaType, etag: artifact.manifest.sha256 };
+  }
+
   async openArtifactInStudio(roomId: string, artifactId: string): Promise<{ project: unknown }> {
     const workspace = await this.artifactWorkspace(roomId);
     const artifact = await readArtifact({ rootDir: workspace.path, roomId }, artifactId);

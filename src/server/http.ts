@@ -515,14 +515,17 @@ export class GaiaWebServer {
     const roomArtifactPayloadMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts\/([^/]+)\/payload$/);
     if (roomArtifactPayloadMatch && method === "GET") {
       try {
-        const artifact = await this.daemon.readRoomArtifact(decodeURIComponent(roomArtifactPayloadMatch[1] ?? ""), decodeURIComponent(roomArtifactPayloadMatch[2] ?? ""));
+        const artifact = await this.daemon.readRoomArtifactPayload(decodeURIComponent(roomArtifactPayloadMatch[1] ?? ""), decodeURIComponent(roomArtifactPayloadMatch[2] ?? ""), url.searchParams.get("version") ?? undefined);
+        const mediaType = artifact.mediaType.startsWith("text/html") && !artifact.mediaType.toLowerCase().includes("charset=") ? "text/html; charset=utf-8" : artifact.mediaType;
         response.writeHead(200, {
-          "content-type": artifact.manifest.mediaType,
-          "content-length": artifact.manifest.bytes,
+          "content-type": mediaType,
+          "content-length": artifact.bytes.byteLength,
           "cache-control": "no-store",
-          etag: `\"${artifact.manifest.sha256}\"`,
+          etag: `\"${artifact.etag}\"`,
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'self' data: blob:; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; frame-ancestors 'self'",
         });
-        response.end(Buffer.from(artifact.payload));
+        response.end(Buffer.from(artifact.bytes));
       } catch (error) {
         json(response, 404, { error: error instanceof Error ? error.message : String(error) });
       }

@@ -78,6 +78,9 @@ test("studio artifact payload binding is idempotent and save refreshes manifest"
   const refreshed = await readArtifact({ rootDir: root, roomId }, manifest.artifactId);
   assert.equal(Buffer.from(refreshed.payload).toString("utf8"), "<h1>new</h1>");
   assert.notEqual(refreshed.manifest.sha256, manifest.sha256);
+  const artifactEvent = events.find((event) => event.type === "artifact-updated");
+  assert.equal(artifactEvent?.roomId, roomId);
+  assert.equal(artifactEvent?.artifactId, manifest.artifactId);
   const reopened = await service.open({ workspaceId, path: payload, roomId, artifact: { roomId, artifactId: manifest.artifactId }, entryView: { id: "payload", path: "payload", title: manifest.name } });
   assert.equal(reopened.project.projectId, opened.project.projectId);
   assert.equal(reopened.project.roomId, roomId);
@@ -115,8 +118,45 @@ test("studio HTTP routes delegate and return scoped responses", async () => {
     const payloadResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload`);
     assert.equal(payloadResponse.status, 200);
     assert.equal(payloadResponse.headers.get("content-type"), manifest.mediaType);
+    assert.equal(payloadResponse.headers.get("content-disposition"), null);
+    assert.match(payloadResponse.headers.get("content-security-policy") ?? "", /script-src .*'unsafe-inline'/);
     assert.equal(payloadResponse.headers.get("etag"), `"${manifest.sha256}"`);
     assert.equal(await payloadResponse.text(), "<h1>artifact</h1>");
+    const openedResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/studio`, { method: "POST" });
+    assert.equal(openedResponse.status, 200);
+    const openedBody = await openedResponse.json() as { project: { projectId: string; headVersionId: string } };
+    const eventAbort = new AbortController();
+    const eventsResponse = await fetch(`${running.url}api/events?workspaceId=${encodeURIComponent(record.id)}&roomId=${DEFAULT_ROOM}`, { signal: eventAbort.signal });
+    const reader = eventsResponse.body!.getReader();
+    let sse = "";
+    const largePayload = `<!doctype html><script>globalThis.saved = true;</script><main>${"x".repeat(Math.ceil(2.6 * 1024 * 1024))}</main>`;
+    const saveResponse = await fetch(`${running.url}api/studio/projects/${openedBody.project.projectId}/save`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseVersionId: openedBody.project.headVersionId, files: [{ path: "payload", content: largePayload }], note: "large save" }),
+    });
+    assert.equal(saveResponse.status, 200);
+    const saveBody = await saveResponse.json() as { version: { versionId: string; parentVersionId: string } };
+    assert.equal(saveBody.version.parentVersionId, openedBody.project.headVersionId);
+    for (let i = 0; i < 20 && !sse.includes("event: artifact-updated"); i += 1) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => setTimeout(() => resolve({ done: true, value: undefined }), 50)),
+      ]);
+      if (chunk.done) continue;
+      sse += Buffer.from(chunk.value).toString("utf8");
+    }
+    eventAbort.abort();
+    assert.match(sse, /event: artifact-updated/);
+    const savedPayloadResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload`);
+    assert.equal(savedPayloadResponse.status, 200);
+    assert.equal((await savedPayloadResponse.text()).length, largePayload.length);
+    const initialVersionResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?version=${encodeURIComponent(openedBody.project.headVersionId)}`);
+    assert.equal(initialVersionResponse.status, 200);
+    assert.equal(await initialVersionResponse.text(), "<h1>artifact</h1>");
+    const savedVersionResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?version=${encodeURIComponent(saveBody.version.versionId)}`);
+    assert.equal(savedVersionResponse.status, 200);
+    assert.equal((await savedVersionResponse.text()).length, largePayload.length);
     await writeFile(workspacePaths.roomArtifactPayload(root, DEFAULT_ROOM, manifest.artifactId), "corrupt");
     const corruptResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload`);
     assert.equal(corruptResponse.status, 404);
