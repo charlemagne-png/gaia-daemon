@@ -149,6 +149,12 @@ export async function minimizeStudioSurface() {
   markDirty("studio", "artifacts");
 }
 
+export function toggleStudioMaximized() {
+  studio.maximized = !studio.maximized;
+  studio.minimized = false;
+  markDirty("studio", "artifacts");
+}
+
 export function restoreStudioSurface() {
   studio.minimized = false;
   markDirty("studio", "artifacts");

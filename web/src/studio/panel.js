@@ -1,6 +1,6 @@
 import { $, h } from "../dom.js";
 import { registerRegion } from "../render.js";
-import { closeStudioSurface, minimizeStudioSurface, openStudioPath, openStudioPopout, restoreStudioSurface, saveStudioFile, selectStudioView, sendStudioPrompt, updateStudioDraft, updateStudioPrompt } from "./actions.js";
+import { closeStudioSurface, minimizeStudioSurface, openStudioPath, openStudioPopout, restoreStudioSurface, saveStudioFile, selectStudioView, sendStudioPrompt, toggleStudioMaximized, updateStudioDraft, updateStudioPrompt } from "./actions.js";
 import { selectedStudioView, studio, studioPreviewUrl } from "./state.js";
 
 registerRegion("studio", renderStudioPanel);
@@ -29,12 +29,12 @@ function renderPanel() {
     );
   }
   if (studio.minimized) return renderMinimized(false);
-  return h("section", { class: "studio-panel", "aria-label": "Design Studio" }, renderHeader(false), renderTabs(), renderWorkspace(), renderPrompt());
+  return h("section", { class: `studio-panel ${studio.maximized ? "maximized" : ""}`, "aria-label": "Design Studio" }, renderHeader(false), renderTabs(), renderWorkspace(), renderPrompt());
 }
 
 function renderPopout() {
   if (studio.minimized) return renderMinimized(true);
-  return h("main", { class: "studio-popout", "aria-label": "Design Studio popout" }, renderHeader(true), h("div", { class: "studio-popout-preview" }, renderPreview()), renderPrompt());
+  return h("main", { class: `studio-popout ${studio.maximized ? "maximized" : ""}`, "aria-label": "Design Studio popout" }, renderHeader(true), renderTabs(), renderWorkspace(), renderPrompt());
 }
 
 /** @param {boolean} compact */
@@ -56,6 +56,7 @@ function renderHeader(compact) {
     h("div", { class: "studio-actions" },
       compact ? null : h("button", { type: "button", onclick: () => void openStudioPath(), text: "Open" }),
       compact ? null : h("button", { type: "button", onclick: () => void openStudioPopout(), disabled: !studio.project, text: "Pop out" }),
+      h("button", { type: "button", onclick: () => toggleStudioMaximized(), text: studio.maximized ? "Restore size" : "Maximize" }),
       h("button", { type: "button", onclick: () => void minimizeStudioSurface(), text: "Minimize" }),
       h("button", { type: "button", onclick: () => void closeStudioSurface(), text: compact ? "Close window" : "Close Studio" }),
       h("button", { class: "primary", type: "button", onclick: () => void saveStudioFile(), disabled: !studio.editor.dirty || studio.saving, text: studio.saving ? "Saving…" : "Save" }),

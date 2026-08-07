@@ -5,7 +5,7 @@
  * @typedef {{project:StudioProject,effectiveDesignPath?:string,version?:StudioVersion,headVersion?:StudioVersion,currentHashes?:Record<string,string>,views?:StudioView[],previewUrl?:string,eventsUrl?:string,activeIteration?:{status:string,taskId?:string,error?:string}}} StudioProjectResponse
  */
 
-/** @type {{project:StudioProject|null, effectiveDesignPath:string, version:StudioVersion|null, views:StudioView[], selectedViewId:string, previewNonce:number, loading:boolean, saving:boolean, iterating:boolean, error:string, stale:string, editor:{path:string,content:string,baseVersionId:string,sha256:string,dirty:boolean,loaded:boolean}, prompt:string, iterationStatus:string, popout:boolean, minimized:boolean}} */
+/** @type {{project:StudioProject|null, effectiveDesignPath:string, version:StudioVersion|null, views:StudioView[], selectedViewId:string, previewNonce:number, loading:boolean, saving:boolean, iterating:boolean, error:string, stale:string, editor:{path:string,content:string,baseVersionId:string,sha256:string,dirty:boolean,loaded:boolean}, prompt:string, iterationStatus:string, popout:boolean, minimized:boolean, maximized:boolean}} */
 export const studio = {
   project: null,
   effectiveDesignPath: "",
@@ -23,6 +23,7 @@ export const studio = {
   iterationStatus: "idle",
   popout: false,
   minimized: false,
+  maximized: false,
 };
 
 /** @param {StudioProjectResponse} body */
@@ -52,6 +53,7 @@ export function closeStudioState() {
   studio.prompt = "";
   studio.iterationStatus = "idle";
   studio.minimized = false;
+  studio.maximized = false;
 }
 
 export function selectedStudioView() {
