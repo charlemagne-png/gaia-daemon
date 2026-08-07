@@ -80,7 +80,16 @@ export function connectEvents(resyncOnReady = false) {
         // NSWindow blank/frozen. The Rust side watches the daemon pidfile and
         // drives a reload + 1px repaint nudge once the fresh daemon answers
         // (src-tauri/src/lib.rs), which reconnects AND re-composites.
-        if (!(/** @type {any} */ (window).__TAURI_INTERNALS__)) window.location.reload();
+        if (/** @type {any} */ (window).__TAURI_INTERNALS__) {
+          // Shell owns the fast reload + repaint nudge — but it keys off the
+          // pidfile and can miss (foreign pidfile writes, watcher races,
+          // 2026-08-07 "stuck mid-boot"). Fallback: a shell reload destroys
+          // this document — and this timer — so if it fires, the shell never
+          // came; reload ourselves. A late double reload is harmless.
+          setTimeout(() => window.location.reload(), 4000);
+        } else {
+          window.location.reload();
+        }
         return;
       }
       knownBootId = bootId;

@@ -86,15 +86,22 @@ function sleep(ms: number): Promise<void> {
  * this file rather than trusting the pid of whatever it originally spawned,
  * because /reload re-execs the daemon into a NEW process that rewrites this
  * same file on its own boot (see writePidfile/removePidfile below). */
-function pidfilePath(): string {
-  return join(gaiaHome(), "daemon.pid");
+function pidfilePath(port?: number): string {
+  // Port-scoped: only the daemon on the DEFAULT app port owns `daemon.pid`
+  // (the file the Tauri shell watches/kills). A daemon on any other port
+  // (GAIA_PORT diag instance, second checkout) writes `daemon-<port>.pid` —
+  // it must NEVER stomp the app's pidfile (observed 2026-08-07: a second
+  // instance on :8797 rewrote daemon.pid → shell fired spurious mid-boot
+  // reloads + the real daemon's orphan-retire saw a foreign pid and exited).
+  if (port === undefined || port === DEFAULTS.port) return join(gaiaHome(), "daemon.pid");
+  return join(gaiaHome(), `daemon-${port}.pid`);
 }
 
 /** A daemon spawned by the Tauri shell with GAIA_PARENT_PID must never outlive
  * that shell: poll every 2s and exit as soon as the parent is gone (a signal-0
  * kill throws once the pid no longer exists). No-op when the env var is
  * absent or not a positive integer — e.g. a daemon started standalone. */
-function installParentWatchdog(): void {
+function installParentWatchdog(pidfile: string, isServing: () => boolean): void {
   const parentPid = Number.parseInt(process.env.GAIA_PARENT_PID ?? "", 10);
   if (!Number.isInteger(parentPid) || parentPid <= 0) return;
   // Flips from "is my parent alive?" to "am I still the app's daemon?" once we
@@ -108,8 +115,14 @@ function installParentWatchdog(): void {
       // Detached survivor: exit as soon as another daemon owns the app. Every
       // daemon rewrites the pidfile on boot (writePidfile), so a value that is
       // not our pid means a fresh daemon took over :8787.
+      // While we still HOLD the listen socket no other daemon can serve the
+      // app port — a foreign pid in the pidfile then means someone ELSE
+      // (second instance, manual write) stomped the file, not a takeover.
+      // Exiting on that killed the live daemon (2026-08-07). Only retire
+      // once we no longer serve AND another pid claims the file.
+      if (isServing()) return;
       try {
-        const owner = Number.parseInt(readFileSync(pidfilePath(), "utf8").trim(), 10);
+        const owner = Number.parseInt(readFileSync(pidfile, "utf8").trim(), 10);
         if (Number.isInteger(owner) && owner !== process.pid) {
           console.error(`[daemon] superseded by daemon pid ${owner} — exiting orphaned re-exec'd daemon (pid ${process.pid})`);
           process.exit(0);
@@ -293,6 +306,7 @@ export class GaiaWebServer {
   private readonly daemon: Daemon;
   private readonly clients = new Set<SseClient>();
   private boundUrl = "";
+  private boundPort: number | undefined;
   private server: HttpServer | undefined;
   private reloadStarted = false;
 
@@ -318,11 +332,11 @@ export class GaiaWebServer {
     const host = this.options.host ?? gaiaHost();
     const port = this.options.port ?? gaiaPort();
     await this.listenWithRetry(server, port, host);
-    await this.writePidfile();
-    installParentWatchdog();
-
     const address = server.address();
     const boundPort = address && typeof address === "object" ? address.port : port;
+    this.boundPort = boundPort;
+    await this.writePidfile();
+    installParentWatchdog(pidfilePath(boundPort), () => this.server === server && server.listening);
     this.boundUrl = `http://${host}:${boundPort}`;
     // Boot provenance: pid + ppid + timestamp on every start, so reload.log
     // (and any log this lands in) can attribute each daemon generation — a
@@ -387,7 +401,7 @@ export class GaiaWebServer {
   private async writePidfile(): Promise<void> {
     try {
       await mkdir(gaiaHome(), { recursive: true });
-      await writeFile(pidfilePath(), `${process.pid}\n`, "utf8");
+      await writeFile(pidfilePath(this.boundPort), `${process.pid}\n`, "utf8");
     } catch (error) {
       console.error(`gaia: failed to write pidfile: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -399,7 +413,7 @@ export class GaiaWebServer {
    * a brief window with no pidfile, never a stale one pointing at a dead pid. */
   private async removePidfile(): Promise<void> {
     try {
-      await unlink(pidfilePath());
+      await unlink(pidfilePath(this.boundPort));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         console.error(`gaia: failed to remove pidfile: ${error instanceof Error ? error.message : String(error)}`);
