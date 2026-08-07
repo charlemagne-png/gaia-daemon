@@ -14,7 +14,8 @@ import { DEFAULTS } from "./core/config.js";
 import { globalPaths, workspacePaths } from "./core/paths.js";
 import { readJson, writeJsonAtomic } from "./core/store.js";
 import type { AgentDef, ChatSearchHit, ChatSearchResult, KeepAwakeCapability, PetBinding, RoomState, Snapshot, UiEvent, UsageLimits, VoiceCallInfo, Workspace, WorkspaceRecord } from "./core/types.js";
-import { capabilitiesFor, type GaiaTool, harnessIdFor } from "./harness/spec.js";
+import { capabilitiesFor, type GaiaTool, harnessIdFor, harnessSpecFor } from "./harness/spec.js";
+import { findAccount } from "./domain/accounts.js";
 import { findModelWithAlias } from "./harness/model-aliases.js";
 import { reapOrphans } from "./harness/reaper.js";
 import type { MemoryAction, MemoryMutationResult } from "./domain/memory.js";
@@ -1443,29 +1444,82 @@ export class Daemon {
 /** Builds the completion function consolidation uses. Resolved lazily per call
  * so key/model changes apply without a daemon restart; no key → the call
  * throws and consolidation skips with the error as its reason. */
+// Loaded once: the ambient pi extensions' `before_provider_request` handlers
+// (chiefly pi-claude-code-identity, which relocates the system preamble so a
+// Claude Pro/Max OAuth request bills to the PLAN instead of tripping the
+// third-party-usage classifier). Consolidation runs the SAME handlers a real
+// agent turn runs, so an oauth subscription authenticates AND bills correctly.
+// Provider-agnostic (RULE #0): each handler no-ops for non-oauth/non-anthropic
+// payloads, so this is one uniform mechanism, never a harness/provider branch.
+let beforeRequestHandlers: Promise<Array<(payload: unknown) => Promise<unknown>>> | undefined;
+async function providerRequestRewriters(): Promise<Array<(payload: unknown) => Promise<unknown>>> {
+  beforeRequestHandlers ??= (async () => {
+    const { discoverAndLoadExtensions, getAgentDir } = await import("@earendil-works/pi-coding-agent");
+    const { extensions } = await discoverAndLoadExtensions([], process.cwd(), getAgentDir());
+    const raw = extensions.flatMap((ext) => ext.handlers.get("before_provider_request") ?? []);
+    // The identity handler is a pure `(event) => rewritten | undefined` payload
+    // transform that never touches ctx; pass a bare event and no ctx.
+    return raw.map((h) => (payload: unknown) => Promise.resolve(h({ type: "before_provider_request", payload }, undefined)));
+  })();
+  return beforeRequestHandlers;
+}
+
+/** The live, rotating auth.json a bound account materializes — the SAME store
+ * the agent's turns authenticate against. Consolidation points its ModelRuntime
+ * here instead of the ambient ~/.pi/agent login, which expires independently
+ * and silently kills consolidation for every agent (observed 2026-08-06: ambient
+ * anthropic OAuth dead since 08-05 11:00 while per-account logins stayed live).
+ * Harness-agnostic (RULE #0): reads whatever cred-store dir the owning spec's
+ * accounts.env descriptor materializes; undefined → fall back to ambient. */
+function accountAuthPath(accountId: string | undefined): string | undefined {
+  if (!accountId) return undefined;
+  const record = findAccount(accountId);
+  if (!record) return undefined;
+  const env = harnessSpecFor(record.harness).accounts?.env(record.credentials);
+  const dir = env?.PI_CODING_AGENT_DIR;
+  return dir ? join(dir, "auth.json") : undefined;
+}
+
 function consolidateLlm(): ConsolidateLlm {
-  return async ({ system, user, model, authPath }) => {
+  return async ({ system, user, model, account }) => {
     const provider = model?.provider ?? DEFAULTS.model.provider;
     const name = model?.name ?? DEFAULTS.model.name;
     const { ModelRegistry, ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-    // Per-agent auth: build the runtime from the agent's bound-account auth
-    // store so it authenticates as THAT subscription (OAuth refreshed), exactly
-    // like a normal turn. Absent authPath (ambient agent) => daemon's default
-    // login. Consolidation is a per-agent/subscription thing, never per-model.
+    // Authenticate against the consolidating agent's OWN account credential
+    // store (live/rotating) rather than the ambient login (which can expire
+    // independently and take every agent's consolidation down with it).
+    const authPath = accountAuthPath(account);
     const runtime = await ModelRuntime.create(authPath ? { authPath } : undefined);
     // Alias fallback (RULE #0): short tier names (fable/opus/sonnet/haiku) in an
-    // agent's config resolve here too — this direct pi-ai path bypasses the
-    // harness CLI, so an un-aliased `find` was silently killing consolidation
-    // for any agent configured with a short name (e.g. anthropic/fable).
+    // agent's config resolve here too — this path bypasses the harness CLI, so
+    // an un-aliased `find` was silently killing consolidation for any agent
+    // configured with a short name (e.g. anthropic/fable).
     const resolved = findModelWithAlias(new ModelRegistry(runtime), provider, name);
     if (!resolved) throw new Error(`consolidation model not found: ${provider}/${name}`);
-    // Complete THROUGH the runtime so it resolves oauth (bearer + beta header)
-    // or api-key internally. Hand-feeding getAuth().apiKey would ship an oauth
-    // access token as x-api-key and the API would reject it.
-    const message = await runtime.completeSimple(
+    // Complete THROUGH the runtime so it authenticates with the agent's stored
+    // pi subscription login exactly like a normal turn — the runtime resolves
+    // oauth (bearer) or api-key internally. The old path pulled getAuth().apiKey
+    // and hand-fed it to a standalone completeSimple; an oauth subscription has
+    // NO apiKey, so that key was always undefined and consolidation died with
+    // "no api key for anthropic". Consolidation is an agent/subscription thing,
+    // never a raw-API-key thing. onPayload runs the ambient identity extension
+    // so the OAuth plan-billing rewrite applies here too (else a large system
+    // prompt 400s as third-party usage).
+    const rewriters = await providerRequestRewriters();
+    const message = await runtime.complete(
       resolved,
       { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
-      { maxTokens: 4_000 },
+      {
+        maxTokens: 4_000,
+        onPayload: async (payload) => {
+          let current = payload;
+          for (const rewrite of rewriters) {
+            const next = await rewrite(current);
+            if (next !== undefined) current = next;
+          }
+          return current;
+        },
+      },
     );
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       throw new Error(message.errorMessage ?? "consolidation model call failed");

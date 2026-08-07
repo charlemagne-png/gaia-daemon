@@ -613,6 +613,17 @@ export interface AgentDef {
    * SHARED recall index or its PII surface — a ghoul room's incognito bit
    * (domain/workspace-index.ts roomIsIncognito) is untouched by this. */
   insight?: InsightLevel;
+  /** Opt-in (default false, unset = today's behavior — zero change). When true,
+   * THIS agent — running as a summoned WORKER in its own incognito sub-room —
+   * records ONE distilled episode of its own lane (task + reply heads + outcome)
+   * into its OWN episodic memory at lane close, via the same mechanical
+   * memory.capture path a normal turn uses. So a worker compounds lessons from
+   * its summon work instead of forgetting every lane. Does NOT touch the room's
+   * incognito bit: the raw transcript still never enters the shared recall index
+   * (workspace-index roomIsIncognito) — only the distilled episode head is
+   * learned, consolidated into facts/lessons like any other. Worker-side
+   * counterpart to caller-side `insight`. */
+  selfEpisode?: boolean;
   /** Per-agent memory overrides applied over the workspace MemoryConfig. */
   memory?: MemoryConfigPatch;
   /** Per-agent MCP servers, merged over the workspace set (agent wins). */

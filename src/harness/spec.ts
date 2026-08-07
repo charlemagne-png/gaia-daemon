@@ -302,11 +302,27 @@ export interface AccountFieldDef {
  * `command`, feeds ANSI-stripped output through the extractors, forwards the
  * user's paste-back input, and stores the resulting credential bag — never
  * learning what any of it means (RULE #0). */
+export interface AccountLoginVariant {
+  key: string;
+  label: string;
+  initialInput?: string[];
+  /** Provider ids this login option authorizes, stored on the account record. */
+  providers?: string[];
+}
+
 export interface AccountLoginSpec {
+  /** Provider ids this login authorizes when no variant overrides them. */
+  providers?: string[];
+  /** Optional alternate terminal flows for the same harness. */
+  variants?: AccountLoginVariant[];
   /** The interactive command. ctx.configDir is a THROWAWAY isolated dir the
    * flow must be pointed at so it can never disturb the machine's ambient
    * login (e.g. claude's keychain session). */
-  command(ctx: { configDir: string }): { argv: string[]; env?: Record<string, string> };
+  command(ctx: { configDir: string; initialInput?: string[] }): { argv: string[]; env?: Record<string, string> };
+  /** Optional startup keystrokes for CLIs whose login lives behind an
+   * interactive slash command/menu. Sent to the pty after spawn, before user
+   * paste-back input is forwarded. */
+  initialInput?: string[];
   /** Extract the sign-in URL from the output so far, once present. */
   signInUrl(output: string): string | undefined;
   /** True while the flow is waiting for a paste-back code from the user. */

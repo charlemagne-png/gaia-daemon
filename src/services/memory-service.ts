@@ -34,7 +34,6 @@ import {
 } from "../domain/workspace-index.js";
 import type { MemoryStore } from "../domain/memory.js";
 import { findHarness } from "../harness/spec.js";
-import { listAccounts } from "../domain/accounts.js";
 import type { ApplyDreamProposalResult, ConsolidateLlm, ConsolidateResult } from "./consolidate.js";
 import { MAX_EPISODES_PER_RUN, applyDreamProposal, runConsolidation } from "./consolidate.js";
 import type { EmbedderDeps, ResolvedEmbedder, ResolvedReranker } from "./embeddings.js";
@@ -655,21 +654,6 @@ export class MemoryService {
    * claude's "fable"/"opus"/"sonnet"/"haiku") that pi-ai's registry doesn't
    * know. Resolve it through the agent's OWN harness spec uniformly (data on
    * the spec, never an id-branch here) before handing it to the LLM caller. */
-  /** Per-agent consolidation credential (not per-model): the on-disk auth.json
-   * of the agent's bound account, resolved uniformly through the harness spec
-   * (RULE #0 — shared layer reads DATA on the spec, never a harness id). The
-   * in-process consolidation LLM builds its runtime from this so it
-   * authenticates as that agent's own subscription (OAuth auto-refreshed)
-   * instead of the daemon's ambient login. No account / no accessor ⇒ undefined
-   * ⇒ ambient auth store. */
-  private accountAuthPath(agent: AgentDef): string | undefined {
-    if (!agent.account) return undefined;
-    const record = listAccounts().find((a) => a.id === agent.account);
-    if (!record) return undefined;
-    const harnessId = agent.harness ?? DEFAULTS.harness;
-    return findHarness(harnessId)?.accounts?.authStoragePath?.(record.credentials);
-  }
-
   private apiModelFor(agent: AgentDef): { provider?: string; name?: string } | undefined {
     if (!agent.model) return undefined;
     const harnessId = agent.harness ?? DEFAULTS.harness;
@@ -700,7 +684,7 @@ export class MemoryService {
         memoryStore: this.options.memoryStore,
         llm: this.options.llm,
         model: config.consolidate.model ?? this.apiModelFor(agent),
-        authPath: this.accountAuthPath(agent),
+        account: agent.account,
         maxPerDay: config.consolidate.maxPerDay,
         sharedFactsDir: sharedMemorySource(this.options.workspaceRoot).memoryDir,
         force: options.force,

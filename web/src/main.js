@@ -68,7 +68,14 @@ void boot();
 
 async function boot() {
   const last = launchIntent().mode === "torn" ? null : recallLocation();
-  await loadApp(last?.workspaceId);
+  // The daemon RE-EXECS on /rebuild (Cmd-R): for ~1-2s the webview may reload
+  // while port 8787 refuses connections. Retry across that window instead of
+  // parking on a blank error screen (the "rebuild breaks gaia" dead-end) —
+  // once the fresh daemon answers, boot proceeds normally.
+  for (let attempt = 0; !(await loadApp(last?.workspaceId)); attempt++) {
+    if (attempt >= 60) break; // ~30s ceiling, then leave the error banner visible
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
   if (last && state.snapshot && state.snapshot.room.id !== last.roomId && state.snapshot.rooms.some((room) => room.id === last.roomId)) {
     await selectRoom(state.snapshot.workspace.id, last.roomId);
   }

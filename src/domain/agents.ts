@@ -41,6 +41,7 @@ interface RawAgentConfig {
   trust?: unknown;
   allowNestedSummon?: unknown;
   insight?: unknown;
+  selfEpisode?: unknown;
   memory?: unknown;
   mcpServers?: unknown;
   env?: unknown;
@@ -414,6 +415,7 @@ export async function loadAgentDefinitions(globalAgentsDir: string, projectAgent
       trust: raw.trust === false ? false : undefined,
       allowNestedSummon: raw.allowNestedSummon === true,
       insight: raw.insight === "line" || raw.insight === "full" ? raw.insight : undefined,
+      selfEpisode: raw.selfEpisode === true ? true : undefined,
       permissionMode: normalizePermissionMode(raw.permissionMode),
       account: typeof raw.account === "string" && raw.account.trim() ? raw.account.trim() : undefined,
       memory: parseMemoryPatch(raw.memory),

@@ -910,17 +910,18 @@ async function probePiAccountUsage(credentials: Record<string, string>): Promise
   const provider = isOpenAI ? "openai-codex" : "anthropic";
   
   // Probe through the account's MATERIALIZED agent dir — the same auth.json
-  // agent runs use. AuthStorage.getApiKey auto-refreshes an expired OAuth
+  // agent runs use. ModelRuntime.getAuth auto-refreshes an expired OAuth
   // token (with file locking) and writes the rotated pair back into that dir,
   // so an expired accounts.json token no longer freezes the meter: the stored
   // refresh token mints a fresh access token whenever a probe finds a stale one.
   let cred: { type?: string; accountId?: unknown } | undefined;
   let token: string | undefined;
   try {
-    const storage = AuthStorage.create(join(materializePiAgentDir(credentials), "auth.json"));
-    cred = storage.get(provider) as typeof cred;
+    const authPath = join(materializePiAgentDir(credentials), "auth.json");
+    cred = readStoredCredential(provider, authPath) as typeof cred;
     if (!cred || cred.type !== "oauth") return { status: "none" };
-    token = await storage.getApiKey(provider);
+    const runtime = await ModelRuntime.create({ authPath });
+    token = (await runtime.getAuth(provider))?.auth.apiKey;
   } catch {
     return { status: "error" }; // store unreadable / refresh raced — transient, keep last-known.
   }
@@ -944,6 +945,55 @@ async function probePiAccountUsage(credentials: Record<string, string>): Promise
 // (when present) so custom model definitions still resolve. Handles BOTH
 // OpenAI (accessToken/refreshToken/accountId) and Anthropic (access/refresh/expires)
 // credential structures — detected automatically from field presence.
+function piLoginAuthCredentials(configDir: string): Record<string, string> | undefined {
+  let auth: unknown;
+  try {
+    auth = JSON.parse(readFileSync(join(configDir, "auth.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!auth || typeof auth !== "object") return undefined;
+  const all = auth as Record<string, unknown>;
+  const provider = typeof all["openai-codex"] === "object" ? "openai-codex" : typeof all.anthropic === "object" ? "anthropic" : undefined;
+  const record = provider ? all[provider] : undefined;
+  if (!record || typeof record !== "object") return undefined;
+  const credential = record as Record<string, unknown>;
+  const accessToken = typeof credential.access === "string" ? credential.access : typeof credential.accessToken === "string" ? credential.accessToken : undefined;
+  const refreshToken = typeof credential.refresh === "string" ? credential.refresh : typeof credential.refreshToken === "string" ? credential.refreshToken : undefined;
+  const accountId = typeof credential.accountId === "string" ? credential.accountId : undefined;
+  const expires = typeof credential.expires === "number" ? String(credential.expires) : typeof credential.expires === "string" ? credential.expires : undefined;
+  if (!accessToken || !refreshToken) return undefined;
+  return { accessToken, refreshToken, ...(accountId ? { accountId } : {}), ...(expires ? { expires } : {}) };
+}
+
+function piLoginUrl(output: string): string | undefined {
+  return output.match(/https?:\/\/[^\s)]+/)?.[0];
+}
+
+function shQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function piTerminalLoginCommand(configDir: string, initialInput: string[] | undefined): { argv: string[]; env?: Record<string, string> } {
+  const provider = initialInput?.[0]?.includes("anthropic") ? "anthropic" : "openai-codex";
+  const piBin = process.env.PI_BIN || join(homedir(), ".local", "bin", "pi");
+  const terminalCommand = [
+    `export PATH=${shQuote(`${join(homedir(), ".local", "bin")}:/opt/homebrew/bin:/usr/local/bin:$PATH`)}`,
+    `export PI_CODING_AGENT_DIR=${shQuote(configDir)}`,
+    `export PI_OFFLINE=0`,
+    `clear`,
+    `echo ${shQuote(`GAIA add-account login: type /login ${provider} in Pi, then complete the browser/subscription flow.`)}`,
+    `echo ${shQuote(`This window is isolated; existing Pi accounts are not touched.`)}`,
+    `echo`,
+    `${shQuote(piBin)} --no-approve`,
+  ].join("; ");
+  const script = [
+    `osascript -e ${shQuote(`tell application "Terminal" to activate`)} -e ${shQuote(`tell application "Terminal" to do script ${JSON.stringify(terminalCommand)}`)}`,
+    `while ! grep -q ${shQuote(provider)} ${shQuote(join(configDir, "auth.json"))} 2>/dev/null; do sleep 1; done`,
+  ].join("; ");
+  return { argv: ["/bin/bash", "-lc", script], env: { PI_CODING_AGENT_DIR: configDir, PI_OFFLINE: "0" } };
+}
+
 function materializePiAgentDir(credentials: Record<string, string>): string {
   // Detect provider from credential structure:
   // OpenAI: accountId present (or JWT-structured access token)
@@ -1043,17 +1093,25 @@ registerHarness({
   // by RunnerHost BEFORE the credential-proxy block — a proxied (sandboxed)
   // turn strips it with every other provider key.
   accounts: {
-    label: "Pi account (ChatGPT OAuth)",
+    label: "Pi account (terminal subscription login)",
     fields: [
       { key: "accessToken", label: "Access token", secret: true, hint: "~/.pi/agent/auth.json → openai-codex.access (or a codex account's tokens.access_token)" },
       { key: "refreshToken", label: "Refresh token", secret: true, hint: "~/.pi/agent/auth.json → openai-codex.refresh (codex: tokens.refresh_token)" },
       { key: "accountId", label: "Account ID", hint: "~/.pi/agent/auth.json → openai-codex.accountId (codex: tokens.account_id)" },
     ],
     env: (credentials) => ({ PI_CODING_AGENT_DIR: materializePiAgentDir(credentials) }),
-    // Same materialized dir env() points a subprocess at — reused for in-process
-    // consolidation so it authenticates as the bound account (OAuth refreshed).
-    authStoragePath: (credentials) => join(materializePiAgentDir(credentials), "auth.json"),
-    email: (credentials) => emailFromJwt(credentials.accessToken),
+    email: (credentials) => emailFromJwt(credentials.accessToken ?? credentials.access),
+    login: {
+      command: ({ configDir, initialInput }) => piTerminalLoginCommand(configDir, initialInput),
+      initialInput: ["/login openai-codex"],
+      variants: [
+        { key: "openai-codex", label: "Add ChatGPT via Pi terminal", initialInput: ["/login openai-codex"], providers: ["openai-codex"] },
+        { key: "anthropic", label: "Add Claude via Pi terminal", initialInput: ["/login anthropic"], providers: ["anthropic"] },
+      ],
+      signInUrl: piLoginUrl,
+      awaitingInput: () => false,
+      credentials: ({ configDir }) => piLoginAuthCredentials(configDir),
+    },
   },
   // Pi's proxy wiring (the in-process fetch redirect lives in applyCredentialProxy):
   // relocate its agent dir to an empty store so AuthStorage resolves no real key

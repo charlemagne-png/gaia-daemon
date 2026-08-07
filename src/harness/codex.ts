@@ -1237,6 +1237,7 @@ registerHarness({
     // rate-limits aggressively (429), and it never auto-opens a browser.
     // Once signed in codex writes CODEX_HOME/auth.json itself and exits.
     login: {
+      providers: ["openai-codex"],
       command: ({ configDir }) => ({ argv: ["codex", "login"], env: { CODEX_HOME: configDir } }),
       signInUrl: (output) => /https:\/\/auth\.openai\.com\/\S+/.exec(output)?.[0],
       code: (output) => /^\s*([A-Z0-9]{4}-[A-Z0-9]{4,8})\s*$/m.exec(output)?.[1],

@@ -16,7 +16,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { gaiaHome } from "../core/paths.js";
 import { newId } from "../core/ids.js";
-import { addAccount, newAccountId } from "../domain/accounts.js";
+import { addAccount, newAccountId, replaceAccountCredentials } from "../domain/accounts.js";
 import { harnessSpecFor, type AccountLoginSpec, type HarnessSpec } from "../harness/spec.js";
 
 /** Strip ANSI CSI + OSC sequences so the extractors see plain text. Previously
@@ -42,7 +42,7 @@ export interface AccountLoginState {
   /** Device-authorization code the user re-enters on the sign-in page (see
    * AccountLoginSpec.code) — shown alongside `url`, never sent anywhere by us. */
   code?: string;
-  account?: { id: string; harness: string; label?: string; email?: string };
+  account?: { id: string; harness: string; label?: string; email?: string; workspace?: string; providers?: string[] };
   error?: string;
 }
 
@@ -54,6 +54,9 @@ interface LoginSession {
   output: string;
   configDir: string;
   label?: string;
+  workspace?: string;
+  providers?: string[];
+  replaceAccountId?: string;
   killTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -63,17 +66,21 @@ const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 export class AccountLoginService {
   private readonly sessions = new Map<string, LoginSession>();
 
-  start(harnessId: string, label?: string): AccountLoginState {
+  start(harnessId: string, label?: string, variantKey?: string, replaceAccountId?: string, workspace?: string): AccountLoginState {
     const spec = harnessSpecFor(harnessId);
     if (!spec.accounts) throw new Error(`harness '${harnessId}' has no account support`);
-    const login = spec.accounts.login;
-    if (!login) throw new Error(`harness '${harnessId}' has no in-app login — add the account in accounts.json`);
+    const baseLogin = spec.accounts.login;
+    if (!baseLogin) throw new Error(`harness '${harnessId}' has no in-app login — add the account in accounts.json`);
+    const variant = variantKey ? baseLogin.variants?.find((item) => item.key === variantKey) : undefined;
+    if (variantKey && !variant) throw new Error(`unknown login option '${variantKey}' for harness '${harnessId}'`);
+    const login = variant ? { ...baseLogin, initialInput: variant.initialInput } : baseLogin;
+    const providers = variant?.providers ?? baseLogin.providers;
 
     const sessionId = newId("login");
     const configDir = join(gaiaHome(), "logins", sessionId);
     mkdirSync(configDir, { recursive: true });
 
-    const cmd = login.command({ configDir });
+    const cmd = login.command({ configDir, initialInput: login.initialInput });
     const opts: SpawnOptions = { env: { ...process.env, ...cmd.env }, stdio: ["pipe", "pipe", "pipe"] };
     // `expect` allocates the pseudo-tty (the login CLI silently hangs without
     // one). script(1) cannot do this job: on macOS it err()s at tcgetattr when
@@ -82,9 +89,11 @@ export class AccountLoginService {
     // virtually every Linux, tolerates piped stdio, and the fileevent line
     // below forwards our piped stdin into the pty so the pasted code reaches
     // the CLI. Tcl braces pass each argv element verbatim (no substitution).
+    const initialInput = login.initialInput?.map((line) => `after 1000; send -- {${line.replaceAll("}", "\\}")}}; send -- "\\r"`) ?? [];
     const expectScript = [
       "set timeout -1",
       `spawn -noecho ${cmd.argv.map((arg) => `{${arg}}`).join(" ")}`,
+      ...initialInput,
       "fileevent stdin readable {",
       '  if {[gets stdin line] >= 0} { send -- "$line\\r" } else { fileevent stdin readable {} }',
       "}",
@@ -100,6 +109,9 @@ export class AccountLoginService {
       output: "",
       configDir,
       ...(label ? { label } : {}),
+      ...(workspace ? { workspace } : {}),
+      ...(providers?.length ? { providers } : {}),
+      ...(replaceAccountId ? { replaceAccountId } : {}),
       killTimer: setTimeout(() => {
         if (!TERMINAL.has(session.state.status)) {
           session.state.status = "error";
@@ -164,16 +176,28 @@ export class AccountLoginService {
   }
 
   private finish(session: LoginSession, creds: Record<string, string>): void {
-    const id = newAccountId(session.state.harness, session.label);
     const email = session.spec.accounts?.email?.(creds);
-    addAccount({
+    const existing = session.replaceAccountId ? replaceAccountCredentials(session.replaceAccountId, creds, email) : undefined;
+    const id = existing?.id ?? newAccountId(session.state.harness, session.label);
+    if (!existing) {
+      addAccount({
+        id,
+        harness: session.state.harness,
+        ...(session.label ? { label: session.label } : {}),
+        ...(email ? { email } : {}),
+        ...(session.workspace ? { workspace: session.workspace } : {}),
+        ...(session.providers?.length ? { providers: session.providers } : {}),
+        credentials: creds,
+      });
+    }
+    session.state.account = {
       id,
       harness: session.state.harness,
-      ...(session.label ? { label: session.label } : {}),
-      ...(email ? { email } : {}),
-      credentials: creds,
-    });
-    session.state.account = { id, harness: session.state.harness, ...(session.label ? { label: session.label } : {}), ...(email ? { email } : {}) };
+      ...(existing?.label || session.label ? { label: existing?.label ?? session.label } : {}),
+      ...(email || existing?.email ? { email: email ?? existing?.email } : {}),
+      ...(existing?.workspace || session.workspace ? { workspace: existing?.workspace ?? session.workspace } : {}),
+      ...((existing?.providers?.length ?? 0) > 0 || (session.providers?.length ?? 0) > 0 ? { providers: existing?.providers ?? session.providers } : {}),
+    };
     session.state.status = "done";
     this.cleanup(session);
   }
