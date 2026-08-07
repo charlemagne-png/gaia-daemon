@@ -8,7 +8,7 @@ import { workspacePaths } from "../src/core/paths.js";
 import { StudioConflictError, StudioService } from "../src/services/studio-service.js";
 import { GaiaWebServer } from "../src/server/http.js";
 import { DEFAULT_ROOM, initWorkspace } from "../src/domain/workspace.js";
-import { createArtifact } from "../src/services/artifacts.js";
+import { createArtifact, readArtifact } from "../src/services/artifacts.js";
 import type { RoomService } from "../src/services/room-service.js";
 import type { UiEvent } from "../src/core/types.js";
 
@@ -58,6 +58,29 @@ test("studio save rejects stale base and preserves version chain", async () => {
   );
   const versions = await service.versions(opened.project.projectId);
   assert.equal(versions.versions.length, 2);
+});
+
+test("studio artifact payload binding is idempotent and save refreshes manifest", async () => {
+  const { root, registry, service } = await fixture();
+  const workspaceId = (await registry.list())[0]!.id;
+  const roomId = "artifact-room";
+  await mkdir(join(root, ".gaia", "rooms", roomId), { recursive: true });
+  await writeFile(join(root, ".gaia", "rooms", roomId, "state.json"), JSON.stringify({ activeRoles: {}, thinkingOverrides: {}, agentCursors: {} }));
+  const manifest = await createArtifact({ rootDir: root, roomId }, { name: "Landing", kind: "html", mediaType: "text/html; charset=utf-8", payload: "<h1>old</h1>" }, { id: () => "artifact_landing", now: () => "2026-01-01T00:00:00.000Z" });
+  const payload = workspacePaths.roomArtifactPayload(root, roomId, manifest.artifactId);
+  const opened = await service.open({ workspaceId, path: payload, roomId, artifact: { roomId, artifactId: manifest.artifactId }, entryView: { id: "payload", path: "payload", title: manifest.name } });
+  assert.equal(opened.project.roomId, roomId);
+  assert.equal(opened.project.artifact?.artifactId, manifest.artifactId);
+  assert.equal(opened.project.entryViews[0]!.title, "Landing");
+  const initial = opened.project.headVersionId;
+  const saved = await service.save(opened.project.projectId, { baseVersionId: initial, files: [{ path: "payload", content: "<h1>new</h1>" }] });
+  assert.equal(saved.version.parentVersionId, initial);
+  const refreshed = await readArtifact({ rootDir: root, roomId }, manifest.artifactId);
+  assert.equal(Buffer.from(refreshed.payload).toString("utf8"), "<h1>new</h1>");
+  assert.notEqual(refreshed.manifest.sha256, manifest.sha256);
+  const reopened = await service.open({ workspaceId, path: payload, roomId, artifact: { roomId, artifactId: manifest.artifactId }, entryView: { id: "payload", path: "payload", title: manifest.name } });
+  assert.equal(reopened.project.projectId, opened.project.projectId);
+  assert.equal(reopened.project.roomId, roomId);
 });
 
 test("studio missing-room recovery marks binding instead of rebinding unrelated room", async () => {

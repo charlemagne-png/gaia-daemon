@@ -6,7 +6,7 @@
 // route table over this class.
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { Bus } from "./core/bus.js";
@@ -316,10 +316,29 @@ export class Daemon {
     return readArtifact(await this.artifactLocation(roomId), artifactId);
   }
 
+  async openArtifactInStudio(roomId: string, artifactId: string): Promise<{ project: unknown }> {
+    const workspace = await this.artifactWorkspace(roomId);
+    const artifact = await readArtifact({ rootDir: workspace.path, roomId }, artifactId);
+    const payload = await realpath(workspacePaths.roomArtifactPayload(workspace.path, roomId, artifact.manifest.artifactId));
+    const opened = await this.studio.open({
+      workspaceId: workspace.id,
+      path: payload,
+      roomId,
+      artifact: { roomId, artifactId: artifact.manifest.artifactId },
+      entryView: { id: "payload", path: "payload", title: artifact.manifest.name },
+    });
+    return { project: opened.project };
+  }
+
   private async artifactLocation(roomId: string): Promise<ArtifactLocation> {
+    const workspace = await this.artifactWorkspace(roomId);
+    return { rootDir: workspace.path, roomId };
+  }
+
+  private async artifactWorkspace(roomId: string): Promise<WorkspaceRecord> {
     if (!isValidRoomId(roomId)) throw new Error("Invalid room id");
     for (const workspace of await this.registry.list()) {
-      if (workspace.isInitialized && existsSync(workspacePaths.roomDir(workspace.path, roomId))) return { rootDir: workspace.path, roomId };
+      if (workspace.isInitialized && existsSync(workspacePaths.roomDir(workspace.path, roomId))) return workspace;
     }
     throw new Error(`Room not found: ${roomId}`);
   }

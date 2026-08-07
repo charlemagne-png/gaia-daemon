@@ -22,6 +22,7 @@ export interface StudioProject {
   createdAt: string;
   updatedAt: string;
   status?: "missing-room";
+  artifact?: { roomId: string; artifactId: string };
 }
 
 export interface StudioRegistry {

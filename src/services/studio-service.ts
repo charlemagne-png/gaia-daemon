@@ -7,6 +7,7 @@ import { readJson, writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "..
 import type { Task, UiEvent } from "../core/types.js";
 import type { WorkspaceRegistry } from "../daemon.js";
 import type { RoomService } from "./room-service.js";
+import { updateArtifact } from "./artifacts.js";
 import {
   discoverEntryViews,
   emptyStudioRegistry,
@@ -66,7 +67,7 @@ async function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 export class StudioService {
   constructor(private readonly options: StudioServiceOptions) {}
 
-  async open(input: { workspaceId: string; path: string; entryView?: StudioEntryView }): Promise<StudioOpenResult & { created: boolean }> {
+  async open(input: { workspaceId: string; path: string; entryView?: StudioEntryView; roomId?: string; artifact?: { roomId: string; artifactId: string } }): Promise<StudioOpenResult & { created: boolean }> {
     const workspace = await this.workspace(input.workspaceId);
     const target = await realpath(resolve(input.path));
     if (!pathInside(target, workspace.path)) throw new Error("Design path must stay inside workspace");
@@ -80,7 +81,9 @@ export class StudioService {
         const version = await this.headVersion(workspace.path, project);
         return { ...(await this.result(workspace.path, project, version)), created: false };
       }
-      const roomId = newId("studio_room");
+      const roomId = input.roomId ?? newId("studio_room");
+      const existingRoomProjectId = registry.byRoom[roomId];
+      if (existingRoomProjectId && existingRoomProjectId !== existingId) throw new Error("Room is already bound to another Studio project");
       const pathKind = stat.isFile() ? "file" : "folder";
       const entryViews = await discoverEntryViews(target, pathKind, input.entryView);
       const now = new Date().toISOString();
@@ -97,6 +100,7 @@ export class StudioService {
         headVersionId: null,
         createdAt: now,
         updatedAt: now,
+        ...(input.artifact ? { artifact: input.artifact } : {}),
       };
       await this.options.serviceFor(input.workspaceId, roomId);
       registry.projects[project.projectId] = project;
@@ -145,7 +149,7 @@ export class StudioService {
   async readFile(projectId: string, rel: string): Promise<{ path: string; content: string; sha256: string; headVersionId: string | null; mediaType: string }> {
     const { workspacePath, project } = await this.findProject(projectId);
     const clean = validateRelativePath(rel);
-    if (!isEditableTextPath(clean)) throw new Error("Unsupported editor file type");
+    if (!project.artifact && !isEditableTextPath(clean)) throw new Error("Unsupported editor file type");
     const base = await this.effectiveRoot(workspacePath, project);
     const abs = resolve(base, project.pathKind === "file" ? basename(project.designPath) : clean);
     if (!pathInside(abs, base)) throw new Error("Path escapes project");
@@ -163,11 +167,15 @@ export class StudioService {
     for (const file of body.files) {
       if (file.encoding && file.encoding !== "utf8") throw new Error("Unsupported encoding");
       const clean = validateRelativePath(file.path);
-      if (!isEditableTextPath(clean)) throw new Error("Unsupported editor file type");
+      if (!project.artifact && !isEditableTextPath(clean)) throw new Error("Unsupported editor file type");
       const abs = resolve(root, project.pathKind === "file" ? basename(project.designPath) : clean);
       if (!pathInside(abs, root)) throw new Error("Path escapes project");
       await mkdir(dirname(abs), { recursive: true });
-      await writeTextAtomic(abs, file.content);
+      if (project.artifact) {
+        await updateArtifact({ rootDir: workspacePath, roomId: project.artifact.roomId }, project.artifact.artifactId, { payload: file.content });
+      } else {
+        await writeTextAtomic(abs, file.content);
+      }
       changedPaths.push(clean);
     }
     const version = await this.snapshot(workspacePath, project, { kind: "human" }, body.note, project.headVersionId);
@@ -258,6 +266,7 @@ export class StudioService {
   }
 
   async effectiveDesignPath(workspacePath: string, project: StudioProject): Promise<string> {
+    if (project.artifact) return project.designPath;
     const state = (await readJson(workspacePaths.roomState(workspacePath, project.roomId))) as { workDir?: string } | undefined;
     if (state?.workDir && existsSync(state.workDir)) return resolve(state.workDir, project.relativePath);
     return project.designPath;

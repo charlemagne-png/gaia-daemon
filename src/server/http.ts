@@ -504,6 +504,14 @@ export class GaiaWebServer {
         return json(response, 404, { error: error instanceof Error ? error.message : String(error) });
       }
     }
+    const roomArtifactStudioMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts\/([^/]+)\/studio$/);
+    if (roomArtifactStudioMatch && method === "POST") {
+      try {
+        return json(response, 200, await this.daemon.openArtifactInStudio(decodeURIComponent(roomArtifactStudioMatch[1] ?? ""), decodeURIComponent(roomArtifactStudioMatch[2] ?? "")));
+      } catch (error) {
+        return json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     const roomArtifactPayloadMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts\/([^/]+)\/payload$/);
     if (roomArtifactPayloadMatch && method === "GET") {
       try {
