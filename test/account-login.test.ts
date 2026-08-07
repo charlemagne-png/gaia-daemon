@@ -203,12 +203,20 @@ test("removeAccount true then false", async () => {
   });
 });
 
-test("newAccountId: label slug, then next free id, then harness-2", async () => {
+test("newAccountId: label slug, slug collision suffix, then harness-2 fallback", async () => {
   const { addAccount, newAccountId } = await import("../src/domain/accounts.js");
   withGaiaHome(() => {
     assert.equal(newAccountId("claude", "Work Account"), "work-account");
     addAccount({ id: "work-account", harness: "claude", credentials: {} });
-    assert.notEqual(newAccountId("claude", "Work Account"), "work-account");
+    assert.equal(newAccountId("claude", "Work Account"), "work-account-2");
+    addAccount({ id: "work-account-2", harness: "claude", credentials: {} });
+    assert.equal(newAccountId("claude", "Work Account"), "work-account-3");
     assert.equal(newAccountId("claude"), "claude-2");
   });
+});
+
+test("pi login variants declare created-account providers", () => {
+  const variants = findHarness("pi")?.accounts?.login?.variants ?? [];
+  assert.deepEqual(variants.find((variant) => variant.key === "openai-codex")?.providers, ["openai-codex"]);
+  assert.deepEqual(variants.find((variant) => variant.key === "anthropic")?.providers, ["anthropic"]);
 });

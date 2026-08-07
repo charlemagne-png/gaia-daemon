@@ -1100,13 +1100,13 @@ registerHarness({
       { key: "accountId", label: "Account ID", hint: "~/.pi/agent/auth.json → openai-codex.accountId (codex: tokens.account_id)" },
     ],
     env: (credentials) => ({ PI_CODING_AGENT_DIR: materializePiAgentDir(credentials) }),
-    email: (credentials) => emailFromJwt(credentials.accessToken),
+    email: (credentials) => emailFromJwt(credentials.accessToken ?? credentials.access),
     login: {
       command: ({ configDir, initialInput }) => piTerminalLoginCommand(configDir, initialInput),
       initialInput: ["/login openai-codex"],
       variants: [
-        { key: "openai-codex", label: "Add ChatGPT via Pi terminal", initialInput: ["/login openai-codex"] },
-        { key: "anthropic", label: "Add Claude via Pi terminal", initialInput: ["/login anthropic"] },
+        { key: "openai-codex", label: "Add ChatGPT via Pi terminal", initialInput: ["/login openai-codex"], providers: ["openai-codex"] },
+        { key: "anthropic", label: "Add Claude via Pi terminal", initialInput: ["/login anthropic"], providers: ["anthropic"] },
       ],
       signInUrl: piLoginUrl,
       awaitingInput: () => false,

@@ -407,6 +407,8 @@ let loginSession = null;
 let loginPollTimer;
 /** @type {Record<string, string>} */
 let loginLabelDrafts = {};
+/** @type {Record<string, string>} */
+let loginWorkspaceDrafts = {};
 /** @type {string} */
 let loginCodeDraft = "";
 /** @type {Record<string, { label: string, email: string }>} */
@@ -472,10 +474,11 @@ async function startLogin(harnessId, variant) {
   accountsError = "";
   accountsNotice = "";
   const label = (loginLabelDrafts[harnessId] ?? "").trim();
+  const workspace = (loginWorkspaceDrafts[harnessId] ?? "").trim();
   try {
     const body = await api("/api/accounts/login", {
       method: "POST",
-      body: JSON.stringify({ harness: harnessId, ...(label ? { label } : {}), ...(variant ? { variant } : {}) }),
+      body: JSON.stringify({ harness: harnessId, ...(label ? { label } : {}), ...(workspace ? { workspace } : {}), ...(variant ? { variant } : {}) }),
     });
     applyLoginSession(body.session);
     if (isActiveLoginStatus(body.session.status)) startLoginPolling(body.session.sessionId);
@@ -580,12 +583,14 @@ function AccountRow(account) {
   const draft = accountDraft(account);
   const providers = account.providers?.join(", ") || account.harness || "unknown";
   const emailText = account.email ? ` ${account.email}` : " email not recorded";
+  const title = account.label || account.id;
+  const idText = account.label ? `${account.id} · ` : "";
   return h(
     "div",
     { class: "account-row" },
     h("div", { class: "account-row-head" }, 
-      h("strong", { text: account.id }), 
-      h("small", { class: "muted", text: `${emailText} · ${providers}` })
+      h("strong", { text: title }), 
+      h("small", { class: "muted", text: `${idText}${emailText} · ${providers}` })
     ),
     h(
       "div",
@@ -624,6 +629,15 @@ function LoginControls(harness) {
       loginLabelDrafts[harness.id] = /** @type {HTMLInputElement} */ (event.target).value;
     },
   });
+  const workspaceInput = h("input", {
+    type: "text",
+    placeholder: "workspace (optional)",
+    value: loginWorkspaceDrafts[harness.id] ?? "",
+    disabled,
+    oninput: (/** @type {Event} */ event) => {
+      loginWorkspaceDrafts[harness.id] = /** @type {HTMLInputElement} */ (event.target).value;
+    },
+  });
   const buttons = harness.loginVariants?.length
     ? harness.loginVariants.map((variant) => h("button", { disabled, onclick: () => void startLogin(harness.id, variant.key), text: variant.label }))
     : [h("button", { disabled, onclick: () => void startLogin(harness.id), text: "Add account" })];
@@ -631,6 +645,7 @@ function LoginControls(harness) {
     "div",
     { class: "settings2-field-control" },
     input,
+    workspaceInput,
     ...buttons,
   );
 }

@@ -106,8 +106,8 @@ export function updateAccount(id: string, patch: { label?: string | null; email?
   return listAccounts().find((account) => account.id === id);
 }
 
-/** First free id: slugified label ("Work Account" -> "work-account") when given
- * and unused, else `${harness}-2`, `${harness}-3`, ... skipping taken ids. */
+/** First free id: slugified label ("Work Account" -> "work-account") when given,
+ * collision suffixed (`work-account-2`), else `${harness}-2`, `${harness}-3`, ... skipping taken ids. */
 export function newAccountId(harness: string, label?: string): string {
   const taken = new Set(listAccounts().map((account) => account.id));
   if (label) {
@@ -115,7 +115,13 @@ export function newAccountId(harness: string, label?: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
-    if (slug && !taken.has(slug)) return slug;
+    if (slug) {
+      if (!taken.has(slug)) return slug;
+      for (let n = 2; ; n++) {
+        const candidate = `${slug}-${n}`;
+        if (!taken.has(candidate)) return candidate;
+      }
+    }
   }
   for (let n = 2; ; n++) {
     const candidate = `${harness}-${n}`;

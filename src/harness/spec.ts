@@ -306,9 +306,13 @@ export interface AccountLoginVariant {
   key: string;
   label: string;
   initialInput?: string[];
+  /** Provider ids this login option authorizes, stored on the account record. */
+  providers?: string[];
 }
 
 export interface AccountLoginSpec {
+  /** Provider ids this login authorizes when no variant overrides them. */
+  providers?: string[];
   /** Optional alternate terminal flows for the same harness. */
   variants?: AccountLoginVariant[];
   /** The interactive command. ctx.configDir is a THROWAWAY isolated dir the

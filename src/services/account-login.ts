@@ -42,7 +42,7 @@ export interface AccountLoginState {
   /** Device-authorization code the user re-enters on the sign-in page (see
    * AccountLoginSpec.code) — shown alongside `url`, never sent anywhere by us. */
   code?: string;
-  account?: { id: string; harness: string; label?: string; email?: string };
+  account?: { id: string; harness: string; label?: string; email?: string; workspace?: string; providers?: string[] };
   error?: string;
 }
 
@@ -54,6 +54,8 @@ interface LoginSession {
   output: string;
   configDir: string;
   label?: string;
+  workspace?: string;
+  providers?: string[];
   replaceAccountId?: string;
   killTimer: ReturnType<typeof setTimeout>;
 }
@@ -64,7 +66,7 @@ const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 export class AccountLoginService {
   private readonly sessions = new Map<string, LoginSession>();
 
-  start(harnessId: string, label?: string, variantKey?: string, replaceAccountId?: string): AccountLoginState {
+  start(harnessId: string, label?: string, variantKey?: string, replaceAccountId?: string, workspace?: string): AccountLoginState {
     const spec = harnessSpecFor(harnessId);
     if (!spec.accounts) throw new Error(`harness '${harnessId}' has no account support`);
     const baseLogin = spec.accounts.login;
@@ -72,6 +74,7 @@ export class AccountLoginService {
     const variant = variantKey ? baseLogin.variants?.find((item) => item.key === variantKey) : undefined;
     if (variantKey && !variant) throw new Error(`unknown login option '${variantKey}' for harness '${harnessId}'`);
     const login = variant ? { ...baseLogin, initialInput: variant.initialInput } : baseLogin;
+    const providers = variant?.providers ?? baseLogin.providers;
 
     const sessionId = newId("login");
     const configDir = join(gaiaHome(), "logins", sessionId);
@@ -106,6 +109,8 @@ export class AccountLoginService {
       output: "",
       configDir,
       ...(label ? { label } : {}),
+      ...(workspace ? { workspace } : {}),
+      ...(providers?.length ? { providers } : {}),
       ...(replaceAccountId ? { replaceAccountId } : {}),
       killTimer: setTimeout(() => {
         if (!TERMINAL.has(session.state.status)) {
@@ -180,10 +185,19 @@ export class AccountLoginService {
         harness: session.state.harness,
         ...(session.label ? { label: session.label } : {}),
         ...(email ? { email } : {}),
+        ...(session.workspace ? { workspace: session.workspace } : {}),
+        ...(session.providers?.length ? { providers: session.providers } : {}),
         credentials: creds,
       });
     }
-    session.state.account = { id, harness: session.state.harness, ...(existing?.label || session.label ? { label: existing?.label ?? session.label } : {}), ...(email || existing?.email ? { email: email ?? existing?.email } : {}) };
+    session.state.account = {
+      id,
+      harness: session.state.harness,
+      ...(existing?.label || session.label ? { label: existing?.label ?? session.label } : {}),
+      ...(email || existing?.email ? { email: email ?? existing?.email } : {}),
+      ...(existing?.workspace || session.workspace ? { workspace: existing?.workspace ?? session.workspace } : {}),
+      ...((existing?.providers?.length ?? 0) > 0 || (session.providers?.length ?? 0) > 0 ? { providers: existing?.providers ?? session.providers } : {}),
+    };
     session.state.status = "done";
     this.cleanup(session);
   }

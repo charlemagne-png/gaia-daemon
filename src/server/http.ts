@@ -569,8 +569,9 @@ export class GaiaWebServer {
       const label = stringField(body, "label");
       const variant = stringField(body, "variant");
       const accountId = stringField(body, "accountId");
+      const workspace = stringField(body, "workspace");
       return this.respond(response, async () => ({
-        session: this.daemon.accountLogins.start((harness ?? "").trim(), label?.trim() || undefined, variant?.trim() || undefined, accountId?.trim() || undefined),
+        session: this.daemon.accountLogins.start((harness ?? "").trim(), label?.trim() || undefined, variant?.trim() || undefined, accountId?.trim() || undefined, workspace?.trim() || undefined),
       }));
     }
 
