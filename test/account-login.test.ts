@@ -36,35 +36,8 @@ test("stripAnsi: strips an OSC hyperlink sequence (ESC ] ... BEL)", () => {
   assert.equal(stripAnsi(raw), "before link text after");
 });
 
-const login = findHarness("claude")?.accounts?.login;
-
-test("claude login: signInUrl lifts the OAuth URL", () => {
-  assert.ok(login);
-  const url = "https://claude.com/cai/oauth/authorize?code=1&scope=x";
-  const out = `Browser didn't open? Use the url below...\n${url}\nPaste code here if prompted >`;
-  assert.equal(login.signInUrl(out), url);
-});
-
-test("claude login: awaitingInput detects the paste prompt", () => {
-  assert.ok(login);
-  assert.equal(login.awaitingInput("...Pastecodehereifprompted>"), true);
-  assert.equal(login.awaitingInput("Opening browser"), false);
-});
-
-test("claude login: credentials from the printed token", () => {
-  assert.ok(login);
-  const token = "sk-ant-oat01-" + "A".repeat(40);
-  assert.deepEqual(login.credentials({ output: `your token:\n${token}`, configDir: "/nonexistent" }), {
-    oauthToken: token,
-  });
-});
-
-test("claude login: credentials from the config-dir fallback file", () => {
-  assert.ok(login);
-  const dir = mkdtempSync(join(tmpdir(), "gaia-login-cfg-"));
-  const stored = "sk-ant-oat01-FROMFILE0000000000000000";
-  writeFileSync(join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: stored } }));
-  assert.deepEqual(login.credentials({ output: "no token in output", configDir: dir }), { oauthToken: stored });
+test("claude accounts: Settings has no direct browser OAuth login", () => {
+  assert.equal(findHarness("claude")?.accounts?.login, undefined);
 });
 
 const codexLogin = findHarness("codex")?.accounts?.login;
@@ -200,16 +173,15 @@ test("pi accounts: unchanged refresh token does not rewrite auth.json", () => {
   });
 });
 
-test("pi accounts: changed refresh token re-materializes auth.json", () => {
+test("pi accounts: changed refresh token does not stomp a live materialized auth.json unless the stored access is fresher", () => {
   withGaiaHome(() => {
     const env = findHarness("pi")?.accounts?.env;
     assert.ok(env);
-    env({ accessToken: "at1", refreshToken: "rt1", accountId: "acct1" });
-    const dir = env({ accessToken: "at2", refreshToken: "rt2", accountId: "acct1" }).PI_CODING_AGENT_DIR!;
+    const dir = env({ accessToken: "at1", refreshToken: "rt1", accountId: "acct1" }).PI_CODING_AGENT_DIR!;
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", refresh: "rt-live", access: "REFRESHED", expires: 0, accountId: "acct1" } }));
+    env({ accessToken: "at2", refreshToken: "rt2", accountId: "acct1" });
     const written = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
-    assert.deepEqual(written, {
-      "openai-codex": { type: "oauth", refresh: "rt2", access: "at2", expires: 0, accountId: "acct1" },
-    });
+    assert.equal(written["openai-codex"].refresh, "rt-live");
   });
 });
 

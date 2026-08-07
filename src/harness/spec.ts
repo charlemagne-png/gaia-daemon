@@ -314,7 +314,7 @@ export interface AccountLoginSpec {
   /** The interactive command. ctx.configDir is a THROWAWAY isolated dir the
    * flow must be pointed at so it can never disturb the machine's ambient
    * login (e.g. claude's keychain session). */
-  command(ctx: { configDir: string }): { argv: string[]; env?: Record<string, string> };
+  command(ctx: { configDir: string; initialInput?: string[] }): { argv: string[]; env?: Record<string, string> };
   /** Optional startup keystrokes for CLIs whose login lives behind an
    * interactive slash command/menu. Sent to the pty after spawn, before user
    * paste-back input is forwarded. */

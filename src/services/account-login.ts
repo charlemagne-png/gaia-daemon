@@ -76,7 +76,7 @@ export class AccountLoginService {
     const configDir = join(gaiaHome(), "logins", sessionId);
     mkdirSync(configDir, { recursive: true });
 
-    const cmd = login.command({ configDir });
+    const cmd = login.command({ configDir, initialInput: login.initialInput });
     const opts: SpawnOptions = { env: { ...process.env, ...cmd.env }, stdio: ["pipe", "pipe", "pipe"] };
     // `expect` allocates the pseudo-tty (the login CLI silently hangs without
     // one). script(1) cannot do this job: on macOS it err()s at tcgetattr when

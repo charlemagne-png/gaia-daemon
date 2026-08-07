@@ -970,6 +970,22 @@ function piLoginUrl(output: string): string | undefined {
   return output.match(/https?:\/\/[^\s)]+/)?.[0];
 }
 
+function shQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function piTerminalLoginCommand(configDir: string, initialInput: string[] | undefined): { argv: string[]; env?: Record<string, string> } {
+  const loginLine = initialInput?.[0] ?? "/login openai-codex";
+  const terminalCommand = `export PI_CODING_AGENT_DIR=${shQuote(configDir)}; export PI_OFFLINE=0; pi --no-approve`;
+  const script = [
+    `osascript -e ${shQuote(`tell application "Terminal" to activate`)} -e ${shQuote(`tell application "Terminal" to do script ${JSON.stringify(terminalCommand)}`)}`,
+    `sleep 1`,
+    `osascript -e ${shQuote(`tell application "System Events" to keystroke ${JSON.stringify(loginLine)}`)} -e ${shQuote(`tell application "System Events" to key code 36`)}`,
+    `while ! grep -q ${shQuote(loginLine.includes("anthropic") ? "anthropic" : "openai-codex")} ${shQuote(join(configDir, "auth.json"))} 2>/dev/null; do sleep 1; done`,
+  ].join("; ");
+  return { argv: ["/bin/bash", "-lc", script], env: { PI_CODING_AGENT_DIR: configDir, PI_OFFLINE: "0" } };
+}
+
 function materializePiAgentDir(credentials: Record<string, string>): string {
   // Detect provider from credential structure:
   // OpenAI: accountId present (or JWT-structured access token)
@@ -1047,7 +1063,7 @@ function materializePiAgentDir(credentials: Record<string, string>): string {
   const currentExpiry = isOpenAI ? expiryMsFromJwt(materialized?.access) : (materialized?.expires ?? 0);
   const newExpiry = isOpenAI ? entry.expires : Number(entry.expires);
   
-  if (!materialized?.refresh || materialized.refresh !== entry.refresh || newExpiry > currentExpiry) {
+  if (!materialized?.refresh || newExpiry > currentExpiry) {
     writeFileSync(authPath, JSON.stringify({ [provider]: entry }, null, 2) + "\n", { mode: 0o600 });
   }
   return dir;
@@ -1078,7 +1094,7 @@ registerHarness({
     env: (credentials) => ({ PI_CODING_AGENT_DIR: materializePiAgentDir(credentials) }),
     email: (credentials) => emailFromJwt(credentials.accessToken),
     login: {
-      command: ({ configDir }) => ({ argv: ["pi", "--no-approve"], env: { PI_CODING_AGENT_DIR: configDir, PI_OFFLINE: "0" } }),
+      command: ({ configDir, initialInput }) => piTerminalLoginCommand(configDir, initialInput),
       initialInput: ["/login openai-codex"],
       variants: [
         { key: "openai-codex", label: "Add ChatGPT via Pi terminal", initialInput: ["/login openai-codex"] },
