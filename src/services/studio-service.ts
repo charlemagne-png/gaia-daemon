@@ -13,11 +13,14 @@ import {
   emptyStudioRegistry,
   indexProjectFiles,
   isEditableTextPath,
+  instrumentStudioHtml,
   mediaTypeFor,
   parseStudioRegistry,
+  patchStudioHtml,
   pathInside,
   relativePathUnder,
   sha256,
+  studioElementHtml,
   validateRelativePath,
   type StudioEntryView,
   type StudioProject,
@@ -197,6 +200,53 @@ export class StudioService {
     return { project, version, changedPaths };
   }
 
+  async patchArtifact(roomId: string, artifactId: string, body: { eid?: string; css?: Record<string, string>; text?: string; attrs?: Record<string, string | null>; baseVersion?: string | null }): Promise<{ project: StudioProject; version: StudioVersion; artifactId: string; inPlace: true; elementHtml: string }> {
+    const { workspacePath, registry, project } = await this.findArtifactProject(roomId, artifactId);
+    if ((body.baseVersion ?? null) !== (project.headVersionId ?? null)) throw new StudioConflictError(project.headVersionId);
+    if (!body.eid) throw new Error("Missing eid");
+    const root = await this.effectiveRoot(workspacePath, project);
+    const rel = project.entryViews[0]?.path ?? basename(project.designPath);
+    const abs = resolve(root, project.pathKind === "file" ? basename(project.designPath) : rel);
+    if (!pathInside(abs, root)) throw new Error("Path escapes project");
+    const source = await readFile(abs, "utf8");
+    const patched = patchStudioHtml(source, { eid: body.eid, css: body.css, text: body.text, attrs: body.attrs });
+    await updateArtifact({ rootDir: workspacePath, roomId }, artifactId, { payload: patched.html });
+    const version = await this.snapshot(workspacePath, project, { kind: "human" }, `patch ${body.eid}`, project.headVersionId);
+    project.headVersionId = version.versionId;
+    project.updatedAt = version.createdAt;
+    registry.projects[project.projectId] = project;
+    await this.writeRegistry(workspacePath, registry);
+    const refreshed = await readArtifact({ rootDir: workspacePath, roomId }, artifactId);
+    this.options.broadcast({ type: "artifact-updated", workspaceId: project.workspaceId, roomId, artifactId, projectId: project.projectId, version, manifest: refreshed.manifest, inPlace: true } as UiEvent);
+    return { project, version, artifactId, inPlace: true, elementHtml: patched.elementHtml };
+  }
+
+  async saveArtifactScreenshot(roomId: string, artifactId: string, body: { dataUrl?: string }): Promise<{ path: string; version: string | null }> {
+    const { workspacePath, project } = await this.findArtifactProject(roomId, artifactId);
+    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(body.dataUrl ?? "");
+    if (!match) throw new Error("Missing PNG dataUrl");
+    const bytes = Buffer.from(match[1], "base64");
+    const version = project.headVersionId ?? "live";
+    const file = join(this.versionsDir(workspacePath, project), `${version}.screenshot.png`);
+    await writeFile(file, bytes);
+    await writeJsonAtomic(join(this.versionsDir(workspacePath, project), "latest-screenshot.json"), { path: file, version: project.headVersionId, savedAt: new Date().toISOString() });
+    return { path: file, version: project.headVersionId };
+  }
+
+  async latestArtifactScreenshot(roomId: string, artifactId: string): Promise<{ path: string; version: string | null } | null> {
+    const { workspacePath, project } = await this.findArtifactProject(roomId, artifactId);
+    const raw = await readJson(join(this.versionsDir(workspacePath, project), "latest-screenshot.json"));
+    if (!raw || typeof raw !== "object" || typeof (raw as { path?: unknown }).path !== "string") return null;
+    return { path: (raw as { path: string }).path, version: typeof (raw as { version?: unknown }).version === "string" ? (raw as { version: string }).version : null };
+  }
+
+  async instrumentArtifactPayload(roomId: string, artifactId: string, versionId?: string): Promise<{ bytes: Uint8Array; mediaType: string; etag: string }> {
+    const payload = versionId ? await this.artifactVersionPayload(roomId, artifactId, versionId) : await this.currentArtifactPayload(roomId, artifactId);
+    if (!payload.mediaType.startsWith("text/html")) return payload;
+    const html = instrumentStudioHtml(Buffer.from(payload.bytes).toString("utf8"));
+    return { bytes: Buffer.from(html, "utf8"), mediaType: payload.mediaType, etag: sha256(html) };
+  }
+
   async versions(projectId: string, limit = 50): Promise<{ versions: StudioVersion[] }> {
     const { workspacePath, project } = await this.findProject(projectId);
     const dir = this.versionsDir(workspacePath, project);
@@ -210,13 +260,21 @@ export class StudioService {
     return { versions: versions.slice(0, Math.max(1, Math.min(200, limit))) };
   }
 
-  async iterate(projectId: string, body: { text?: string; viewId?: string; baseVersionId?: string | null }): Promise<{ task: Task; roomId: string; projectId: string }> {
+  async iterate(projectId: string, body: { text?: string; viewId?: string; baseVersionId?: string | null; eid?: string; elementHtml?: string; snippet?: string }): Promise<{ task: Task; roomId: string; projectId: string }> {
     const { workspacePath, project } = await this.findProject(projectId);
     if ((body.baseVersionId ?? project.headVersionId ?? null) !== (project.headVersionId ?? null)) throw new StudioConflictError(project.headVersionId);
     const view = project.entryViews.find((item) => item.id === (body.viewId ?? project.defaultViewId)) ?? project.entryViews[0];
     const effective = await this.effectiveDesignPath(workspacePath, project);
     const preview = `${this.options.baseUrl()}/api/studio/projects/${encodeURIComponent(projectId)}/preview/${encodeURIComponent(view?.id ?? project.defaultViewId)}`;
-    const preamble = [`§ GAIA Design Studio`, `project → ${project.projectId}`, `room → ${project.roomId}`, `head → ${project.headVersionId ?? "null"}`, `source → ${effective}`, `view → ${view?.id ?? project.defaultViewId} · ${view?.path ?? "index.html"}`, `preview → ${preview}`, `write boundary → ${effective}`, `finish → edit files · inspect preview · report changed paths`, ``, `@gaia ${body.text ?? ""}`].join("\n");
+    const screenshot = project.artifact ? await this.latestArtifactScreenshot(project.artifact.roomId, project.artifact.artifactId) : null;
+    const rel = view?.path ?? project.entryViews[0]?.path ?? basename(project.designPath);
+    let selectedHtml = body.elementHtml ?? body.snippet;
+    if (!selectedHtml && body.eid) {
+      const root = await this.effectiveRoot(workspacePath, project);
+      const abs = resolve(root, project.pathKind === "file" ? basename(project.designPath) : rel);
+      selectedHtml = studioElementHtml(await readFile(abs, "utf8"), body.eid);
+    }
+    const preamble = [`§ GAIA Design Studio`, `project → ${project.projectId}`, `room → ${project.roomId}`, `head → ${project.headVersionId ?? "null"}`, `artifact source path → ${effective}`, `source → ${effective}`, `view → ${view?.id ?? project.defaultViewId} · ${rel}`, `preview → ${preview}`, `selected eid → ${body.eid ?? "none"}`, `selected element html → ${selectedHtml ?? "none"}`, `latest screenshot path → ${screenshot?.path ?? "none"}`, `instruction → change exactly what is on the screen`, `write boundary → ${effective}`, `finish → edit files · inspect preview · report changed paths`, ``, `@gaia ${body.text ?? ""}`].join("\n");
     const service = await this.options.serviceFor(project.workspaceId, project.roomId);
     const task = await service.sendMessage(preamble, { recordUserMessage: true });
     this.options.broadcast({ type: "studio-iteration", workspaceId: project.workspaceId, roomId: project.roomId, projectId, taskId: task.id, status: "queued" } as UiEvent);
@@ -302,6 +360,21 @@ export class StudioService {
     if (!id) return null;
     const raw = await readJson(join(this.versionsDir(workspacePath, project), `${id}.json`));
     return raw && typeof raw === "object" ? (raw as StudioVersion) : null;
+  }
+
+  private async currentArtifactPayload(roomId: string, artifactId: string): Promise<{ bytes: Uint8Array; mediaType: string; etag: string }> {
+    const { workspacePath } = await this.findArtifactProject(roomId, artifactId);
+    const artifact = await readArtifact({ rootDir: workspacePath, roomId }, artifactId);
+    return { bytes: artifact.payload, mediaType: artifact.manifest.mediaType, etag: artifact.manifest.sha256 };
+  }
+
+  private async findArtifactProject(roomId: string, artifactId: string): Promise<{ workspacePath: string; registry: StudioRegistry; project: StudioProject }> {
+    for (const workspace of await this.options.registry.list()) {
+      const registry = await this.readRegistry(workspace.path);
+      const project = Object.values(registry.projects).find((candidate) => candidate.artifact?.roomId === roomId && candidate.artifact.artifactId === artifactId);
+      if (project) return { workspacePath: workspace.path, registry, project };
+    }
+    throw new StudioNotFoundError("Artifact Studio project not found");
   }
 
   private async findProject(projectId: string): Promise<{ workspacePath: string; registry: StudioRegistry; project: StudioProject }> {

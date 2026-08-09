@@ -125,6 +125,45 @@ test("studio HTTP routes delegate and return scoped responses", async () => {
     const openedResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/studio`, { method: "POST" });
     assert.equal(openedResponse.status, 200);
     const openedBody = await openedResponse.json() as { project: { projectId: string; headVersionId: string } };
+    const instrumentedResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?instrument=1`);
+    assert.equal(instrumentedResponse.status, 200);
+    const instrumented = await instrumentedResponse.text();
+    assert.match(instrumented, /data-gaia-eid="[a-f0-9]{12}"/);
+    assert.match(instrumented, /\/src\/design\/studio-bridge\.js/);
+    const reinstrumentedResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?instrument=1`);
+    assert.equal(await reinstrumentedResponse.text(), instrumented);
+    const eid = /<h1[^>]*data-gaia-eid="([a-f0-9]{12})"/.exec(instrumented)?.[1];
+    assert.ok(eid);
+    const patchResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/patch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eid, text: "patched", css: { color: "red" }, attrs: { title: "hero" }, baseVersion: openedBody.project.headVersionId }),
+    });
+    assert.equal(patchResponse.status, 200);
+    const patchBody = await patchResponse.json() as { version: { versionId: string; parentVersionId: string }; inPlace: boolean };
+    assert.equal(patchBody.version.parentVersionId, openedBody.project.headVersionId);
+    assert.equal(patchBody.inPlace, true);
+    assert.equal(Buffer.from((await readArtifact({ rootDir: root, roomId: DEFAULT_ROOM }, manifest.artifactId)).payload).toString("utf8"), '<h1 style="color: red" title="hero">patched</h1>');
+    const stalePatchResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/patch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eid, text: "stale", baseVersion: openedBody.project.headVersionId }),
+    });
+    assert.equal(stalePatchResponse.status, 409);
+    const pngDataUrl = `data:image/png;base64,${Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64")}`;
+    const screenshotResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/screenshot`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dataUrl: pngDataUrl }),
+    });
+    assert.equal(screenshotResponse.status, 200);
+    const screenshotBody = await screenshotResponse.json() as { path: string; version: string };
+    assert.equal(screenshotBody.version, patchBody.version.versionId);
+    assert.deepEqual(Array.from(await readFile(screenshotBody.path)), [137, 80, 78, 71, 13, 10, 26, 10]);
+    const latestScreenshotResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/screenshot`);
+    assert.equal(latestScreenshotResponse.status, 200);
+    assert.equal(((await latestScreenshotResponse.json()) as { path: string }).path, screenshotBody.path);
+    openedBody.project.headVersionId = patchBody.version.versionId;
     const eventAbort = new AbortController();
     const eventsResponse = await fetch(`${running.url}api/events?workspaceId=${encodeURIComponent(record.id)}&roomId=${DEFAULT_ROOM}`, { signal: eventAbort.signal });
     const reader = eventsResponse.body!.getReader();

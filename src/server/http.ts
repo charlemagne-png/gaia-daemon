@@ -515,7 +515,7 @@ export class GaiaWebServer {
     const roomArtifactPayloadMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts\/([^/]+)\/payload$/);
     if (roomArtifactPayloadMatch && method === "GET") {
       try {
-        const artifact = await this.daemon.readRoomArtifactPayload(decodeURIComponent(roomArtifactPayloadMatch[1] ?? ""), decodeURIComponent(roomArtifactPayloadMatch[2] ?? ""), url.searchParams.get("version") ?? undefined);
+        const artifact = await this.daemon.readRoomArtifactPayload(decodeURIComponent(roomArtifactPayloadMatch[1] ?? ""), decodeURIComponent(roomArtifactPayloadMatch[2] ?? ""), url.searchParams.get("version") ?? undefined, url.searchParams.get("instrument") === "1");
         const mediaType = artifact.mediaType.startsWith("text/html") && !artifact.mediaType.toLowerCase().includes("charset=") ? "text/html; charset=utf-8" : artifact.mediaType;
         response.writeHead(200, {
           "content-type": mediaType,
@@ -530,6 +530,30 @@ export class GaiaWebServer {
         json(response, 404, { error: error instanceof Error ? error.message : String(error) });
       }
       return;
+    }
+    const roomArtifactPatchMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts\/([^/]+)\/patch$/);
+    if (roomArtifactPatchMatch && method === "POST") {
+      try {
+        return json(response, 200, await this.daemon.patchRoomArtifact(decodeURIComponent(roomArtifactPatchMatch[1] ?? ""), decodeURIComponent(roomArtifactPatchMatch[2] ?? ""), await parseBody(request) as { eid?: string; css?: Record<string, string>; text?: string; attrs?: Record<string, string | null>; baseVersion?: string | null }));
+      } catch (error) {
+        if (error instanceof StudioConflictError) return json(response, 409, { error: error.message, currentHead: error.currentHead });
+        return json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const roomArtifactScreenshotMatch = path.match(/^\/api\/rooms\/([^/]+)\/artifacts\/([^/]+)\/screenshot$/);
+    if (roomArtifactScreenshotMatch && method === "POST") {
+      try {
+        return json(response, 200, await this.daemon.saveRoomArtifactScreenshot(decodeURIComponent(roomArtifactScreenshotMatch[1] ?? ""), decodeURIComponent(roomArtifactScreenshotMatch[2] ?? ""), await parseBody(request) as { dataUrl?: string }));
+      } catch (error) {
+        return json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (roomArtifactScreenshotMatch && method === "GET") {
+      try {
+        return json(response, 200, await this.daemon.latestRoomArtifactScreenshot(decodeURIComponent(roomArtifactScreenshotMatch[1] ?? ""), decodeURIComponent(roomArtifactScreenshotMatch[2] ?? "")) ?? { path: null, version: null });
+      } catch (error) {
+        return json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
     }
 
     if (path.startsWith("/api/studio/")) return this.handleStudio(request, response, url);
@@ -1361,7 +1385,7 @@ export class GaiaWebServer {
       const versionsMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/versions$/);
       if (versionsMatch && method === "GET") return json(response, 200, await this.daemon.studio.versions(decodeURIComponent(versionsMatch[1] ?? ""), Number(url.searchParams.get("limit") ?? "50")));
       const iterateMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/iterate$/);
-      if (iterateMatch && method === "POST") return json(response, 202, await this.daemon.studio.iterate(decodeURIComponent(iterateMatch[1] ?? ""), await parseBody(request) as { text?: string; viewId?: string; baseVersionId?: string | null }));
+      if (iterateMatch && method === "POST") return json(response, 202, await this.daemon.studio.iterate(decodeURIComponent(iterateMatch[1] ?? ""), await parseBody(request) as { text?: string; viewId?: string; baseVersionId?: string | null; eid?: string; elementHtml?: string; snippet?: string }));
       const previewMatch = path.match(/^\/api\/studio\/projects\/([^/]+)\/preview\/([^/]+)$/);
       if (previewMatch && method === "GET") {
         response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; frame-src 'self'; style-src 'unsafe-inline'" });

@@ -316,11 +316,24 @@ export class Daemon {
     return readArtifact(await this.artifactLocation(roomId), artifactId);
   }
 
-  async readRoomArtifactPayload(roomId: string, artifactId: string, versionId?: string): Promise<{ bytes: Uint8Array; mediaType: string; etag: string }> {
+  async readRoomArtifactPayload(roomId: string, artifactId: string, versionId?: string, instrument = false): Promise<{ bytes: Uint8Array; mediaType: string; etag: string }> {
     const workspace = await this.artifactWorkspace(roomId);
+    if (instrument) return this.studio.instrumentArtifactPayload(roomId, artifactId, versionId);
     if (versionId) return this.studio.artifactVersionPayload(roomId, artifactId, versionId);
     const artifact = await readArtifact({ rootDir: workspace.path, roomId }, artifactId);
     return { bytes: artifact.payload, mediaType: artifact.manifest.mediaType, etag: artifact.manifest.sha256 };
+  }
+
+  patchRoomArtifact(roomId: string, artifactId: string, body: { eid?: string; css?: Record<string, string>; text?: string; attrs?: Record<string, string | null>; baseVersion?: string | null }): Promise<unknown> {
+    return this.studio.patchArtifact(roomId, artifactId, body);
+  }
+
+  saveRoomArtifactScreenshot(roomId: string, artifactId: string, body: { dataUrl?: string }): Promise<unknown> {
+    return this.studio.saveArtifactScreenshot(roomId, artifactId, body);
+  }
+
+  latestRoomArtifactScreenshot(roomId: string, artifactId: string): Promise<unknown> {
+    return this.studio.latestArtifactScreenshot(roomId, artifactId);
   }
 
   async openArtifactInStudio(roomId: string, artifactId: string): Promise<{ project: unknown }> {
