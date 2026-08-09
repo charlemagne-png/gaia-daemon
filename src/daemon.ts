@@ -55,7 +55,7 @@ import { TtsCallBridge } from "./services/voice-tts-bridge.js";
 import { SttCallBridge } from "./services/voice-stt-bridge.js";
 import { KeepAwakeManager, keepAwakeCapability, migrateLegacyLaunchdAgent, readKeepAwakeSetting, writeKeepAwakeSetting } from "./services/keep-awake.js";
 import { readUserNameSetting, writeUserNameSetting } from "./services/user-name.js";
-import { StudioService } from "./services/studio-service.js";
+import { StudioNotFoundError, StudioService } from "./services/studio-service.js";
 import { listArtifacts, readArtifact, type ArtifactLocation } from "./services/artifacts.js";
 import type { ArtifactManifest, StoredArtifact } from "./domain/artifacts.js";
 
@@ -324,8 +324,16 @@ export class Daemon {
     return { bytes: artifact.payload, mediaType: artifact.manifest.mediaType, etag: artifact.manifest.sha256 };
   }
 
-  patchRoomArtifact(roomId: string, artifactId: string, body: { eid?: string; css?: Record<string, string>; text?: string; attrs?: Record<string, string | null>; baseVersion?: string | null }): Promise<unknown> {
-    return this.studio.patchArtifact(roomId, artifactId, body);
+  async patchRoomArtifact(roomId: string, artifactId: string, body: { eid?: string; css?: Record<string, string>; text?: string; attrs?: Record<string, string | null>; baseVersion?: string | null }): Promise<unknown> {
+    try {
+      return await this.studio.patchArtifact(roomId, artifactId, body);
+    } catch (error) {
+      if (!(error instanceof StudioNotFoundError)) throw error;
+      // First patch on an artifact never opened in Studio: bind it, then retry once
+      // against the freshly created head (client could not have known it yet).
+      const opened = await this.openArtifactInStudio(roomId, artifactId) as { project?: { headVersionId?: string | null } };
+      return this.studio.patchArtifact(roomId, artifactId, { ...body, baseVersion: opened.project?.headVersionId ?? null });
+    }
   }
 
   saveRoomArtifactScreenshot(roomId: string, artifactId: string, body: { dataUrl?: string }): Promise<unknown> {

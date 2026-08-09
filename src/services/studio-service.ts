@@ -86,7 +86,9 @@ export class StudioService {
       }
       const roomId = input.roomId ?? newId("studio_room");
       const existingRoomProjectId = registry.byRoom[roomId];
-      if (existingRoomProjectId && existingRoomProjectId !== existingId) throw new Error("Room is already bound to another Studio project");
+      // Artifact-bound projects are keyed by payload path — a room may hold MANY
+      // artifacts, so room-uniqueness applies only to plain design projects.
+      if (!input.artifact && existingRoomProjectId && existingRoomProjectId !== existingId) throw new Error("Room is already bound to another Studio project");
       const pathKind = stat.isFile() ? "file" : "folder";
       const entryViews = await discoverEntryViews(target, pathKind, input.entryView);
       const now = new Date().toISOString();
@@ -113,7 +115,7 @@ export class StudioService {
       }
       registry.projects[project.projectId] = project;
       registry.byPath[target] = project.projectId;
-      registry.byRoom[roomId] = project.projectId;
+      if (!input.artifact || !registry.byRoom[roomId]) registry.byRoom[roomId] = project.projectId;
       await this.writeRegistry(workspace.path, registry);
       const version = await this.snapshot(workspace.path, project, { kind: "human" }, "initial snapshot", null);
       project.headVersionId = version.versionId;
@@ -363,7 +365,24 @@ export class StudioService {
   }
 
   private async currentArtifactPayload(roomId: string, artifactId: string): Promise<{ bytes: Uint8Array; mediaType: string; etag: string }> {
-    const { workspacePath } = await this.findArtifactProject(roomId, artifactId);
+    // Instrumentation must not require a Studio project: fall back to any workspace
+    // that stores the artifact (patching auto-opens the project on demand).
+    let workspacePath: string | undefined;
+    try {
+      workspacePath = (await this.findArtifactProject(roomId, artifactId)).workspacePath;
+    } catch (error) {
+      if (!(error instanceof StudioNotFoundError)) throw error;
+      for (const workspace of await this.options.registry.list()) {
+        try {
+          await readArtifact({ rootDir: workspace.path, roomId }, artifactId);
+          workspacePath = workspace.path;
+          break;
+        } catch {
+          continue;
+        }
+      }
+      if (!workspacePath) throw error;
+    }
     const artifact = await readArtifact({ rootDir: workspacePath, roomId }, artifactId);
     return { bytes: artifact.payload, mediaType: artifact.manifest.mediaType, etag: artifact.manifest.sha256 };
   }

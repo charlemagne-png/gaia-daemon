@@ -197,6 +197,19 @@ test("studio HTTP routes delegate and return scoped responses", async () => {
     const savedVersionResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?version=${encodeURIComponent(saveBody.version.versionId)}`);
     assert.equal(savedVersionResponse.status, 200);
     assert.equal((await savedVersionResponse.text()).length, largePayload.length);
+    const fresh = await createArtifact({ rootDir: root, roomId: DEFAULT_ROOM }, { name: "fresh", kind: "html", mediaType: "text/html; charset=utf-8", payload: "<h1>fresh</h1>" }, { id: () => "artifact_fresh", now: () => "2026-01-01T00:00:00.000Z" });
+    const freshInstrumented = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${fresh.artifactId}/payload?instrument=1`);
+    assert.equal(freshInstrumented.status, 200);
+    const freshHtml = await freshInstrumented.text();
+    assert.match(freshHtml, /data-gaia-eid="[a-f0-9]{12}"/);
+    const freshEid = /<h1[^>]*data-gaia-eid="([a-f0-9]{12})"/.exec(freshHtml)?.[1];
+    const freshPatch = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${fresh.artifactId}/patch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eid: freshEid, text: "fresh patched", baseVersion: null }),
+    });
+    assert.equal(freshPatch.status, 200);
+    assert.match(Buffer.from((await readArtifact({ rootDir: root, roomId: DEFAULT_ROOM }, fresh.artifactId)).payload).toString("utf8"), /fresh patched/);
     await writeFile(workspacePaths.roomArtifactPayload(root, DEFAULT_ROOM, manifest.artifactId), "corrupt");
     const corruptResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload`);
     assert.equal(corruptResponse.status, 404);
