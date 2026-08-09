@@ -125,6 +125,7 @@ test("studio HTTP routes delegate and return scoped responses", async () => {
     const openedResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/studio`, { method: "POST" });
     assert.equal(openedResponse.status, 200);
     const openedBody = await openedResponse.json() as { project: { projectId: string; headVersionId: string } };
+    const initialHeadVersionId = openedBody.project.headVersionId;
     const instrumentedResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?instrument=1`);
     assert.equal(instrumentedResponse.status, 200);
     const instrumented = await instrumentedResponse.text();
@@ -190,7 +191,7 @@ test("studio HTTP routes delegate and return scoped responses", async () => {
     const savedPayloadResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload`);
     assert.equal(savedPayloadResponse.status, 200);
     assert.equal((await savedPayloadResponse.text()).length, largePayload.length);
-    const initialVersionResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?version=${encodeURIComponent(openedBody.project.headVersionId)}`);
+    const initialVersionResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?version=${encodeURIComponent(initialHeadVersionId)}`);
     assert.equal(initialVersionResponse.status, 200);
     assert.equal(await initialVersionResponse.text(), "<h1>artifact</h1>");
     const savedVersionResponse = await fetch(`${running.url}api/rooms/${DEFAULT_ROOM}/artifacts/${manifest.artifactId}/payload?version=${encodeURIComponent(saveBody.version.versionId)}`);
