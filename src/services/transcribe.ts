@@ -211,12 +211,11 @@ function replicateAudioDataUrl(audio: SttAudioInput): string {
 }
 
 function replicateLanguage(language?: string): string {
-  const names: Record<string, string> = {
-    en: "english", de: "german", es: "spanish", fr: "french", it: "italian", pt: "portuguese",
-    nl: "dutch", pl: "polish", ru: "russian", uk: "ukrainian", ja: "japanese", ko: "korean",
-    zh: "chinese", ar: "arabic", hi: "hindi", tr: "turkish",
-  };
-  return names[language?.trim().toLowerCase() ?? ""] ?? "None";
+  // openai/whisper enum: "auto" + ISO-639-1 codes (lowercase) + capitalized
+  // English names. Empty/unknown -> "auto" (auto-detect); "None" is rejected
+  // with a 422 by current model versions.
+  const code = language?.trim().toLowerCase() ?? "";
+  return code || "auto";
 }
 
 function replicateText(output: unknown): string {

@@ -178,7 +178,7 @@ test("replicate: POSTs a data-url clip to the configured model and returns trans
     assert.equal(body.version, "version-id");
     assert.equal(body.input.audio, "data:audio/wav;base64,AQID");
     assert.equal(body.input.task, "transcribe");
-    assert.equal(body.input.language, "english");
+    assert.equal(body.input.language, "en");
   } finally {
     restore();
   }
