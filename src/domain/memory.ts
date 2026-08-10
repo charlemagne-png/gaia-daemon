@@ -13,14 +13,20 @@ export type MemoryAction = "add" | "replace" | "remove";
 export const CORE_MEMORY_FILE = "MEMORY.md";
 export const USER_MEMORY_FILE = "USER.md";
 
-// Tight caps on the always-injected files force consolidation instead of
-// letting memory grow into an unbounded junk drawer; topic files are read
-// on demand, so they get a looser cap.
+// Caps on the always-injected files force consolidation instead of letting
+// memory grow into an unbounded junk drawer; topic files are read on demand,
+// so they get a looser cap. Env-tunable (uncap decree 2026-08-10): the
+// always-injected files still need SOME ceiling — they cost context every
+// turn — but the floor is now 4× the old defaults.
+function envLimit(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 const FILE_LIMITS: Record<string, number> = {
-  [CORE_MEMORY_FILE]: 8_000,
-  [USER_MEMORY_FILE]: 4_000,
+  [CORE_MEMORY_FILE]: envLimit("GAIA_MEMORY_CORE_LIMIT", 32_000),
+  [USER_MEMORY_FILE]: envLimit("GAIA_MEMORY_USER_LIMIT", 16_000),
 };
-const TOPIC_FILE_LIMIT = 30_000;
+const TOPIC_FILE_LIMIT = envLimit("GAIA_MEMORY_TOPIC_LIMIT", 120_000);
 const CONSOLIDATE_THRESHOLD = 0.8;
 
 const DELIMITER = "§";
