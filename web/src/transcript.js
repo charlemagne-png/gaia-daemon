@@ -299,7 +299,7 @@ function messageViews() {
   // drops the queued task from the snapshot, so the ghost swaps to the committed
   // bubble with no overlap).
   for (const task of state.snapshot?.tasks ?? []) {
-    if (task.status !== "queued" || !task.text.trim()) continue;
+    if ((task.status !== "queued" && task.status !== "paused") || !task.text.trim()) continue;
     // Agent-authored hand-offs / summon callbacks aren't human-typed: their
     // driving text is an agent message or an internal pointer, not a queued
     // user message, so they get no "user →" ghost (the summon result note and
@@ -310,7 +310,7 @@ function messageViews() {
     if (task.recorded) continue;
     views.push({
       id: `queued:${task.id}`,
-      version: "queued",
+      version: task.status === "paused" ? "queued-paused" : "queued",
       timestamp: task.startedAt,
       author: "user",
       targets: task.targets ?? [],

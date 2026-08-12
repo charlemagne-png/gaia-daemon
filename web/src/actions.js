@@ -599,6 +599,31 @@ export async function deleteQueuedMessage(taskId) {
   }
 }
 
+/**
+ * Pause or resume a still-queued message (⏸/▶ in the tasks panel). Paused
+ * entries keep their queue slot but drain skips them until resumed. A 404
+ * means it already started running — the next snapshot reconciles.
+ * @param {string} taskId @param {boolean} paused
+ */
+export async function setQueuedPaused(taskId, paused) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  try {
+    await api(
+      `/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/queue/${encodeURIComponent(taskId)}/paused`,
+      { method: "POST", body: JSON.stringify({ paused }) },
+    );
+    // Reflect immediately so the chip flips without waiting for SSE.
+    if (state.snapshot === snapshot) {
+      const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
+      if (task) task.status = paused ? "paused" : "queued";
+      markDirty("transcript", "panel", "status", "composer");
+    }
+  } catch (error) {
+    setError(error);
+  }
+}
+
 export async function cancelActiveTask() {
   const snapshot = state.snapshot;
   if (!snapshot || !activeTask(snapshot)) return;

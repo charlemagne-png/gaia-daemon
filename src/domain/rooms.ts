@@ -329,6 +329,7 @@ function queueFrom(value: unknown): QueuedMessage[] | undefined {
       ...(attachments ? { attachments } : {}),
       ...(raw.fromAgentDialogue === true ? { fromAgentDialogue: true } : {}),
       ...(raw.nativeCommand === true ? { nativeCommand: true } : {}),
+      ...(raw.paused === true ? { paused: true } : {}),
       ...(raw.stallRetried === true ? { stallRetried: true } : {}),
       ...(typeof raw.authRetries === "number" ? { authRetries: raw.authRetries } : {}),
       ...(typeof raw.notBefore === "string" ? { notBefore: raw.notBefore } : {}),
@@ -664,7 +665,20 @@ export class RoomHandle {
    * two-phase hand-off that makes a crash re-drain instead of losing the
    * message (the old dequeue-first held it in memory only). */
   async peekQueue(): Promise<QueuedMessage | undefined> {
-    return (await this.state()).queue?.[0];
+    // Paused entries are invisible to drain: the first RUNNABLE entry is the
+    // head. A paused head never blocks the entries behind it.
+    return (await this.state()).queue?.find((entry) => !entry.paused);
+  }
+
+  /** Durably pause/resume one queued entry (tasks-panel ⏸/▶). Idempotent;
+   * no-op when the entry already drained into a running turn. */
+  async setQueuedPaused(taskId: string, paused: boolean): Promise<void> {
+    await this.updateState((state) => {
+      const entry = state.queue?.find((candidate) => candidate.taskId === taskId);
+      if (!entry) return;
+      if (paused) entry.paused = true;
+      else delete entry.paused;
+    });
   }
 
   /** Durably reserve the transcript event id a queued message will commit

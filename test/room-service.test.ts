@@ -3007,3 +3007,69 @@ test("resume: a message that arrives while the target room is mid-turn STEERS it
   const finalState = await room.state();
   assert.equal(finalState.queue ?? undefined, undefined, "resume-as-steer never lands in the durable queue");
 });
+
+test("/queue: parks mid-turn instead of steering; pause holds it through settle, resume drains it", async () => {
+  let releaseFirst: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let first = true;
+  const steeredWith: string[] = [];
+  const { service, root } = await makeService({
+    roomId: "queue-room",
+    runtimeFactory: (agent) => {
+      const runtime = {
+        agent,
+        modelLabel: "test/model",
+        capabilities: { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsSteer: true },
+        async *send(): AsyncIterable<AgentEvent> {
+          if (first) {
+            first = false;
+            await gate;
+          }
+          yield { type: "text-delta", delta: "done" };
+        },
+        async abort() {},
+        dispose() {},
+        async steer(_roomId: string, text: string): Promise<boolean> {
+          steeredWith.push(text);
+          return true;
+        },
+      };
+      return runtime as unknown as AgentRuntime;
+    },
+  });
+
+  const first_ = service.sendMessage("start the task");
+  await sleep(20); // let the turn become active
+
+  // /queue while the SAME agent is mid-turn: never steered, durably parked.
+  const queued = await service.sendMessage("/queue also check the edge case");
+  assert.equal(queued.status, "queued");
+  assert.deepEqual(steeredWith, [], "/queue must not inject into the running turn");
+  const room = await RoomHandle.open(root, "queue-room");
+  assert.equal((await room.state()).queue?.[0]?.text, "also check the edge case", "the idea text (without /queue) is what's parked");
+
+  // Pause: the settled turn's drain must skip it.
+  const pausedTask = await service.setQueuedPaused(queued.id, true);
+  assert.equal(pausedTask?.status, "paused");
+  releaseFirst();
+  await first_;
+  await service.waitForIdle();
+  await sleep(30); // give a (wrong) drain a chance to run it
+  room.invalidate(); // observe the service handle's writes, not this handle's cache
+  assert.equal((await room.state()).queue?.[0]?.paused, true, "paused entry survives the settle-drain");
+  let { events: transcript } = await room.eventsFrom(0);
+  assert.equal(transcript.filter((event) => event.author === "user" && event.text === "also check the edge case").length, 0);
+
+  // Resume: it drains and runs as its own turn.
+  const resumedTask = await service.setQueuedPaused(queued.id, false);
+  assert.equal(resumedTask?.status === "queued" || resumedTask?.status === "running", true);
+  await sleep(30);
+  await service.waitForIdle();
+  room.invalidate();
+  assert.equal((await room.state()).queue ?? undefined, undefined, "resume drained the entry");
+  ({ events: transcript } = await room.eventsFrom(0));
+  assert.equal(transcript.filter((event) => event.author === "user" && event.text === "also check the edge case").length, 1);
+  assert.equal(transcript.filter((event) => event.author === "gaia").length, 2, "the parked idea ran as its own second turn");
+});

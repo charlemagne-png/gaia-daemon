@@ -1409,6 +1409,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .task.cancelled span { color: var(--muted); }
 .task.queued { opacity: 0.8; }
 .task.queued span { color: var(--warn); opacity: 0.85; }
+.task.paused { opacity: 0.7; }
+.task.paused span { color: var(--muted); }
+.task-actions { display: inline-flex; gap: 4px; margin-left: auto; }
+.task-action { border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; padding: 0 5px; line-height: 1.4; font-size: 11px; }
+.task-action:hover { color: var(--fg); border-color: var(--fg); }
+.task-action.danger:hover { color: var(--warn); border-color: var(--warn); }
 
 .dot { width: 7px; height: 7px; margin-top: 4px; background: var(--muted); box-shadow: 0 0 8px currentColor; }
 .dot.running { background: var(--warn); }

@@ -194,6 +194,10 @@ export interface QueuedMessage {
    * busy turn — drain must run it as a command turn to its pinned target, not
    * re-parse it as a slash command (which would just error). */
   nativeCommand?: boolean;
+  /** User-paused queue entry (the ⏸ in the tasks panel / a /queue idea put on
+   * hold): drain skips it — it stays durably parked until resumed or dropped.
+   * Pure queue-layer data, uniform across harnesses. */
+  paused?: boolean;
   queuedAt: string;
   /** The user event id pre-assigned to this message. Set durably BEFORE the
    * transcript append so the queue→transcript hand-off is crash-idempotent:
@@ -891,7 +895,7 @@ export type AgentEvent =
 // on the streaming events so clients key runtime details by transcript event
 // instead of guessing by author+text)
 
-export type TaskStatus = "queued" | "running" | "complete" | "error" | "cancelled";
+export type TaskStatus = "queued" | "paused" | "running" | "complete" | "error" | "cancelled";
 
 export interface Task {
   id: string;

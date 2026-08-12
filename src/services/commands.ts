@@ -24,6 +24,7 @@ export type SlashCommand =
   | { type: "compact"; agent?: string }
   | { type: "schedule"; sub: "list" | "run"; id?: string }
   | { type: "steer"; text?: string }
+  | { type: "queue"; text?: string }
   | { type: "cancel" }
   | { type: "recall"; agent?: string; query?: string }
   | { type: "rewind"; count?: string }
@@ -67,6 +68,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "compact", type: "compact", description: "compact an agent's session context via its harness: /compact [agent]" },
   { name: "schedule", type: "schedule", description: "list scheduled jobs or run one now: /schedule [run <id>]" },
   { name: "steer", type: "steer", description: "inject guidance into the running turn: /steer <text>" },
+  { name: "queue", type: "queue", description: "park an idea on the durable queue without steering the running turn: /queue <text> (pause/resume it in the tasks panel)" },
   { name: "cancel", type: "cancel", description: "stop the running turn and drop queued messages", aliases: ["stop"] },
   { name: "recall", type: "recall", description: "search memory + room history: /recall [@agent] <query>" },
   { name: "rewind", type: "rewind", description: "undo the last user turn(s) and their replies: /rewind [n]" },
@@ -154,6 +156,8 @@ export function parseCommand(input: string): SlashCommand {
       return args[0]?.toLowerCase() === "run" ? { type: "schedule", sub: "run", id: args[1] } : { type: "schedule", sub: "list" };
     case "steer":
       return { type: "steer", text: args.join(" ") || undefined };
+    case "queue":
+      return { type: "queue", text: args.join(" ") || undefined };
     case "recall": {
       // Only an explicit @-prefix names an agent; anything else is the query.
       const hasAgent = args[0]?.startsWith("@") ?? false;

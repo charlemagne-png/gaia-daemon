@@ -343,6 +343,9 @@ const COMMANDS: Record<string, CommandHandler> = {
   // steer and cancel never reach this registry: both must run WHILE a task is
   // active, so sendMessage handles them before the busy-queue branch.
   steer: (service, command) => (command.type === "steer" ? service.runSteerCommand(command.text) : Promise.resolve("")),
+  // A bare /queue (no text) only — /queue <text> is rewritten to a queued
+  // message turn in sendMessage before this registry is consulted.
+  queue: async () => "usage: /queue <text> — park an idea on the durable queue without steering the running turn; pause/resume it under tasks in the room panel",
   cancel: (service) => service.runCancelCommand(),
   fork: (service) => service.runForkCommand(),
   unknown: (service, command) => (command.type === "unknown" ? service.runUnknownCommand(command) : Promise.resolve("")),
@@ -580,7 +583,7 @@ export class RoomService {
           roomId: this.roomId,
           text: message.text,
           targets: message.targets,
-          status: "queued" as const,
+          status: message.paused ? ("paused" as const) : ("queued" as const),
           startedAt: message.queuedAt,
           ...(message.attachments?.length ? { attachments: message.attachments } : {}),
           // Agent-authored hand-offs/summon callbacks aren't "user →" ghosts.
@@ -606,6 +609,15 @@ export class RoomService {
     await this.init();
 
     let command: RoomCommand = parseCommand(text);
+    // /queue <idea>: explicit park — never steers the running turn, rides the
+    // same durable-queue opt-in as Cmd/Ctrl+Enter (options.queue). Rewritten to
+    // a plain message turn so it takes the normal WAL/queue path; a bare
+    // /queue falls through to the registry's usage reply.
+    if (command.type === "queue" && command.text) {
+      text = command.text;
+      command = { type: "message", text };
+      options = { ...options, queue: true };
+    }
     // Harness-native passthrough: an unrecognized `/command` becomes a command
     // TURN to the active agent when that agent has CHECKED that command as a
     // skill (claude builtins like deep-research) and its harness can run them.
@@ -1189,6 +1201,25 @@ export class RoomService {
     task.endedAt = new Date().toISOString();
     this.recentTasks = [...this.recentTasks.slice(-9), task];
     this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    return task;
+  }
+
+  /** Pause or resume ONE still-queued message (tasks-panel ⏸/▶). Same shared
+   * queue-layer construction as deleteQueuedMessage — durable-first (persist
+   * the flag, then flip the chip), no runtime touched, zero harness branching.
+   * Paused entries are skipped by drain (peekQueue) but keep their queue slot;
+   * resuming re-drains immediately when the room is idle. Returns the task, or
+   * undefined when the entry already drained into a running turn. */
+  async setQueuedPaused(taskId: string, paused: boolean): Promise<Task | undefined> {
+    await this.init();
+    const task = this.queuedTasks.find((candidate) => candidate.id === taskId);
+    if (!task) return undefined;
+    await this.room.setQueuedPaused(taskId, paused);
+    task.status = paused ? "paused" : "queued";
+    // task-start upserts the chip client-side (same event the queued chip was
+    // born with) — no new event type needed.
+    this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    if (!paused && !this.activeTask) void this.drain();
     return task;
   }
 

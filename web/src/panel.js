@@ -1,6 +1,6 @@
 // The right-hand room panel: agents (role select, main-agent star, voice call
 // button) and recent tasks.
-import { accountsCatalog, deleteAgent, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setRoomAgentDialogue } from "./actions.js";
+import { accountsCatalog, deleteAgent, deleteQueuedMessage, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
 import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
 import { $, h } from "./dom.js";
 import { LinkedText, PathText } from "./links.js";
@@ -245,14 +245,49 @@ function renderPanel() {
     h(
       "div",
       { class: "task-list" },
-      tasks.length === 0
-        ? h("div", { class: "empty", text: "no tasks" })
-        : tasks.slice(-5).map((task) => h("div", { class: `task ${task.status}` }, h("span", { text: task.status }), h("small", { text: task.text }))),
+      tasks.length === 0 ? h("div", { class: "empty", text: "no tasks" }) : TaskRows(tasks),
     ),
     ...(agentMenu ? [agentMenu] : []),
   );
   // Keep the elapsed advancing between server snapshots while any pass runs.
   armCompactTick(agents.some((agent) => agent.status === "compacting"));
+}
+
+/**
+ * Task rows: the last few settled/running tasks, then EVERY queued/paused
+ * entry (the waiting queue must stay fully visible — it's what the ⏸/▶/✕
+ * controls operate on; only history is truncated).
+ * @param {import("./types.js").Task[]} tasks
+ */
+function TaskRows(tasks) {
+  const waiting = tasks.filter((task) => task.status === "queued" || task.status === "paused");
+  const rest = tasks.filter((task) => task.status !== "queued" && task.status !== "paused").slice(-5);
+  return [...rest, ...waiting].map((task) => {
+    const isWaiting = task.status === "queued" || task.status === "paused";
+    const isPaused = task.status === "paused";
+    return h(
+      "div",
+      { class: `task ${task.status}` },
+      h("span", { text: task.status }),
+      h("small", { text: task.text, title: task.text }),
+      isWaiting
+        ? h("span", { class: "task-actions" },
+            h("button", {
+              class: "task-action",
+              title: isPaused ? "resume — let it run when the agent is free" : "pause — hold it in the queue until resumed",
+              text: isPaused ? "\u25b6" : "\u23f8",
+              onclick: () => void setQueuedPaused(task.id, !isPaused),
+            }),
+            h("button", {
+              class: "task-action danger",
+              title: "drop this queued message (it never runs)",
+              text: "\u2715",
+              onclick: () => void deleteQueuedMessage(task.id),
+            }),
+          )
+        : null,
+    );
+  });
 }
 
 /** Right-click menu on an agent row: delete (moves to trash, recoverable).

@@ -103,6 +103,31 @@ test("queue: enqueue/peek/splice/clear are durable", async () => {
   assert.equal((await reopened.state()).queue, undefined);
 });
 
+test("queue: setQueuedPaused is durable, peekQueue skips a paused head, resume restores order", async () => {
+  const room = await openRoom();
+  await room.enqueue({ taskId: "p1", text: "first", targets: ["gaia"], queuedAt: "2026-01-01" });
+  await room.enqueue({ taskId: "p2", text: "second", targets: ["gaia"], queuedAt: "2026-01-01" });
+
+  await room.setQueuedPaused("p1", true);
+  // Durability: a fresh handle (fresh process) sees the paused flag.
+  const reopened = await RoomHandle.open(room.workspaceRoot, room.roomId);
+  assert.equal((await reopened.state()).queue?.[0].paused, true);
+  // A paused head never blocks the entries behind it.
+  assert.equal((await reopened.peekQueue())?.taskId, "p2");
+
+  // Resume: the flag is deleted (not set false) and head order is restored.
+  await reopened.setQueuedPaused("p1", false);
+  assert.equal((await reopened.state()).queue?.[0].paused, undefined);
+  assert.equal((await reopened.peekQueue())?.taskId, "p1");
+
+  // Both paused → drain sees an empty queue.
+  await reopened.setQueuedPaused("p1", true);
+  await reopened.setQueuedPaused("p2", true);
+  assert.equal(await reopened.peekQueue(), undefined);
+  // Unknown id is a no-op, never a throw.
+  await reopened.setQueuedPaused("nope", true);
+});
+
 test("WAL: commitTurn appends the reserved event with details and advances the cursor atomically", async () => {
   const room = await openRoom();
   const eventId = newRoomEventId();
