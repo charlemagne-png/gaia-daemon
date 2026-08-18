@@ -1,6 +1,6 @@
 // The right-hand room panel: agents (role select, main-agent star, voice call
 // button) and recent tasks.
-import { accountsCatalog, deleteAgent, deleteQueuedMessage, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
+import { accountsCatalog, deleteAgent, deleteQueuedMessage, deleteRoomBookmark, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
 import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
 import { $, h } from "./dom.js";
 import { LinkedText, PathText } from "./links.js";
@@ -8,6 +8,7 @@ import { shortModel } from "./models.js";
 import { markDirty, registerRegion } from "./render.js";
 import { openAgentSettings } from "./settings.js";
 import { state } from "./state.js";
+import { jumpToEvent } from "./transcript.js";
 import { toggleCall } from "./voice.js";
 
 /** Account catalog for the per-agent picker below: fetched once (accountsCatalog()
@@ -63,6 +64,9 @@ function renderPanel() {
   // or the workspace default when it has none yet. Marks the "active" row and
   // is who a bare next message goes to.
   const activeAgent = snapshot ? (snapshot.room.activeAgent ?? snapshot.workspace.defaultAgent) : undefined;
+  const currentRoom = snapshot?.rooms.find((room) => room.isCurrent);
+  const bookmarks = currentRoom?.bookmarks ?? [];
+  const roomId = snapshot?.room.id ?? "";
   
   // Group agents by workspace
   const agentsByWorkspace = new Map();
@@ -97,6 +101,35 @@ function renderPanel() {
           )
         : null,
     ),
+    ...(bookmarks.length
+      ? [
+          h("h3", { text: "checkpoints" }),
+          h(
+            "div",
+            { class: "checkpoint-list" },
+            bookmarks.map((b) =>
+              h(
+                "div",
+                { class: "checkpoint-row" },
+                h("button", {
+                  type: "button",
+                  class: "checkpoint-name",
+                  title: `@${b.author} · ${b.excerpt}`,
+                  text: b.name,
+                  onclick: () => void jumpToEvent(b.eventId),
+                }),
+                h("button", {
+                  type: "button",
+                  class: "checkpoint-remove",
+                  title: "remove checkpoint",
+                  text: "✕",
+                  onclick: () => void deleteRoomBookmark(roomId, b.id),
+                }),
+              ),
+            ),
+          ),
+        ]
+      : []),
     h("h3", { text: "agents" }),
     h(
       "div",

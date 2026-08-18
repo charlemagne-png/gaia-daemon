@@ -673,6 +673,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 .message:hover .msg-action { opacity: 1; }
 .msg-action:hover { color: var(--fg); }
+.msg-action.bookmark.active { opacity: 1; color: var(--accent); text-shadow: 0 0 8px var(--glow); }
 /* Read-aloud stays visible while it is the active message (loading, speaking,
    paused, or ended-and-replayable), not just on hover. */
 .msg-action.ra-loading,
@@ -1299,6 +1300,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 .room-toggle { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
 .room-toggle input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .room-toggle:hover { color: var(--fg); }
+
+.checkpoint-list { display: grid; gap: 5px; margin: 0 0 12px; }
+.checkpoint-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; border: 1px solid var(--border); background: var(--ink); }
+.checkpoint-name { flex: 1; min-width: 0; padding: 6px 8px; border: none; background: transparent; box-shadow: none; color: var(--fg); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.checkpoint-remove { flex: 0 0 auto; padding: 0 8px; border: none; border-left: 1px solid var(--border); background: transparent; box-shadow: none; color: var(--muted); opacity: 0.45; }
+.checkpoint-row:hover .checkpoint-remove, .checkpoint-remove:focus-visible { opacity: 1; }
+.checkpoint-remove:hover { color: var(--danger); }
 
 @keyframes agent-pulse {
   0%, 100% { box-shadow: 0 0 6px var(--glow); }

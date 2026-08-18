@@ -7,7 +7,7 @@
 // rebuilding the whole transcript. v1's author+text merge heuristic is gone:
 // when the final room-event commits under the same id, the stream entry is
 // dropped and the keyed node swaps to the committed version in place.
-import { deleteQueuedMessage, retryMessage } from "./actions.js";
+import { deleteQueuedMessage, retryMessage, setRoomBookmark } from "./actions.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
 import { detectArtifacts } from "./design/artifacts.js";
@@ -15,6 +15,7 @@ import { beginEditMessage, humanSize } from "./composer.js";
 import { $, h } from "./dom.js";
 import { LinkedText } from "./links.js";
 import { MarkdownMessage } from "./markdown.js";
+import { promptText } from "./prompt.js";
 import { toggleReadAloud } from "./readaloud.js";
 import { markDirty, registerRegion, setError } from "./render.js";
 import { state } from "./state.js";
@@ -628,6 +629,7 @@ function Message(view) {
   // rewinds the room there (this failure row + the stale user message move to
   // rewound.jsonl), and re-runs the same text once — never a growing pile.
   const canResendFailedTurn = view.kind === "turn-failed" && !view.streaming && !view.queued;
+  const bm = (state.snapshot?.rooms.find((r) => r.isCurrent)?.bookmarks ?? []).find((b) => b.eventId === view.id);
   // The action row lives at the FOOT of the message (Claude-style), not the meta
   // header — on a long reply the buttons should sit where the reader ends up, not
   // scrolled far above. Built here, appended after the body below.
@@ -660,6 +662,21 @@ function Message(view) {
         })
       : null,
     isAgent && !view.streaming ? ReadAloudButton(view.id) : null,
+    !view.streaming && !view.queued && view.author !== "system"
+      ? h("button", {
+          type: "button",
+          class: `msg-action bookmark${bm ? " active" : ""}`,
+          title: bm ? `checkpoint: "${bm.name}" — click to rename` : "save as named checkpoint — pins this message as an inflection point",
+          text: "🔖",
+          onclick: async () => {
+            const name = await promptText(bm ? "Rename checkpoint" : "Name this checkpoint", {
+              value: bm?.name ?? "",
+              placeholder: "e.g. final spec locked",
+            });
+            if (name !== null && state.snapshot) void setRoomBookmark(state.snapshot.room.id, view.id, name);
+          },
+        })
+      : null,
     // A queued ghost can't be forked, but it CAN be dropped from the queue
     // before it runs — ✕ removes exactly this entry (harness-agnostic).
     view.queued && view.queuedTaskId

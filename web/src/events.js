@@ -159,7 +159,7 @@ export function connectEvents(resyncOnReady = false) {
     // "composer" too: the running banner counts THIS room's live summons from
     // snapshot.rooms — without it the banner kept showing dead summons until
     // some unrelated event happened to repaint the composer.
-    markDirty("sidebar", "tabs", "composer");
+    markDirty("sidebar", "tabs", "composer", "panel");
   });
 
   // Native pet events are globally delivered by the daemon, independent of
