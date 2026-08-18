@@ -799,6 +799,18 @@ export class GaiaWebServer {
       return this.respond(response, () => this.daemon.setRoomFavorite(params![0], params![1], favorite));
     }
 
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/bookmarks$/))) {
+      const body = await parseBody(request);
+      const eventId = stringField(body, "eventId")?.trim();
+      const name = stringField(body, "name")?.trim();
+      if (!eventId || !name) return json(response, 400, { error: "Missing eventId or name" });
+      return this.respond(response, () => this.daemon.setRoomBookmark(params![0], params![1], eventId, name));
+    }
+
+    if (method === "DELETE" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/bookmarks\/([^/]+)$/))) {
+      return this.respond(response, () => this.daemon.deleteRoomBookmark(params![0], params![1], params![2]));
+    }
+
     // Attachment upload: the pasted file's bytes as the raw body, original
     // filename in ?name=. Returns the server-issued id the client echoes back
     // on the message send. Serving is GET on the same path + /<id>.

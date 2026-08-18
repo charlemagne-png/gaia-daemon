@@ -9,7 +9,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { globalPaths } from "../core/paths.js";
-import type { AgentDef, ContextFile, MessageAttachment, RoomEvent, Workspace } from "../core/types.js";
+import type { AgentDef, ContextFile, MessageAttachment, RoomBookmark, RoomEvent, Workspace } from "../core/types.js";
 import type { MemoryStore } from "../domain/memory.js";
 import type { ResolvedRole } from "../domain/roles.js";
 import { discoverContextFiles } from "../domain/workspace.js";
@@ -73,6 +73,8 @@ export interface TurnPromptInput {
   memory?: string;
   /** Auto-retrieved memories for THIS turn; already fenced by the service. */
   recall?: string;
+  /** User-named checkpoints pinned by the human as attention anchors. */
+  checkpoints?: RoomBookmark[];
   /** Context returned by room-local command plugins. */
   pluginContext?: string;
   channel?: "text" | "voice";
@@ -319,6 +321,7 @@ export async function buildTurnPromptFor(
     events: input.transcript,
     memory: memoryChanged ? memory : undefined,
     recall: input.recall,
+    checkpoints: input.checkpoints,
     pluginContext: input.pluginContext,
     channel: input.channel,
     attachments: input.attachments,
@@ -334,6 +337,13 @@ export function buildTurnPrompt(input: TurnPromptInput): string {
     input.workDir && input.rootDir && input.workDir !== input.rootDir
       ? `Worktree: you are working in ${input.workDir} on this room's git branch — an isolated checkout of ${input.rootDir}. Commit your work; it is not in the main checkout until merged.`
       : "";
+  const checkpointsBlock = input.checkpoints?.length
+    ? [
+        "# Checkpoints — user-named inflection points of this room (attention anchors)",
+        ...input.checkpoints.map((bookmark) => `- [${formatEventTimestamp(bookmark.eventAt)}] "${bookmark.name}" — @${bookmark.author}: "${bookmark.excerpt}" (event ${bookmark.eventId})`),
+        "The user pinned these as the room's pivotal moments — weigh them when reasoning about earlier context.",
+      ].join("\n")
+    : "";
   return [
     `Room: ${input.roomId}`,
     `Current agent: @${input.agentId}`,
@@ -342,6 +352,7 @@ export function buildTurnPrompt(input: TurnPromptInput): string {
     input.memory?.trim() ? `# Your persistent memory\n\n${input.memory.trim()}` : "",
     input.recall?.trim() ?? "",
     input.pluginContext?.trim() ?? "",
+    checkpointsBlock,
     "New room events since your last turn:",
     renderRoomTranscript(input.events, input.userName),
     "Newest user message:",

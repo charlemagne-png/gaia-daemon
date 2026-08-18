@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile as readFileText } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AGENT_DIALOGUE_MAX_HOPS, RoomService, type RoomMemoryHooks } from "../src/services/room-service.js";
-import { RoomHandle } from "../src/domain/rooms.js";
+import { AGENT_DIALOGUE_MAX_HOPS, RoomService, scanRoomActivity, type RoomMemoryHooks } from "../src/services/room-service.js";
+import { RoomHandle, normalizeRoomState } from "../src/domain/rooms.js";
 import { MemoryStore } from "../src/domain/memory.js";
 import { DEFAULTS } from "../src/core/config.js";
 import { readJson } from "../src/core/store.js";
@@ -374,6 +374,39 @@ test("auto-created rooms get a fallback title and manual rename locks it", async
   state = await RoomHandle.open(root, "chat-test123").then((room) => room.state());
   assert.equal(state.title, "Readable room titles");
   assert.equal(state.titleSource, "manual");
+});
+
+test("bookmarks upsert by event id, round-trip through normalized state, and remove idempotently", async () => {
+  const { service, root } = await makeService();
+  await service.sendMessage("pin this warm inflection point");
+  await service.waitForIdle();
+  const [anchor] = (await service.room.eventsFrom(0)).events;
+  assert.ok(anchor);
+
+  const observer = await RoomHandle.open(root, "default");
+  await observer.state(); // seed cache: cross-handle assertions below must invalidate before reading service writes.
+
+  const first = await service.setBookmark(anchor.id, "  First   pin  ");
+  assert.equal(first.eventId, anchor.id);
+  assert.equal(first.name, "First pin");
+  assert.equal(first.author, "user");
+  assert.equal(first.excerpt, "pin this warm inflection point");
+
+  const renamed = await service.setBookmark(anchor.id, "Renamed pin");
+  assert.equal(renamed.id, first.id);
+  assert.equal(renamed.name, "Renamed pin");
+
+  observer.invalidate();
+  let state = await observer.state();
+  assert.deepEqual(state.bookmarks?.map((bookmark) => bookmark.id), [first.id]);
+  assert.deepEqual(normalizeRoomState({ bookmarks: state.bookmarks }).bookmarks, state.bookmarks);
+  assert.deepEqual((await scanRoomActivity(root)).find((room) => room.id === "default")?.bookmarks, state.bookmarks);
+
+  await service.removeBookmark(first.id);
+  await service.removeBookmark(first.id);
+  observer.invalidate();
+  state = await observer.state();
+  assert.equal(state.bookmarks, undefined);
 });
 
 test("auto title refinement uses the cheap DeepSeek flash model", async () => {

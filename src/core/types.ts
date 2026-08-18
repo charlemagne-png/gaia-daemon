@@ -239,6 +239,26 @@ export interface SummonDelivery {
   launchedAt: string;
 }
 
+/** A user-named checkpoint pinned to one transcript event — a durable
+ * attention anchor. Stores a frozen excerpt/author snapshot at creation so
+ * the bookmark list renders (and reaches turn prompts) without a transcript
+ * scan, and survives rewinds of unrelated history. Display + prompt metadata
+ * only: no WAL/cursor semantics. */
+export interface RoomBookmark {
+  id: string;
+  /** Transcript event this checkpoint anchors (jump target). */
+  eventId: string;
+  /** Human-given name — the inflection point's label. */
+  name: string;
+  /** Event author at creation ("user" or an agent id). */
+  author: string;
+  /** Frozen head of the event's text at creation. */
+  excerpt: string;
+  /** Event's own timestamp (ISO), for chronological ordering. */
+  eventAt: string;
+  createdAt: string;
+}
+
 export interface RoomState {
   activeRoles: Record<string, string>;
   /** Room-scoped Codex-pet bindings, keyed by agent id. Absence means pets are
@@ -299,6 +319,9 @@ export interface RoomState {
   /** Pinned by the human for quick filtering in the room list. Display-only
    * room metadata, like title: the room id/path stay stable. */
   favorite?: boolean;
+  /** User-named checkpoints anchored to transcript events (see RoomBookmark).
+   * Ordered by the anchored event's timestamp. */
+  bookmarks?: RoomBookmark[];
   /** Set on rooms created by a history import (scripts/import-claude-export):
    * the original conversation's created_at. The sidebar groups these into a
    * collapsed archive section instead of the live rooms list. */
@@ -1018,6 +1041,10 @@ export interface RoomSummary {
   title?: string;
   /** Human-pinned room (see RoomState.favorite). */
   favorite?: boolean;
+  /** User-named checkpoints (see RoomState.bookmarks) — surfaced on the
+   * summary so the client's checkpoint navigator rides the same rooms
+   * broadcast as title/favorite. */
+  bookmarks?: RoomBookmark[];
   /** Original created_at of an imported chat (see RoomState.imported). */
   imported?: string;
   /** Incognito room (see RoomState.incognito) — the tab/list marks it so an

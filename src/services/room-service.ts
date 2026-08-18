@@ -39,6 +39,7 @@ import type {
   PendingTurn,
   PetProgressStatus,
   QueuedMessage,
+  RoomBookmark,
   RoomEvent,
   RoomEventKind,
   SlashCommandDefinition,
@@ -1450,6 +1451,7 @@ export class RoomService {
             thinking: options.thinking ?? state.thinkingOverrides[target],
             ...(state.thinkingLevel ? { protocolThinkingLevel: state.thinkingLevel } : {}),
             recall,
+            ...(state.bookmarks?.length ? { checkpoints: state.bookmarks } : {}),
             ...(pluginContext ? { pluginContext } : {}),
             ...(options.nativeCommand ? { nativeCommand: true } : {}),
             ...(userName ? { userName } : {}),
@@ -3548,6 +3550,19 @@ export class RoomService {
     await this.emitRoomsChanged();
   }
 
+  /** User-named checkpoint pinned to one transcript event. */
+  async setBookmark(eventId: string, name: string): Promise<RoomBookmark> {
+    const bookmark = await this.room.setBookmark(eventId, name);
+    await this.emitRoomsChanged();
+    return bookmark;
+  }
+
+  /** Remove a checkpoint by bookmark id. Idempotent like RoomHandle. */
+  async removeBookmark(bookmarkId: string): Promise<void> {
+    await this.room.removeBookmark(bookmarkId);
+    await this.emitRoomsChanged();
+  }
+
   /** Opt-in worker self-episode (AgentDef.selfEpisode): a summoned worker
    * records ONE distilled episode of its own lane into its OWN memory. This is
    * the deliberate exception to captureEpisode's incognito short-circuit — the
@@ -3913,6 +3928,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.pendingTurn ? { running: true } : {}),
             ...(state.title ? { title: state.title } : {}),
             ...(state.favorite ? { favorite: true } : {}),
+            ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),
             ...(state.incognito ? { incognito: true } : {}),
             ...(activity ? { lastActivity: activity } : {}),

@@ -17,7 +17,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { BackgroundTask, ContextGatePending, EventDetails, MessageAttachment, MessageBlock, MonadConfig, PendingTurn, QueuedMessage, RoomEvent, RoomEventKind, RoomState, SummonDelivery, ToolDetail } from "../core/types.js";
+import type { BackgroundTask, ContextGatePending, EventDetails, MessageAttachment, MessageBlock, MonadConfig, PendingTurn, QueuedMessage, RoomBookmark, RoomEvent, RoomEventKind, RoomState, SummonDelivery, ToolDetail } from "../core/types.js";
 import { normalizePetBindings } from "./pets.js";
 import { appendJsonl, ensureDir, readJson, readJsonlFrom, writeJsonAtomic, writeText, writeTextAtomic } from "../core/store.js";
 import { workspacePaths } from "../core/paths.js";
@@ -314,6 +314,36 @@ function pendingTurnFrom(value: unknown): PendingTurn | undefined {
   };
 }
 
+/** Persisted checkpoints. A malformed entry is dropped (never bricks the
+ * room); names/excerpts are re-capped defensively on read. */
+function bookmarksFrom(value: unknown): RoomBookmark[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const bookmarks: RoomBookmark[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    if (typeof raw.id !== "string" || !raw.id.trim()) continue;
+    if (typeof raw.eventId !== "string" || !raw.eventId.trim()) continue;
+    if (typeof raw.name !== "string" || !raw.name.trim()) continue;
+    bookmarks.push({
+      id: raw.id,
+      eventId: raw.eventId,
+      name: raw.name.slice(0, BOOKMARK_NAME_MAX),
+      author: typeof raw.author === "string" && raw.author ? raw.author : "user",
+      excerpt: typeof raw.excerpt === "string" ? raw.excerpt.slice(0, BOOKMARK_EXCERPT_MAX) : "",
+      eventAt: typeof raw.eventAt === "string" ? raw.eventAt : "",
+      createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "",
+    });
+  }
+  const capped = bookmarks.slice(0, BOOKMARK_ROOM_MAX);
+  return capped.length > 0 ? capped : undefined;
+}
+
+export const BOOKMARK_NAME_MAX = 64;
+export const BOOKMARK_EXCERPT_MAX = 200;
+/** Hard per-room cap — checkpoints are inflection points, not an index of
+ * every message; the prompt block must stay small. */
+export const BOOKMARK_ROOM_MAX = 50;
+
 function queueFrom(value: unknown): QueuedMessage[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const queue: QueuedMessage[] = [];
@@ -393,6 +423,10 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(typeof value.title === "string" && value.title.trim() ? { title: value.title } : {}),
     ...(value.titleSource === "auto" || value.titleSource === "model" || value.titleSource === "manual" ? { titleSource: value.titleSource } : {}),
     ...(value.favorite === true ? { favorite: true } : {}),
+    ...(() => {
+      const bookmarks = bookmarksFrom(value.bookmarks);
+      return bookmarks ? { bookmarks } : {};
+    })(),
     ...(typeof value.imported === "string" && value.imported.trim() ? { imported: value.imported } : {}),
     ...(monad ? { monad } : {}),
     ...(pendingTurn ? { pendingTurn } : {}),
@@ -621,6 +655,54 @@ export class RoomHandle {
     if (!(agentId in all)) return;
     delete all[agentId];
     await writeJsonAtomic(this.compactionPath(), all);
+  }
+
+  // --- checkpoints (bookmarks) -----------------------------------------------
+
+  /** Upsert a checkpoint by anchored event id (a second bookmark on the same
+   * message is a rename, never a duplicate). The anchored event's author,
+   * text head, and timestamp are frozen onto the bookmark here — the one
+   * transcript scan this feature ever does per write. Throws on an unknown
+   * event or a full room. Returns the stored bookmark. */
+  async setBookmark(eventId: string, rawName: string): Promise<RoomBookmark> {
+    const name = rawName.replace(/\s+/g, " ").trim().slice(0, BOOKMARK_NAME_MAX);
+    if (!name) throw new Error("Checkpoint name cannot be empty.");
+    const { events } = await this.eventsFrom(0);
+    const event = events.find((candidate) => candidate.id === eventId);
+    if (!event) throw new Error(`Unknown event: ${eventId} — cannot bookmark a message that is not in the transcript.`);
+    const bookmark: RoomBookmark = {
+      id: newId("bmk"),
+      eventId,
+      name,
+      author: "targets" in event ? "user" : event.author,
+      excerpt: event.text.replace(/\s+/g, " ").trim().slice(0, BOOKMARK_EXCERPT_MAX),
+      eventAt: event.timestamp,
+      createdAt: new Date().toISOString(),
+    };
+    let stored: RoomBookmark = bookmark;
+    await this.updateState((state) => {
+      const existing = state.bookmarks?.find((candidate) => candidate.eventId === eventId);
+      if (existing) {
+        existing.name = name;
+        stored = existing;
+        return;
+      }
+      if ((state.bookmarks?.length ?? 0) >= BOOKMARK_ROOM_MAX) throw new Error(`Checkpoint limit reached (${BOOKMARK_ROOM_MAX} per room) — remove one first.`);
+      const next = [...(state.bookmarks ?? []), bookmark];
+      next.sort((a, b) => a.eventAt.localeCompare(b.eventAt));
+      state.bookmarks = next;
+    });
+    return stored;
+  }
+
+  /** Remove one checkpoint by bookmark id — idempotent. */
+  async removeBookmark(bookmarkId: string): Promise<void> {
+    await this.updateState((state) => {
+      if (!state.bookmarks) return;
+      const next = state.bookmarks.filter((candidate) => candidate.id !== bookmarkId);
+      if (next.length > 0) state.bookmarks = next;
+      else delete state.bookmarks;
+    });
   }
 
   async eventsFrom(cursor: number): Promise<RoomPage> {

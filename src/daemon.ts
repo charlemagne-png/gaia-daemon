@@ -13,7 +13,7 @@ import { Bus } from "./core/bus.js";
 import { DEFAULTS } from "./core/config.js";
 import { globalPaths, workspacePaths } from "./core/paths.js";
 import { readJson, writeJsonAtomic } from "./core/store.js";
-import type { AgentDef, ChatSearchHit, ChatSearchResult, KeepAwakeCapability, PetBinding, RoomState, Snapshot, UiEvent, UsageLimits, VoiceCallInfo, Workspace, WorkspaceRecord } from "./core/types.js";
+import type { AgentDef, ChatSearchHit, ChatSearchResult, KeepAwakeCapability, PetBinding, RoomBookmark, RoomState, Snapshot, UiEvent, UsageLimits, VoiceCallInfo, Workspace, WorkspaceRecord } from "./core/types.js";
 import { capabilitiesFor, type GaiaTool, harnessIdFor, harnessSpecFor } from "./harness/spec.js";
 import { findAccount } from "./domain/accounts.js";
 import { findModelWithAlias } from "./harness/model-aliases.js";
@@ -683,6 +683,18 @@ export class Daemon {
   async setRoomFavorite(workspaceId: string, roomId: string, favorite: boolean): Promise<{ rooms: Snapshot["rooms"] }> {
     const service = await this.serviceForExistingRoom(workspaceId, roomId);
     await service.setFavorite(favorite);
+    return this.refreshRoomList(workspaceId);
+  }
+
+  async setRoomBookmark(workspaceId: string, roomId: string, eventId: string, name: string): Promise<{ bookmark: RoomBookmark; rooms: Snapshot["rooms"] }> {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    const bookmark = await service.setBookmark(eventId, name);
+    return { bookmark, ...(await this.refreshRoomList(workspaceId)) };
+  }
+
+  async deleteRoomBookmark(workspaceId: string, roomId: string, bookmarkId: string): Promise<{ rooms: Snapshot["rooms"] }> {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    await service.removeBookmark(bookmarkId);
     return this.refreshRoomList(workspaceId);
   }
 
