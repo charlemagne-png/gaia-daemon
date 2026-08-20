@@ -247,6 +247,11 @@ export interface SummonOptions {
    * isolation, the child owns its own worktree instead of inheriting the
    * parent room's checkout. */
   ownWorktree?: boolean;
+  /** Substitute task text for the caller's insight ledger. Sealed pipelines
+   * (/gaiago) set this to the instruction block WITHOUT the source payload, so
+   * the source can never reach the caller's memory dir via the ledger — a
+   * guarantee by design, not by truncation budget. */
+  ledgerTask?: string;
 }
 
 export interface SummonHost {
@@ -459,13 +464,13 @@ export class SummonCoordinator implements SummonHost {
     const workerSelfEpisode = this.workspace.agents[agentId]?.selfEpisode === true;
     const ledgered = this.runChild(child, info, task, options).then(
       async (reply) => {
-        await recordInsightLedger(caller, agentId, childRoomId, task, reply, false, this.log);
+        await recordInsightLedger(caller, agentId, childRoomId, options.ledgerTask ?? task, reply, false, this.log);
         if (workerSelfEpisode) await child.captureSummonEpisode(agentId, task, reply, "complete");
         return reply;
       },
       async (error) => {
         const message = error instanceof Error ? error.message : String(error);
-        await recordInsightLedger(caller, agentId, childRoomId, task, message, true, this.log);
+        await recordInsightLedger(caller, agentId, childRoomId, options.ledgerTask ?? task, message, true, this.log);
         if (workerSelfEpisode) await child.captureSummonEpisode(agentId, task, message, "error");
         throw error;
       },

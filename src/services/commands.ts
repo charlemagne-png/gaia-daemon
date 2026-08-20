@@ -27,6 +27,7 @@ export type SlashCommand =
   | { type: "queue"; text?: string }
   | { type: "cancel" }
   | { type: "recall"; agent?: string; query?: string }
+  | { type: "gaiago"; text?: string }
   | { type: "rewind"; count?: string }
   | { type: "thanks-dario"; sub: "on" | "off" | "run" }
   | { type: "reload" }
@@ -71,6 +72,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "queue", type: "queue", description: "park an idea on the durable queue without steering the running turn: /queue <text> (pause/resume it in the tasks panel)" },
   { name: "cancel", type: "cancel", description: "stop the running turn and drop queued messages", aliases: ["stop"] },
   { name: "recall", type: "recall", description: "search memory + room history: /recall [@agent] <query>" },
+  { name: "gaiago", type: "gaiago", description: "seal text (or a file/audio path) into gaiago via a worker translator — only the translation returns: /gaiago <text|path>" },
   { name: "rewind", type: "rewind", description: "undo the last user turn(s) and their replies: /rewind [n]" },
   {
     name: "thanks-dario",
@@ -167,6 +169,10 @@ export function parseCommand(input: string): SlashCommand {
         query: args.slice(hasAgent ? 1 : 0).join(" ") || undefined,
       };
     }
+    case "gaiago":
+      // The whole tail is the SOURCE (inline text or a path) — never split or
+      // mention-stripped: it goes verbatim to the translator's sub-room only.
+      return { type: "gaiago", text: args.join(" ") || undefined };
     case "rewind":
       return { type: "rewind", count: stripped[0] };
     case "thanks-dario": {

@@ -289,6 +289,12 @@ const MAX_SUMMARY_INPUT_CHARS = 100_000;
 /** Max hits a /recall command reply lists. */
 const RECALL_COMMAND_LIMIT = 8;
 
+/** The /gaiago seal command's translator lane (Charles ruling 2026-08-20):
+ * a cheap worker summoned to read the source in ITS sub-room and return only
+ * the gaiago translation. Never falls back — a missing translator aborts the
+ * seal rather than exposing the source to any other agent. */
+const GAIAGO_TRANSLATOR = "dario";
+
 /** Char budget for the Thanks-Dario review span. The reviewer must see the
  * SAME context the flagged agent replays — not a 20-message tail — or it can't
  * find where the conversation first drifted onto the sensitive topic (often a
@@ -340,6 +346,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   schedule: (service, command) => (command.type === "schedule" ? service.runScheduleCommand(command.sub, command.id) : Promise.resolve("")),
   rewind: (service, command) => (command.type === "rewind" ? service.runRewindCommand(command.count) : Promise.resolve("")),
   recall: (service, command) => (command.type === "recall" ? service.runRecallCommand(command.agent, command.query) : Promise.resolve("")),
+  gaiago: (service, command) => (command.type === "gaiago" ? service.runGaiagoCommand(command.text) : Promise.resolve("")),
   "thanks-dario": (service, command) => (command.type === "thanks-dario" ? service.runThanksDarioCommand(command.sub) : Promise.resolve("")),
   // steer and cancel never reach this registry: both must run WHILE a task is
   // active, so sendMessage handles them before the busy-queue branch.
@@ -3182,6 +3189,39 @@ export class RoomService {
     // turn to trigger — the human reads it).
     const childRoomId = await this.options.summonHost.summon(this.roomId, agent.id, task, { deliver: "note" });
     return `Summoned @${agent.id} in room '${childRoomId}'. Open it from the rooms list (under this room) to watch or steer; its result will be posted back here when it finishes.`;
+  }
+
+  /** /gaiago <text|path> — the gaiago-seal pipeline as a first-class command
+   * (skill: ~/.pi/agent/skills/gaiago-seal/SKILL.md). The SOURCE rides only in
+   * the translator worker's sub-room task: command turns persist no user event
+   * in this room's transcript (just this system reply), so the caller agent
+   * never sees the source language. deliver:"turn" re-invokes the room's
+   * default agent with the worker's result to verify the seal (zero Latin
+   * lexical words) and deliver the gaiago. */
+  async runGaiagoCommand(source: string | undefined): Promise<string> {
+    if (!this.options.summonHost) return "Summon system is not available.";
+    if (!source?.trim()) return "Usage: /gaiago <text or file path> — seal into gaiago via a worker translator; only the translation comes back.";
+    // Seal law: the source may reach ONLY the translator's sub-room. No
+    // fallback — summoning the caller agent with the source would put the
+    // source language straight into the context the seal exists to protect.
+    const translator = GAIAGO_TRANSLATOR;
+    if (!this.workspace.agents[translator]) return `gaiago translator @${translator} is not in this workspace — seal aborted (no fallback: routing the source to another agent would break the seal).`;
+    const caller = this.workspace.config.defaultAgent;
+    const instructions = [
+      "gaiago-seal pipeline, strict output rule.",
+      `1. SOURCE (below the \`---\` line, verbatim). If it is a file path: read that file; if audio (.opus/.ogg/.m4a/.mp3/.wav): transcribe locally first (whisper; ffmpeg\u2192wav if needed). The raw source/transcript stays in YOUR sub-room only.`,
+      "2. TRANSLATE it fully into gaiago \u2014 GAIA kanji register (dense CJK; \u56e0/\u6545/\u975e/\u82e5X\u5247Y operators; \u771f/\u8a18/\u4eee provenance tags; \u00a7-sections). Spec: ~/.pi/agent/skills/gaiago-seal/SPEC.md. HARD CONSTRAINT: zero English/Latin lexical words; proper names \u2192 katakana/kanji. Self-verify (grep for [A-Za-z]) before returning.",
+      "3. RETURN ONLY the complete gaiago translation, section by section \u2014 no source-language quotes, no English summary. The recipient must never see the source text. Omissions forbidden.",
+    ].join("\n");
+    const task = `${instructions}\n---\n${source.trim()}`;
+    const childRoomId = await this.options.summonHost.summon(this.roomId, translator, task, {
+      deliver: "turn",
+      callerAgentId: caller,
+      // Seal, leg two: the caller's insight ledger records the pipeline, never
+      // the payload — by design, not by the ledger's truncation budget.
+      ledgerTask: `${instructions}\n--- [sealed source withheld from ledger]`,
+    });
+    return `Sealing via @${translator} (room '${childRoomId}'). Only the gaiago translation returns \u2014 @${caller} will verify the seal and deliver it.`;
   }
 
   async runSetupCommand(command: { sub?: string; id?: string; room?: string }): Promise<string> {
