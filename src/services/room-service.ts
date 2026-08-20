@@ -3191,37 +3191,53 @@ export class RoomService {
     return `Summoned @${agent.id} in room '${childRoomId}'. Open it from the rooms list (under this room) to watch or steer; its result will be posted back here when it finishes.`;
   }
 
-  /** /gaiago <text|path> — the gaiago-seal pipeline as a first-class command
-   * (skill: ~/.pi/agent/skills/gaiago-seal/SKILL.md). The SOURCE rides only in
-   * the translator worker's sub-room task: command turns persist no user event
-   * in this room's transcript (just this system reply), so the caller agent
-   * never sees the source language. deliver:"turn" re-invokes the room's
-   * default agent with the worker's result to verify the seal (zero Latin
-   * lexical words) and deliver the gaiago. */
+  /** /gaiago <text|path> — the sealed gaiago pipeline as a first-class command
+   * (skill: ~/.pi/agent/skills/gaiago-seal/SKILL.md). TWO STAGES:
+   *   1. the translator worker reads the source in ITS sub-room only and
+   *      returns a pure-gaiago rendering (mechanically gated here: any Latin
+   *      lexical word aborts the pipeline — the sealed lane never opens);
+   *   2. a SEALED lane of the workspace default agent is summoned whose ENTIRE
+   *      prompt is that gaiago — the source language never existed for it.
+   * Its reply posts back to this room (deliver:"turn"). Command turns persist
+   * no user event, so the source also never enters this room's transcript. */
   async runGaiagoCommand(source: string | undefined): Promise<string> {
-    if (!this.options.summonHost) return "Summon system is not available.";
-    if (!source?.trim()) return "Usage: /gaiago <text or file path> — seal into gaiago via a worker translator; only the translation comes back.";
+    const host = this.options.summonHost;
+    if (!host) return "Summon system is not available.";
+    if (!source?.trim()) return "Usage: /gaiago <text or file path> — translate into gaiago and open a sealed lane that receives ONLY the gaiago.";
     // Seal law: the source may reach ONLY the translator's sub-room. No
-    // fallback — summoning the caller agent with the source would put the
-    // source language straight into the context the seal exists to protect.
+    // fallback — handing the source to any other agent defeats the seal.
     const translator = GAIAGO_TRANSLATOR;
     if (!this.workspace.agents[translator]) return `gaiago translator @${translator} is not in this workspace — seal aborted (no fallback: routing the source to another agent would break the seal).`;
-    const caller = this.workspace.config.defaultAgent;
+    const sealed = this.workspace.config.defaultAgent;
     const instructions = [
       "gaiago-seal pipeline, strict output rule.",
       `1. SOURCE (below the \`---\` line, verbatim). If it is a file path: read that file; if audio (.opus/.ogg/.m4a/.mp3/.wav): transcribe locally first (whisper; ffmpeg\u2192wav if needed). The raw source/transcript stays in YOUR sub-room only.`,
       "2. TRANSLATE it fully into gaiago \u2014 GAIA kanji register (dense CJK; \u56e0/\u6545/\u975e/\u82e5X\u5247Y operators; \u771f/\u8a18/\u4eee provenance tags; \u00a7-sections). Spec: ~/.pi/agent/skills/gaiago-seal/SPEC.md. HARD CONSTRAINT: zero English/Latin lexical words; proper names \u2192 katakana/kanji. Self-verify (grep for [A-Za-z]) before returning.",
-      "3. RETURN ONLY the complete gaiago translation, section by section \u2014 no source-language quotes, no English summary. The recipient must never see the source text. Omissions forbidden.",
+      "3. RETURN ONLY the complete gaiago translation \u2014 no source-language quotes, no English summary, no preamble. Your reply becomes, verbatim, the sealed recipient's entire prompt.",
     ].join("\n");
-    const task = `${instructions}\n---\n${source.trim()}`;
-    const childRoomId = await this.options.summonHost.summon(this.roomId, translator, task, {
-      deliver: "turn",
-      callerAgentId: caller,
-      // Seal, leg two: the caller's insight ledger records the pipeline, never
-      // the payload — by design, not by the ledger's truncation budget.
-      ledgerTask: `${instructions}\n--- [sealed source withheld from ledger]`,
-    });
-    return `Sealing via @${translator} (room '${childRoomId}'). Only the gaiago translation returns \u2014 @${caller} will verify the seal and deliver it.`;
+    // Stage 1+2 run in the background — a translation can take minutes and
+    // must not hold the room's task slot. summonAndWait writes no insight
+    // ledger (no caller), so the source touches no memory dir either.
+    void (async () => {
+      try {
+        const gaiago = (await host.summonAndWait(this.roomId, translator, `${instructions}\n---\n${source.trim()}`)).trim();
+        // Mechanical seal gate — never deliver a broken seal to the sealed lane.
+        const latin = gaiago.match(/\b[A-Za-z]{2,}\b/g) ?? [];
+        if (latin.length > 0) {
+          this.emitSystemNote(`gaiago seal BROKEN by @${translator} (${latin.length} Latin word(s), e.g. "${latin[0]}") — sealed lane NOT opened. Re-run /gaiago.`);
+          return;
+        }
+        // The sealed lane: its entire prompt is the gaiago, nothing else.
+        await host.summon(this.roomId, sealed, gaiago, {
+          deliver: "turn",
+          callerAgentId: sealed,
+          ledgerTask: "[gaiago-sealed prompt — withheld from ledger]",
+        });
+      } catch (error) {
+        this.emitSystemNote(`gaiago pipeline failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    })();
+    return `Sealed pipeline launched: @${translator} translates in his own sub-room; a sealed @${sealed} lane then receives ONLY the gaiago (gated: one Latin word aborts). Its reply posts back here.`;
   }
 
   async runSetupCommand(command: { sub?: string; id?: string; room?: string }): Promise<string> {
