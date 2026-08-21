@@ -399,6 +399,28 @@ function applyRoomsPayload(workspaceId, rooms) {
   }
 }
 
+/** Launch a background worker in ANY room from the UI — turn-independent:
+ * the daemon spawns the child sub-room without touching the parent's running
+ * turn (no steer, no agent tokens spent relaying the order), and the result
+ * comes back as a collapsed note (deliver:"note").
+ * @param {string} roomId @param {string} agentId */
+export async function summonAgentInRoom(roomId, agentId) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  const task = await promptText(`Summon @${agentId} in a sub-room`, { placeholder: "task for the worker…", okLabel: "Summon" });
+  if (typeof task !== "string" || !task.trim()) return;
+  try {
+    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/summons`, {
+      method: "POST",
+      body: JSON.stringify({ agentId, task: task.trim() }),
+    });
+    state.error = "";
+    markDirty("sidebar", "status");
+  } catch (error) {
+    setError(error);
+  }
+}
+
 /** @param {string} roomId @param {boolean} favorite */
 export async function setRoomFavorite(roomId, favorite) {
   const snapshot = state.snapshot;

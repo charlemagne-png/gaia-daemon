@@ -65,7 +65,7 @@ import { isNative, isNativeWindowFocused } from "./native.js";
  *   bgTasksOpen: boolean,
  *   summonListOpen: boolean,
  *   sidebarFocus: {kind: "workspace"|"room", id: string}|null,
- *   roomContextMenu: {roomId: string, x: number, y: number}|null,
+ *   roomContextMenu: {roomId: string, x: number, y: number, summonOpen?: boolean}|null,
  *   workspaceContextMenu: {workspaceId: string, x: number, y: number}|null,
  *   agentContextMenu: {agentId: string, x: number, y: number}|null,
  *   readMarks: Record<string, number>,
