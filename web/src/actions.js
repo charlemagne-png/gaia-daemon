@@ -122,8 +122,9 @@ export async function addWorkspace() {
 /**
  * @param {string} workspaceId
  * @param {string} roomId
- * @param {{ incognito?: boolean }} [opts] `incognito` only takes effect when this
- *   call creates the room (a no-op when selecting one that already exists).
+ * @param {{ incognito?: boolean, parentRoomId?: string }} [opts] `incognito` and
+ *   `parentRoomId` (user-opened subroom) only take effect when this call creates
+ *   the room (no-ops when selecting one that already exists).
  */
 export async function selectRoom(workspaceId, roomId, opts = {}) {
   try {
@@ -132,7 +133,10 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
     // now-playing chip). So no stopReadAloud() here.
     const body = await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/rooms/${encodeURIComponent(roomId)}/select`, {
       method: "POST",
-      body: JSON.stringify(opts.incognito ? { incognito: true } : {}),
+      body: JSON.stringify({
+        ...(opts.incognito ? { incognito: true } : {}),
+        ...(opts.parentRoomId ? { parentRoomId: opts.parentRoomId } : {}),
+      }),
     });
     applySnapshotPayload(body);
     if (state.snapshot) openTab(state.snapshot.room.id, state.snapshot.workspace.id);
@@ -396,6 +400,22 @@ function applyRoomsPayload(workspaceId, rooms) {
   state.workspaceRooms[workspaceId] = summaries;
   if (snapshot && snapshot.workspace.id === workspaceId) {
     snapshot.rooms = summaries.map((/** @type {import("./types.js").RoomSummary} */ room) => ({ ...room, isCurrent: room.id === snapshot.room.id }));
+  }
+}
+
+/** Open a fresh SUBROOM nested under a parent room — a first-class room the
+ * human talks in (full summon rights, normal memory), merely grouped under the
+ * parent in the sidebar. Nothing is ever delivered back to the parent, and the
+ * parent's running turn is never touched.
+ * @param {string} parentRoomId */
+export async function openSubroom(parentRoomId) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  const roomId = newAutoRoomId("chat-");
+  try {
+    await selectRoom(snapshot.workspace.id, roomId, { parentRoomId });
+  } catch (error) {
+    setError(error);
   }
 }
 

@@ -40,14 +40,21 @@ async function writeIfMissing(path: string, content: string): Promise<void> {
   await writeText(path, content);
 }
 
-export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { incognito?: boolean }): Promise<void> {
+export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string }): Promise<void> {
   assertRoomId(roomId);
+  if (opts?.parentRoomId) assertRoomId(opts.parentRoomId);
   await writeIfMissing(workspacePaths.transcript(cwd, roomId), "");
   // `incognito` is seeded here and ONLY here — writeIfMissing means it lands in
   // the initial state of a brand-new room and is never rewritten, so the flag is
   // immutable (a room is incognito or it isn't). Selecting an existing room with
   // incognito set is a no-op, which is why the daemon can pass the flag freely.
-  const initial = normalizeRoomState(opts?.incognito ? { incognito: true } : undefined);
+  // `parentRoomId` (user-opened subroom) is seeded the same way: the room nests
+  // under its parent forever, and `subroom: true` marks it FIRST-CLASS — the
+  // summon-lane gating keyed on parentRoomId does not apply (room-service).
+  const initial = normalizeRoomState({
+    ...(opts?.incognito ? { incognito: true } : {}),
+    ...(opts?.parentRoomId ? { parentRoomId: opts.parentRoomId, subroom: true } : {}),
+  });
   await writeIfMissing(workspacePaths.roomState(cwd, roomId), jsonText(initial));
 }
 

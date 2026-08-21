@@ -417,6 +417,7 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(Object.keys(contextFloors).length > 0 ? { contextFloors } : {}),
     ...(runtimeDetails && Object.keys(runtimeDetails).length > 0 ? { runtimeDetails } : {}),
     ...(typeof value.parentRoomId === "string" && value.parentRoomId.trim() ? { parentRoomId: value.parentRoomId } : {}),
+    ...(value.subroom === true ? { subroom: true } : {}),
     ...(summon ? { summon } : {}),
     ...(value.summonUntrusted === true ? { summonUntrusted: true } : {}),
     ...(typeof value.workDir === "string" && value.workDir.trim() ? { workDir: value.workDir } : {}),

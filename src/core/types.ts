@@ -289,6 +289,11 @@ export interface RoomState {
    * transcript event itself). Preserved so old rooms keep their metadata. */
   runtimeDetails?: Record<string, EventDetails>;
   parentRoomId?: string;
+  /** User-opened subroom: nests under parentRoomId in the sidebar and inherits
+   * the parent's checkout, but is a FIRST-CLASS room — not a summon lane. Turns
+   * here keep full summon rights and normal (non-summon) sandbox resolution.
+   * Seeded once at creation alongside parentRoomId, immutable. */
+  subroom?: boolean;
   /** Present on summon child rooms whose result must reach the parent room;
    * see SummonDelivery. */
   summon?: SummonDelivery;

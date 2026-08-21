@@ -538,7 +538,9 @@ export class RoomService {
   private async initOnce(): Promise<void> {
     await Promise.all(Object.values(this.workspace.agents).map((agent) => this.options.memoryStore.init(agent.memoryDir, agent.displayName)));
     const state = await this.room.state();
-    this.isSummonRoom = Boolean(state.parentRoomId);
+    // A user-opened subroom (state.subroom) nests under a parent but is NOT a
+    // summon lane: full summon rights, normal sandbox resolution.
+    this.isSummonRoom = Boolean(state.parentRoomId) && state.subroom !== true;
     this.summonUntrusted = state.summonUntrusted === true;
     // This room's working directory: top-level rooms OWN a git worktree under
     // collab isolation (created here on first open); summon rooms INHERIT the

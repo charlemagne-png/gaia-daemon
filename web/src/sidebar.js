@@ -2,7 +2,7 @@
 // child room nests under its parent (via room.parentRoomId) and is collapsed
 // by default behind a twisty. Nesting is unbounded — grandchildren summon
 // their own children.
-import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, renameRoom, selectRoom, setRoomFavorite, summonAgentInRoom } from "./actions.js";
+import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, openSubroom, renameRoom, selectRoom, setRoomFavorite, summonAgentInRoom } from "./actions.js";
 import { closeSidebarOverlay } from "./chrome.js";
 import { $, h } from "./dom.js";
 import { PathText } from "./links.js";
@@ -358,6 +358,17 @@ function RoomContextMenu() {
         void setRoomFavorite(room.id, !room.favorite);
       },
       text: room.favorite ? "Remove favorite" : "Add favorite",
+    }),
+    // Open a first-class side room NESTED under this one — the human's own
+    // parallel lane: no delivery back, no steer, the parent's running turn is
+    // never touched.
+    h("button", {
+      type: "button",
+      onclick: () => {
+        close();
+        void openSubroom(room.id);
+      },
+      text: "Open subroom",
     }),
     // Summon a worker INTO this room from the outside — works while the room's
     // own turn is running (the daemon's summon path never touches the parent
