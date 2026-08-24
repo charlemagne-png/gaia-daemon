@@ -259,6 +259,15 @@ export interface RoomBookmark {
   createdAt: string;
 }
 
+/** A /note sticky: an idea parked to prompt later. Pure display metadata —
+ * no WAL/queue semantics, never reaches turn prompts; lives above the queued
+ * messages in the tasks panel until dismissed. */
+export interface RoomNote {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
 export interface RoomState {
   activeRoles: Record<string, string>;
   /** Room-scoped Codex-pet bindings, keyed by agent id. Absence means pets are
@@ -334,6 +343,8 @@ export interface RoomState {
   monad?: MonadConfig;
   pendingTurn?: PendingTurn;
   queue?: QueuedMessage[];
+  /** Sticky notes (/note) — prompt-later ideas shown in the tasks panel. */
+  notes?: RoomNote[];
   /** Latest harness-reported context accounting per agent, keyed by agent id.
    * Persisted so the composer's `ctx` chip survives a restart instead of
    * blanking until the next turn re-reports. Harness-agnostic — every runtime
@@ -1193,6 +1204,8 @@ export interface Snapshot {
   commands: SlashCommandDefinition[];
   agents: AgentStatus[];
   tasks: Task[];
+  /** Sticky notes (see RoomState.notes) — rendered above the queued tasks. */
+  notes?: RoomNote[];
   backgroundTasks: BackgroundTask[];
   thinkingLevels: string[];
   /** Memory-subsystem degradation chips ("embedder dead", "index degraded") —

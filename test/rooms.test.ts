@@ -417,3 +417,39 @@ test("normalizeRoomState: per-agent contextUsage survives the whitelist, malform
   assert.equal(normalizeRoomState({ activeRoles: {}, agentCursors: {}, contextUsage: { x: 1 } }).contextUsage, undefined);
   assert.equal(normalizeRoomState({ activeRoles: {}, agentCursors: {} }).contextUsage, undefined);
 });
+
+test("sticky notes: add trims/caps, survives reopen, remove is idempotent", async () => {
+  const room = await openRoom();
+  const note = await room.addNote("  buy   more\n  RAM  ");
+  assert.equal(note.text, "buy more RAM"); // whitespace collapsed
+  await assert.rejects(() => room.addNote("   \n  "), /empty/i);
+  const long = await room.addNote("x".repeat(900));
+  assert.equal(long.text.length, 500); // NOTE_TEXT_MAX cap
+  // Durable: a fresh handle reads both notes back in insertion order.
+  const reopened = await RoomHandle.open(room.workspaceRoot, room.roomId);
+  const state = await reopened.state();
+  assert.deepEqual(state.notes?.map((entry) => entry.id), [note.id, long.id]);
+  // Remove one; removing it again is a no-op; removing all deletes the block.
+  await reopened.removeNote(note.id);
+  await reopened.removeNote(note.id);
+  assert.deepEqual((await reopened.state()).notes?.map((entry) => entry.id), [long.id]);
+  await reopened.removeNote(long.id);
+  assert.equal((await reopened.state()).notes, undefined);
+});
+
+test("normalizeRoomState: notes keep well-formed entries, drop malformed", () => {
+  const state = normalizeRoomState({
+    activeRoles: {},
+    agentCursors: {},
+    notes: [
+      { id: "note_1", text: "idea one", createdAt: "2026-08-24T00:00:00.000Z" },
+      { id: "", text: "no id" }, // dropped
+      { id: "note_2", text: "   " }, // blank text → dropped
+      { id: "note_3", text: "no createdAt" }, // kept, createdAt defaults ""
+      "garbage", // dropped
+    ],
+  });
+  assert.deepEqual(state.notes?.map((entry) => entry.id), ["note_1", "note_3"]);
+  assert.equal(state.notes?.[1].createdAt, "");
+  assert.equal(normalizeRoomState({ activeRoles: {}, agentCursors: {}, notes: [] }).notes, undefined);
+});

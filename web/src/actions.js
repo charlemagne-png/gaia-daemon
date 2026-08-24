@@ -676,6 +676,29 @@ export async function deleteQueuedMessage(taskId) {
 }
 
 /**
+ * Dismiss a sticky note (the ✕ on a /note card in the tasks panel). Display
+ * metadata only — no runtime, no queue; idempotent server-side.
+ * @param {string} noteId
+ */
+export async function deleteNote(noteId) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  try {
+    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/notes/${encodeURIComponent(noteId)}`, {
+      method: "DELETE",
+      body: "{}",
+    });
+    // Reflect immediately so the card vanishes without waiting for SSE.
+    if (state.snapshot === snapshot && snapshot.notes) {
+      snapshot.notes = snapshot.notes.filter((note) => note.id !== noteId);
+      markDirty("panel");
+    }
+  } catch (error) {
+    setError(error);
+  }
+}
+
+/**
  * Pause or resume a still-queued message (⏸/▶ in the tasks panel). Paused
  * entries keep their queue slot but drain skips them until resumed. A 404
  * means it already started running — the next snapshot reconciles.

@@ -13,6 +13,7 @@
 /** @typedef {import("../../src/core/types.js").Snapshot} Snapshot */
 /** @typedef {import("../../src/core/types.js").AgentStatus} AgentStatus */
 /** @typedef {import("../../src/core/types.js").RoomSummary} RoomSummary */
+/** @typedef {import("../../src/core/types.js").RoomNote} RoomNote */
 /** @typedef {import("../../src/core/types.js").SlashCommandDefinition} SlashCommandDefinition */
 /** @typedef {import("../../src/core/types.js").VoiceCallInfo} VoiceCallInfo */
 /** @typedef {import("../../src/core/types.js").UiEvent} UiEvent */

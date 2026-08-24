@@ -1433,6 +1433,14 @@ body.resizing { cursor: col-resize; user-select: none; }
 .task-action:hover { color: var(--fg); border-color: var(--fg); }
 .task-action.danger:hover { color: var(--warn); border-color: var(--warn); }
 
+/* /note stickies: white paper cards pinned above the queued tasks. Ink-on-white
+   is deliberate — they must read as physical notes, not another task chip. */
+.sticky-note { display: flex; gap: 8px; align-items: baseline; padding: 9px 10px; background: #fdfdf6; color: #1c1c1c; border: 1px solid #d8d4c2; border-bottom-width: 2px; box-shadow: 1px 3px 8px rgba(0, 0, 0, 0.35); }
+.sticky-note small { overflow-wrap: anywhere; flex: 1; color: inherit; }
+.sticky-note .task-action { color: #8a8676; border-color: #d8d4c2; }
+.sticky-note .task-action:hover { color: #1c1c1c; border-color: #1c1c1c; }
+.sticky-note .task-action.danger:hover { color: var(--warn); border-color: var(--warn); }
+
 .dot { width: 7px; height: 7px; margin-top: 4px; background: var(--muted); box-shadow: 0 0 8px currentColor; }
 .dot.running { background: var(--warn); }
 .dot.compacting { background: var(--accent); animation: dot-pulse 1.2s ease-in-out infinite; }

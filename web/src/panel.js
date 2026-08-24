@@ -1,6 +1,6 @@
 // The right-hand room panel: agents (role select, main-agent star, voice call
 // button) and recent tasks.
-import { accountsCatalog, deleteAgent, deleteQueuedMessage, deleteRoomBookmark, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
+import { accountsCatalog, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
 import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
 import { $, h } from "./dom.js";
 import { LinkedText, PathText } from "./links.js";
@@ -60,6 +60,7 @@ function renderPanel() {
   const snapshot = state.snapshot;
   const agents = snapshot?.agents ?? [];
   const tasks = snapshot?.tasks ?? [];
+  const notes = snapshot?.notes ?? [];
   // The agent this room is currently addressing: its remembered active agent,
   // or the workspace default when it has none yet. Marks the "active" row and
   // is who a bare next message goes to.
@@ -278,12 +279,37 @@ function renderPanel() {
     h(
       "div",
       { class: "task-list" },
-      tasks.length === 0 ? h("div", { class: "empty", text: "no tasks" }) : TaskRows(tasks),
+      notes.length === 0 && tasks.length === 0
+        ? h("div", { class: "empty", text: "no tasks" })
+        : [...NoteRows(notes), ...TaskRows(tasks)],
     ),
     ...(agentMenu ? [agentMenu] : []),
   );
   // Keep the elapsed advancing between server snapshots while any pass runs.
   armCompactTick(agents.some((agent) => agent.status === "compacting"));
+}
+
+/**
+ * Sticky notes (/note): prompt-later ideas, rendered as white sticky cards
+ * ABOVE the task/queue rows — they are the shelf, the queue sits beneath.
+ * @param {import("./types.js").RoomNote[]} notes
+ */
+function NoteRows(notes) {
+  return notes.map((note) =>
+    h(
+      "div",
+      { class: "sticky-note" },
+      h("small", { text: note.text, title: note.text }),
+      h("span", { class: "task-actions" },
+        h("button", {
+          class: "task-action danger",
+          title: "dismiss this note",
+          text: "\u2715",
+          onclick: () => void deleteNote(note.id),
+        }),
+      ),
+    ),
+  );
 }
 
 /**

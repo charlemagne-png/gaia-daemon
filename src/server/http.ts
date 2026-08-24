@@ -995,6 +995,15 @@ export class GaiaWebServer {
       return;
     }
 
+    // Dismiss ONE sticky note (the ✕ on a /note card in the tasks panel).
+    // Display metadata only — shared room layer, no runtime, idempotent.
+    if (method === "DELETE" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/notes\/([^/]+)$/))) {
+      const service = await this.daemon.serviceFor(params[0], params[1]);
+      await service.removeNote(params[2]);
+      json(response, 200, { ok: true });
+      return;
+    }
+
     // Reversible room delete: moves the room dir to trash and purges it from
     // memory. Returns the neighbour room's snapshot (a room is always in view).
     if (method === "DELETE" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)$/))) {

@@ -354,6 +354,9 @@ const COMMANDS: Record<string, CommandHandler> = {
   // A bare /queue (no text) only — /queue <text> is rewritten to a queued
   // message turn in sendMessage before this registry is consulted.
   queue: async () => "usage: /queue <text> — park an idea on the durable queue without steering the running turn; pause/resume it under tasks in the room panel",
+  // A bare /note (no text) only — /note <text> is handled synchronously in
+  // sendMessage (like steer/cancel) so a sticky lands even mid-turn.
+  note: async () => "usage: /note <text> — pin a sticky note of something to prompt later; it sits above the queued messages in the tasks panel",
   cancel: (service) => service.runCancelCommand(),
   fork: (service) => service.runForkCommand(),
   unknown: (service, command) => (command.type === "unknown" ? service.runUnknownCommand(command) : Promise.resolve("")),
@@ -627,6 +630,28 @@ export class RoomService {
       text = command.text;
       command = { type: "message", text };
       options = { ...options, queue: true };
+    }
+    // /note <idea>: pin a sticky — pure room metadata, no turn, no queue slot.
+    // Handled synchronously (like steer/cancel) so it lands instantly even
+    // while an agent turn is streaming; a bare /note falls through to the
+    // registry's usage reply. The note never reaches prompts — it's the
+    // human's own prompt-later shelf in the tasks panel.
+    if (command.type === "note" && command.text) {
+      const task = this.createTask(text, []);
+      this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+      const note = await this.room.addNote(command.text);
+      const event: RoomEvent = {
+        id: `system_${task.id}`,
+        timestamp: new Date().toISOString(),
+        author: "system",
+        text: `📌 noted — pinned under tasks in the room panel: “${note.text}”`,
+      };
+      this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
+      task.status = "complete";
+      task.endedAt = new Date().toISOString();
+      this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
+      void this.emitSnapshot();
+      return task;
     }
     // Harness-native passthrough: an unrecognized `/command` becomes a command
     // TURN to the active agent when that agent has CHECKED that command as a
@@ -1212,6 +1237,15 @@ export class RoomService {
     this.recentTasks = [...this.recentTasks.slice(-9), task];
     this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
     return task;
+  }
+
+  /** Dismiss one sticky note (the ✕ on a note card in the tasks panel).
+   * Display metadata only — no runtime, no queue; the snapshot emit refreshes
+   * every subscribed client. Idempotent. */
+  async removeNote(noteId: string): Promise<void> {
+    await this.init();
+    await this.room.removeNote(noteId);
+    await this.emitSnapshot();
   }
 
   /** Pause or resume ONE still-queued message (tasks-panel ⏸/▶). Same shared
@@ -3553,6 +3587,7 @@ export class RoomService {
         })),
       ),
       tasks: [...this.recentTasks, ...(this.activeTask ? [this.activeTask] : []), ...this.queuedTasks],
+      ...(state.notes?.length ? { notes: state.notes } : {}),
       backgroundTasks: state.backgroundTasks ?? [],
       thinkingLevels: sdkThinkingLevels(),
       // Degradation is loud (§10): the composer shows these like the

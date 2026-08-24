@@ -17,7 +17,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { BackgroundTask, ContextGatePending, EventDetails, MessageAttachment, MessageBlock, MonadConfig, PendingTurn, QueuedMessage, RoomBookmark, RoomEvent, RoomEventKind, RoomState, SummonDelivery, ToolDetail } from "../core/types.js";
+import type { BackgroundTask, ContextGatePending, EventDetails, MessageAttachment, MessageBlock, MonadConfig, PendingTurn, QueuedMessage, RoomBookmark, RoomEvent, RoomEventKind, RoomNote, RoomState, SummonDelivery, ToolDetail } from "../core/types.js";
 import { normalizePetBindings } from "./pets.js";
 import { appendJsonl, ensureDir, readJson, readJsonlFrom, writeJsonAtomic, writeText, writeTextAtomic } from "../core/store.js";
 import { workspacePaths } from "../core/paths.js";
@@ -344,6 +344,30 @@ export const BOOKMARK_EXCERPT_MAX = 200;
  * every message; the prompt block must stay small. */
 export const BOOKMARK_ROOM_MAX = 50;
 
+export const NOTE_TEXT_MAX = 500;
+/** Hard per-room cap — sticky notes are a short prompt-later shelf, not an
+ * archive; the panel must stay scannable. */
+export const NOTE_ROOM_MAX = 50;
+
+/** Persisted sticky notes. A malformed entry is dropped (never bricks the
+ * room); text is re-capped defensively on read. */
+function notesFrom(value: unknown): RoomNote[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const notes: RoomNote[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    if (typeof raw.id !== "string" || !raw.id.trim()) continue;
+    if (typeof raw.text !== "string" || !raw.text.trim()) continue;
+    notes.push({
+      id: raw.id,
+      text: raw.text.slice(0, NOTE_TEXT_MAX),
+      createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "",
+    });
+  }
+  const capped = notes.slice(0, NOTE_ROOM_MAX);
+  return capped.length > 0 ? capped : undefined;
+}
+
 function queueFrom(value: unknown): QueuedMessage[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const queue: QueuedMessage[] = [];
@@ -432,6 +456,10 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(monad ? { monad } : {}),
     ...(pendingTurn ? { pendingTurn } : {}),
     ...(queue ? { queue } : {}),
+    ...(() => {
+      const notes = notesFrom(value.notes);
+      return notes ? { notes } : {};
+    })(),
     ...(contextUsage ? { contextUsage } : {}),
     ...(backgroundTasks ? { backgroundTasks } : {}),
     ...(contextGate ? { contextGate } : {}),
@@ -703,6 +731,31 @@ export class RoomHandle {
       const next = state.bookmarks.filter((candidate) => candidate.id !== bookmarkId);
       if (next.length > 0) state.bookmarks = next;
       else delete state.bookmarks;
+    });
+  }
+
+  // --- sticky notes (/note) --------------------------------------------------
+
+  /** Append one sticky note — a prompt-later idea. Throws on empty text or a
+   * full shelf. Returns the stored note. */
+  async addNote(rawText: string): Promise<RoomNote> {
+    const text = rawText.replace(/\s+/g, " ").trim().slice(0, NOTE_TEXT_MAX);
+    if (!text) throw new Error("Note text cannot be empty.");
+    const note: RoomNote = { id: newId("note"), text, createdAt: new Date().toISOString() };
+    await this.updateState((state) => {
+      if ((state.notes?.length ?? 0) >= NOTE_ROOM_MAX) throw new Error(`Note limit reached (${NOTE_ROOM_MAX} per room) — dismiss one first.`);
+      state.notes = [...(state.notes ?? []), note];
+    });
+    return note;
+  }
+
+  /** Remove one sticky note by id — idempotent. */
+  async removeNote(noteId: string): Promise<void> {
+    await this.updateState((state) => {
+      if (!state.notes) return;
+      const next = state.notes.filter((candidate) => candidate.id !== noteId);
+      if (next.length > 0) state.notes = next;
+      else delete state.notes;
     });
   }
 
