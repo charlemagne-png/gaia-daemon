@@ -75,24 +75,48 @@ guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailabl
   FileHandle.standardError.write("no speech recognizer for locale \\(locale.identifier)\\n".data(using: .utf8)!)
   exit(3)
 }
-let request = SFSpeechURLRecognitionRequest(url: audioUrl)
-request.shouldReportPartialResults = false
-if recognizer.supportsOnDeviceRecognition {
-  request.requiresOnDeviceRecognition = true
-}
-request.taskHint = .dictation
-if #available(macOS 13.0, *) {
-  request.addsPunctuation = true
-}
-recognizer.recognitionTask(with: request) { result, error in
-  if let result = result, result.isFinal {
-    print(result.bestTranscription.formattedString)
-    exit(0)
+
+// Two-pass recognition: on-device first (fast, private), then Apple's server
+// dictation (still keyless + free) when the on-device model comes back EMPTY
+// or errors — observed live 08-26: quieter clips (-33 dB mean) got an empty
+// isFinal from the on-device en model while server dictation heard them fine.
+func recognize(onDevice: Bool) -> String? {
+  let request = SFSpeechURLRecognitionRequest(url: audioUrl)
+  request.shouldReportPartialResults = false
+  request.requiresOnDeviceRecognition = onDevice
+  request.taskHint = .dictation
+  if #available(macOS 13.0, *) {
+    request.addsPunctuation = true
   }
-  if let error = error {
-    FileHandle.standardError.write("recognition failed: \\(error.localizedDescription)\\n".data(using: .utf8)!)
+  let sema = DispatchSemaphore(value: 0)
+  var transcript: String? = nil
+  recognizer.recognitionTask(with: request) { result, error in
+    if let result = result, result.isFinal {
+      transcript = result.bestTranscription.formattedString
+      sema.signal()
+    } else if let error = error {
+      FileHandle.standardError.write("recognition (onDevice=\\(onDevice)) failed: \\(error.localizedDescription)\\n".data(using: .utf8)!)
+      sema.signal()
+    }
+  }
+  _ = sema.wait(timeout: .now() + 90)
+  return transcript
+}
+
+DispatchQueue.global().async {
+  if recognizer.supportsOnDeviceRecognition {
+    if let text = recognize(onDevice: true), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      print(text)
+      exit(0)
+    }
+    FileHandle.standardError.write("on-device result empty; retrying via Apple dictation service\\n".data(using: .utf8)!)
+  }
+  guard let text = recognize(onDevice: false) else {
+    FileHandle.standardError.write("recognition produced no result\\n".data(using: .utf8)!)
     exit(4)
   }
+  print(text)
+  exit(0)
 }
 dispatchMain()
 `;
@@ -197,9 +221,13 @@ async function appleTranscribe(context: SttContext): Promise<SttResult> {
   const work = await mkdtemp(join(tmpdir(), "gaia-stt-"));
   try {
     // 1. decode the clip to 16 kHz mono wav (AVFoundation can't read webm).
+    // speechnorm: quiet mic clips (-30 dB mean observed) starve the on-device
+    // model; per-frame speech normalization lifts them WITHOUT the ramp-in of
+    // loudnorm, which was measured eating the first spoken words of a clip.
     const wav = join(work, "clip.wav");
+    const FF_ARGS = ["-ac", "1", "-ar", "16000", "-af", "speechnorm=e=6.25:r=0.00001:l=1", "-f", "wav", "-y"];
     const decode = await run(
-      ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-ac", "1", "-ar", "16000", "-f", "wav", "-y", wav],
+      ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", ...FF_ARGS, wav],
       context.audio.data,
       signal,
     );
@@ -208,7 +236,7 @@ async function appleTranscribe(context: SttContext): Promise<SttResult> {
       const raw = join(work, "clip.raw");
       await writeFile(raw, context.audio.data);
       const retry = await run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", raw, "-ac", "1", "-ar", "16000", "-f", "wav", "-y", wav],
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", raw, ...FF_ARGS, wav],
         undefined,
         signal,
       );
