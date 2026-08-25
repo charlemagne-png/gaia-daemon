@@ -51,7 +51,7 @@ import type {
 } from "../core/types.js";
 import { DEFAULTS, DEFAULT_CONTEXT_WARN_TOKENS } from "../core/config.js";
 import { estimateTokens } from "../core/tokens.js";
-import { deriveRoomTitle, isAutoRoomId, newRoomEventId, normalizeRoomState, normalizeRoomTitle, RoomHandle } from "../domain/rooms.js";
+import { deriveRoomTitle, ensureWorkspaceRoomRefCodes, isAutoRoomId, newRoomEventId, normalizeRoomState, normalizeRoomTitle, RoomHandle } from "../domain/rooms.js";
 import { DEFAULT_PET_NAME, listWorkspacePetBindings, loadPet } from "../domain/pets.js";
 import { resolveRoomWorkDir } from "../domain/worktree.js";
 import { effectiveAgentSkills, effectiveAgentTools, effectiveRoleName, listAgentRoles, resolveAgentRole } from "../domain/roles.js";
@@ -3648,6 +3648,7 @@ export class RoomService {
       room: {
         id: this.roomId,
         statePath: this.room.statePath,
+        ...(state.refCode ? { refCode: state.refCode } : {}),
         events,
         eventTotal: all.length,
         ...(state.thanksDario ? { thanksDario: true } : {}),
@@ -4170,6 +4171,7 @@ Title:`,
  * Rooms are chats: ordered by last transcript write, newest first.
  */
 export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms"]> {
+  await ensureWorkspaceRoomRefCodes(rootDir);
   const roomsDir = workspacePaths.roomsDir(rootDir);
   if (!existsSync(roomsDir)) return [];
   const entries = await readdir(roomsDir, { withFileTypes: true });
@@ -4188,6 +4190,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             id: entry.name,
             path: join(roomsDir, entry.name),
             isCurrent: false,
+            ...(state.refCode ? { refCode: state.refCode } : {}),
             ...(state.parentRoomId ? { parentRoomId: state.parentRoomId } : {}),
             ...(state.pendingTurn ? { running: true } : {}),
             ...(state.title ? { title: state.title } : {}),

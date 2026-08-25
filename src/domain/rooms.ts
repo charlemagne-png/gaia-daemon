@@ -16,6 +16,7 @@
 //      re-run the turn from partialReply. Idempotent either way.
 
 import { existsSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { BackgroundTask, ContextGatePending, EventDetails, MessageAttachment, MessageBlock, MonadConfig, PendingTurn, QueuedMessage, RoomBookmark, RoomEvent, RoomEventKind, RoomNote, RoomState, SummonDelivery, ToolDetail } from "../core/types.js";
 import { normalizePetBindings } from "./pets.js";
@@ -410,6 +411,84 @@ function summonDeliveryFrom(value: unknown): SummonDelivery | undefined {
   };
 }
 
+const ROOM_REF_BATCH = 26 * 99;
+const roomRefLocks = new Map<string, Promise<Map<string, string>>>();
+
+export function roomRefCodeForIndex(index: number): string {
+  if (!Number.isInteger(index) || index < 0) throw new Error("room ref index must be a non-negative integer");
+  const batch = Math.floor(index / ROOM_REF_BATCH);
+  const offset = index % ROOM_REF_BATCH;
+  const letter = String.fromCharCode("A".charCodeAt(0) + Math.floor(offset / 99));
+  const n = (offset % 99) + 1;
+  return batch === 0 ? `${letter}${String(n).padStart(2, "0")}` : `${letter}${batch + 1}${String(n).padStart(2, "0")}`;
+}
+
+export function validRoomRefCode(value: string): boolean {
+  const match = /^([A-Z])(\d+)$/.exec(value.trim().toUpperCase());
+  if (!match) return false;
+  const digits = match[2];
+  if (digits.length === 2) {
+    const n = Number(digits);
+    return n >= 1 && n <= 99;
+  }
+  if (digits.length < 3) return false;
+  const series = Math.floor(Number(digits) / 100);
+  const n = Number(digits) % 100;
+  return series >= 2 && n >= 1 && n <= 99;
+}
+
+function nextRoomRefCode(used: Set<string>): string {
+  for (let i = 0; ; i++) {
+    const code = roomRefCodeForIndex(i);
+    if (!used.has(code)) return code;
+  }
+}
+
+/** Ensure every room in a workspace has a stable, unique refCode. Missing or
+ * colliding legacy rooms are filled oldest-first by room directory birth time;
+ * existing unique codes are preserved. */
+export async function ensureWorkspaceRoomRefCodes(rootDir: string): Promise<Map<string, string>> {
+  const previous = roomRefLocks.get(rootDir) ?? Promise.resolve(new Map<string, string>());
+  const next = previous.then(async () => {
+    const roomsDir = workspacePaths.roomsDir(rootDir);
+    if (!existsSync(roomsDir)) return new Map<string, string>();
+    const entries = (await readdir(roomsDir, { withFileTypes: true })).filter((entry) => entry.isDirectory());
+    const rooms = await Promise.all(
+      entries.map(async (entry) => {
+        const dir = workspacePaths.roomDir(rootDir, entry.name);
+        const created = await stat(dir).then((info) => info.birthtimeMs || info.ctimeMs || info.mtimeMs, () => 0);
+        const statePath = workspacePaths.roomState(rootDir, entry.name);
+        const state = normalizeRoomState(await readJson(statePath));
+        return { id: entry.name, statePath, state, created };
+      }),
+    );
+    rooms.sort((a, b) => a.created - b.created || a.id.localeCompare(b.id));
+    const used = new Set<string>();
+    const refs = new Map<string, string>();
+    for (const room of rooms) {
+      const existing = room.state.refCode;
+      const refCode = existing && !used.has(existing) ? existing : nextRoomRefCode(used);
+      used.add(refCode);
+      refs.set(room.id, refCode);
+      if (room.state.refCode !== refCode) {
+        room.state.refCode = refCode;
+        await writeJsonAtomic(room.statePath, room.state);
+      }
+    }
+    return refs;
+  });
+  roomRefLocks.set(rootDir, next.catch(() => new Map<string, string>()));
+  return next;
+}
+
+export async function resolveWorkspaceRoomRef(rootDir: string, ref: string): Promise<string | undefined> {
+  const code = ref.trim().toUpperCase();
+  if (!validRoomRefCode(code)) return undefined;
+  const refs = await ensureWorkspaceRoomRefCodes(rootDir);
+  for (const [roomId, roomRef] of refs) if (roomRef === code) return roomId;
+  return undefined;
+}
+
 export function normalizeRoomState(value: unknown): RoomState {
   if (!isRecord(value)) return { activeRoles: {}, agentCursors: {}, thinkingOverrides: {} };
   const runtimeDetails = isRecord(value.runtimeDetails)
@@ -431,6 +510,7 @@ export function normalizeRoomState(value: unknown): RoomState {
   const pluginState = pluginStateFrom(value.pluginState);
   return {
     activeRoles: stringRecord(value.activeRoles),
+    ...(typeof value.refCode === "string" && validRoomRefCode(value.refCode) ? { refCode: value.refCode.toUpperCase() } : {}),
     ...(petBindings ? { petBindings } : {}),
     ...(pluginState ? { pluginState: pluginState as Record<string, Record<string, unknown>> } : {}),
     thinkingOverrides: stringRecord(value.thinkingOverrides),
@@ -519,6 +599,7 @@ export class RoomHandle {
     const handle = new RoomHandle(workspaceRoot, roomId);
     await ensureDir(workspacePaths.roomDir(workspaceRoot, roomId));
     if (!existsSync(handle.statePath)) await writeJsonAtomic(handle.statePath, normalizeRoomState(undefined));
+    await ensureWorkspaceRoomRefCodes(workspaceRoot);
     return handle;
   }
 

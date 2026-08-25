@@ -443,6 +443,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Agent + model chip on the room card (living-titles law): quiet metadata
  * beside the status dot — never louder than the name, truncates first. */
 .room-agent { flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.72em; opacity: 0.6; line-height: 1; }
+.room-ref { flex: 0 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72em; line-height: 1; letter-spacing: 0.03em; opacity: 0.58; }
+.room-ref-head { margin-right: 8px; opacity: 0.7; }
 .room-menu {
   position: fixed;
   z-index: 1000;

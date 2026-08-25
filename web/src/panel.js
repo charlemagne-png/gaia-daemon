@@ -86,7 +86,7 @@ function renderPanel() {
     h(
       "div",
       { class: "panel-head" },
-      h("h2", { text: "Room" }),
+      h("h2", {}, snapshot?.room.refCode ? h("span", { class: "room-ref room-ref-head", title: `room reference ${snapshot.room.refCode}`, text: snapshot.room.refCode }) : null, document.createTextNode("Room")),
       h("small", {}, snapshot?.room.statePath ? PathText(snapshot.room.statePath) : LinkedText("no room")),
     ),
     h(

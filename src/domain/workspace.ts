@@ -10,7 +10,7 @@ import { DEFAULTS, MEMORY_DEFAULTS, parseWorkspaceConfig } from "../core/config.
 import { gaiaHome, globalPaths, workspacePaths } from "../core/paths.js";
 import { jsonText, readJson, writeJsonAtomic, writeText } from "../core/store.js";
 import type { ContextFile, Workspace, WorkspaceConfig } from "../core/types.js";
-import { normalizeRoomState } from "./rooms.js";
+import { ensureWorkspaceRoomRefCodes, normalizeRoomState } from "./rooms.js";
 import { removeRoomWorktree } from "./worktree.js";
 import { ensureGlobalDefaultAgents, loadAgentDefinitions } from "./agents.js";
 
@@ -56,6 +56,7 @@ export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { 
     ...(opts?.parentRoomId ? { parentRoomId: opts.parentRoomId, subroom: true } : {}),
   });
   await writeIfMissing(workspacePaths.roomState(cwd, roomId), jsonText(initial));
+  await ensureWorkspaceRoomRefCodes(cwd);
 }
 
 /** Reversible room delete: move the whole room dir (transcript + state + files +

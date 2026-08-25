@@ -735,6 +735,15 @@ export class GaiaWebServer {
       return this.respond(response, async () => ({ health: await this.daemon.memoryHealth(params![0]) }));
     }
 
+    if (method === "GET" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/resolve$/))) {
+      const ref = url.searchParams.get("ref")?.trim() ?? "";
+      if (!ref) return json(response, 400, { error: "Missing room ref" });
+      const resolved = await this.daemon.resolveRoomRef(params[0], ref);
+      if (!resolved) return json(response, 404, { error: "Unknown room ref" });
+      json(response, 200, resolved);
+      return;
+    }
+
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms$/))) {
       const body = await parseBody(request);
       const roomId = stringField(body, "roomId") ?? stringField(body, "id") ?? stringField(body, "room");

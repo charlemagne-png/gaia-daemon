@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RoomHandle, deriveRoomTitle, isAutoRoomId, newRoomEventId, normalizeRoomState, normalizeRoomTitle } from "../src/domain/rooms.js";
+import { RoomHandle, deriveRoomTitle, ensureWorkspaceRoomRefCodes, isAutoRoomId, newRoomEventId, normalizeRoomState, normalizeRoomTitle, roomRefCodeForIndex } from "../src/domain/rooms.js";
 import type { PendingTurn, RoomEvent } from "../src/core/types.js";
+import { scanRoomActivity } from "../src/services/room-service.js";
 
 async function openRoom(): Promise<RoomHandle> {
   const root = await mkdtemp(join(tmpdir(), "gaia-rooms-"));
@@ -35,6 +36,36 @@ test("normalizeRoomTitle cleans model/manual title proposals", () => {
   assert.equal(normalizeRoomTitle('"Room rename UX."'), "Room rename UX");
   assert.equal(normalizeRoomTitle("first line\nignored line"), "first line");
   assert.equal(normalizeRoomTitle("   "), "");
+});
+
+test("room ref code allocator uses A01..Z99 then A201 series", () => {
+  assert.equal(roomRefCodeForIndex(0), "A01");
+  assert.equal(roomRefCodeForIndex(98), "A99");
+  assert.equal(roomRefCodeForIndex(99), "B01");
+  assert.equal(roomRefCodeForIndex(26 * 99 - 1), "Z99");
+  assert.equal(roomRefCodeForIndex(26 * 99), "A201");
+  assert.equal(roomRefCodeForIndex(26 * 99 + 98), "A299");
+  assert.equal(roomRefCodeForIndex(2 * 26 * 99), "A301");
+});
+
+test("room ref codes backfill once, oldest first, and scan surfaces them", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gaia-ref-"));
+  for (const id of ["old", "middle", "new"] ) {
+    await mkdir(join(root, ".gaia", "rooms", id), { recursive: true });
+    await writeFile(join(root, ".gaia", "rooms", id, "transcript.jsonl"), "", "utf8");
+    await writeFile(join(root, ".gaia", "rooms", id, "state.json"), JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {} }), "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const refs = await ensureWorkspaceRoomRefCodes(root);
+  assert.equal(refs.get("old"), "A01");
+  assert.equal(refs.get("middle"), "A02");
+  assert.equal(refs.get("new"), "A03");
+
+  await writeFile(join(root, ".gaia", "rooms", "middle", "state.json"), JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, refCode: "A77" }), "utf8");
+  const kept = await ensureWorkspaceRoomRefCodes(root);
+  assert.equal(kept.get("middle"), "A77", "unique existing assignment is immutable");
+  const summaries = await scanRoomActivity(root);
+  assert.equal(summaries.find((room) => room.id === "middle")?.refCode, "A77");
 });
 
 test("normalizeRoomState accepts v1 shapes and drops malformed blocks", () => {
