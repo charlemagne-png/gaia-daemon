@@ -28,7 +28,7 @@ const TRANSCRIBE_TIMEOUT_MS = 180_000;
  * @property {MediaStream} stream
  * @property {AudioContext|null} audioCtx
  * @property {AnalyserNode|null} analyser
- * @property {Uint8Array|null} analyserData
+ * @property {Uint8Array<ArrayBuffer>|null} analyserData
  * @property {number} rafId
  * @property {Segment|null} segment
  * @property {boolean} segmentStopping
@@ -123,7 +123,7 @@ function startAnalyser(current) {
     current.analyser = current.audioCtx.createAnalyser();
     current.analyser.fftSize = 1024;
     current.analyser.smoothingTimeConstant = 0.18;
-    current.analyserData = new Uint8Array(current.analyser.fftSize);
+    current.analyserData = new Uint8Array(new ArrayBuffer(current.analyser.fftSize));
     source.connect(current.analyser);
     tickAnalyser(current);
   } catch {
@@ -368,8 +368,9 @@ export function VoiceControlOrb() {
 /** @param {HTMLCanvasElement} canvas */
 function startOrb(canvas) {
   if (!canvas.isConnected) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  const maybeCtx = canvas.getContext("2d");
+  if (!maybeCtx) return;
+  const ctx = maybeCtx;
   const points = orbPoints();
   const startedAt = performance.now();
 
