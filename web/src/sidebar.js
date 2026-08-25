@@ -309,6 +309,7 @@ function RoomNode(room, childrenOf, depth) {
               : null,
           room.favorite ? h("span", { class: "room-star", title: "favorite", text: "★" }) : null,
           room.incognito ? h("span", { class: "room-incognito", title: "incognito — no memory", text: "🕶" }) : null,
+          room.berserk ? h("span", { class: "room-berserk", title: "BERSERK — adversarial deathmode", text: "⚔\uFE0F" }) : null,
           // Living-titles law: titles carry purpose, so the card itself names the
           // operator — agent + model ride beside the status dot.
           RoomAgentChip(room),

@@ -286,6 +286,11 @@ export interface RoomState {
    * a single room value driving the `# Protocols` section's thinking line for
    * ALL agents. Absent/0 = thought blocks disabled. */
   thinkingLevel?: number;
+  /** /berserk adversarial deathmode. Lives ONLY on the ROOT ancestor room —
+   * descendants (subrooms + summon lanes) resolve it by walking parentRoomId,
+   * so one toggle covers the whole tree and `/berserk off` typed in ANY chat
+   * of the tree clears it everywhere at once. */
+  berserk?: true;
   agentCursors: Record<string, number>;
   /** Per-agent active-context floor: the transcript line index below which
    * content is NOT in the agent's live context (never loaded via a context-gate
@@ -1074,6 +1079,10 @@ export interface RoomSummary {
   /** Incognito room (see RoomState.incognito) — the tab/list marks it so an
    * off-the-record room is obvious wherever it's listed, not just when open. */
   incognito?: boolean;
+  /** EFFECTIVE /berserk deathmode (own flag or any ancestor's — resolved by
+   * scanRoomActivity's parent-chain pass) so every listed room in the tree
+   * shows the war paint, not just the root. */
+  berserk?: boolean;
   /** Last transcript write (epoch ms) — the chat-list sort key, and the client's
    * unread signal: a room whose lastActivity exceeds the last value seen while it
    * was open has an unread agent reply. */
@@ -1191,6 +1200,9 @@ export interface Snapshot {
     usageAccounts?: string[];
     /** Room agent-dialogue toggle (agents replying to each other's @mentions). */
     agentDialogue?: boolean;
+    /** EFFECTIVE /berserk deathmode for this room (own flag or any ancestor's —
+     * see RoomState.berserk). Drives the client's deep-red war paint. */
+    berserk?: boolean;
     /** Native desktop pet bindings for this room, keyed by agent. Empty/absent
      * means pets are off. Browser/iOS clients do not render an in-chat stand-in. */
     petBindings?: Record<string, string>;

@@ -6,9 +6,9 @@
 import { $, h } from "./dom.js";
 import { state } from "./state.js";
 
-/** @typedef {"layout"|"tabs"|"sidebar"|"panel"|"plugins"|"status"|"transcript"|"composer"|"studio"|"artifacts"|"dario"|"contextgate"|"theme"|"usage"|"search"|"bgtasks"|"settings"|"keymaker"} Region */
+/** @typedef {"layout"|"berserk"|"tabs"|"sidebar"|"panel"|"plugins"|"status"|"transcript"|"composer"|"studio"|"artifacts"|"dario"|"contextgate"|"theme"|"usage"|"search"|"bgtasks"|"settings"|"keymaker"} Region */
 
-const ORDER = /** @type {Region[]} */ (["layout", "tabs", "sidebar", "panel", "plugins", "status", "transcript", "composer", "studio", "artifacts", "dario", "contextgate", "theme", "usage", "search", "bgtasks", "settings", "keymaker"]);
+const ORDER = /** @type {Region[]} */ (["layout", "berserk", "tabs", "sidebar", "panel", "plugins", "status", "transcript", "composer", "studio", "artifacts", "dario", "contextgate", "theme", "usage", "search", "bgtasks", "settings", "keymaker"]);
 
 /** @type {Map<Region, () => void>} */
 const renderers = new Map();
@@ -135,6 +135,13 @@ function renderLayout() {
 }
 
 registerRegion("layout", renderLayout);
+
+// /berserk deathmode war paint: one body class drives the deep-red room +
+// glowing border (styles.css `body.berserk`). Effective flag comes resolved
+// from the daemon (snapshot.room.berserk covers subrooms via the parent walk).
+registerRegion("berserk", () => {
+  document.body.classList.toggle("berserk", Boolean(state.snapshot?.room.berserk));
+});
 
 // Drag handle between panes. Resizing rewrites the width CSS var on :root and
 // persists it, so panes stay where the user put them across reloads.

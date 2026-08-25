@@ -437,6 +437,7 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(typeof value.thinkingLevel === "number" && Number.isFinite(value.thinkingLevel) && value.thinkingLevel > 0 && value.thinkingLevel <= 10
       ? { thinkingLevel: Math.floor(value.thinkingLevel) }
       : {}),
+    ...(value.berserk === true ? { berserk: true as const } : {}),
     agentCursors: cursorRecord(value.agentCursors),
     ...(Object.keys(contextFloors).length > 0 ? { contextFloors } : {}),
     ...(runtimeDetails && Object.keys(runtimeDetails).length > 0 ? { runtimeDetails } : {}),

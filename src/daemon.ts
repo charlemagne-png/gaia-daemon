@@ -457,6 +457,9 @@ export class Daemon {
       llm: consolidateLlm(),
       summonHost: this.summonCoordinatorFor(workspaceId, workspace, record.path),
       setThinking: async (agentId, level) => (await this.applyThinking(workspaceId, resolvedRoom, agentId, level)).message,
+      // /berserk's root-room write rides the ROOT room's resident service
+      // (single-writer rule) — same serviceFor the summon coordinator uses.
+      roomPeer: (roomId) => this.serviceFor(workspaceId, roomId),
       // Same reload the settings-file save route uses: /model + /thinking
       // rewrite agent.json, and only a service rebuild reaches the runner
       // subprocesses (they snapshot the config at spawn).

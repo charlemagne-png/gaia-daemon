@@ -37,6 +37,10 @@ export interface AgentInput {
   /** Room-wide GAIA-THINK protocol level (0-10) from RoomState.thinkingLevel;
    * rides into the `# Protocols` section of the system prompt. Unset = 0. */
   protocolThinkingLevel?: number;
+  /** /berserk adversarial deathmode is active for this room's tree (resolved
+   * by RoomService via the parentRoomId walk). Rides into the turn prompt's
+   * BERSERK block through the shared seam — uniform for every harness. */
+  berserk?: boolean;
   /** Auto-retrieved memory block for this turn ("" / absent = nothing cleared
    * the relevance gate). Turn-level overlay, never part of the session. */
   recall?: string;
