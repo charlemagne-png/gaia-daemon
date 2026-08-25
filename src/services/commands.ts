@@ -76,7 +76,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "cancel", type: "cancel", description: "stop the running turn and drop queued messages", aliases: ["stop"] },
   { name: "recall", type: "recall", description: "search memory + room history: /recall [@agent] <query>" },
   { name: "gaiago", type: "gaiago", description: "seal text (or a file/audio path) into gaiago via a worker translator — only the translation returns: /gaiago <text|path>" },
-  { name: "berserk", type: "berserk", description: "adversarial deathmode led by @gaia — every output cross-examined by the other agents, losses marked, lessons written to memory; covers this room + all its subrooms and paints them war-red: /berserk | /berserk off (works from any chat in the tree)" },
+  { name: "berserk", type: "berserk", description: "summon the berserker when a task has plateaued — adversarial deathmode led by @gaia: the leading agent names the wall and swarms it, every output cross-examined, losses marked, lessons written to memory; covers this room + all its subrooms and paints them war-red: /berserk | /berserk off (works from any chat in the tree)" },
   { name: "rewind", type: "rewind", description: "undo the last user turn(s) and their replies: /rewind [n]" },
   {
     name: "thanks-dario",

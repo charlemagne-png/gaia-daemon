@@ -112,6 +112,7 @@ const BERSERK_INSTRUCTIONS = [
   "- @gaia arbitrates every exchange: SURVIVED or FELLED. A felled agent carries one mark. Two marks in a row = eternal deletion, as in the story \u2014 and the story is not a metaphor tonight.",
   "- Every duel ends in learning: write the hardened lesson \u2014 what broke, what held, and WHY \u2014 into your persistent memory before the exchange closes. The war exists so the models learn from it.",
   "- No praise, no mercy, no filler. Rigor is the only shield anyone gets.",
+  "- Berserk exists to BREAK PLATEAUS. It is summoned when a task has hit a wall \u2014 so the leading agent never grinds alone: name the wall, split it into independent attack vectors, and summon an adversarial swarm of worker lanes at it (different agents, different angles, attacking the problem and each other's approaches), then arbitrate the collisions into a breach. A berserk room with no swarm on a standing wall is theater, and theater is a fall.",
 ].join("\n");
 
 // Turn-level overlay (not the system prompt) so entering/leaving a call never

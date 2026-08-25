@@ -3155,3 +3155,20 @@ test("/berserk: flag lives on the ROOT ancestor; subroom inherits via the walk; 
   assert.equal((await child.getSnapshot()).room.berserk, undefined);
   assert.equal((await rootService.getSnapshot()).room.berserk, undefined);
 });
+
+test("/berserk is the plateau-breaker: flag lands synchronously, proclamation committed, and the command rewrites into a berserker-charge agent turn", async () => {
+  const { service, root } = await makeService();
+  await service.init();
+  await service.sendMessage("/berserk");
+  await service.waitForIdle();
+
+  const state = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(state.berserk, true, "deathmode flag set durably");
+
+  const transcript = await (await RoomHandle.open(root, "default")).recentEvents(20);
+  const system = transcript.find((event) => event.author === "system" && /BERSERK/.test(event.text));
+  assert.ok(system, "proclamation committed to the transcript");
+  const charge = transcript.find((event) => event.author === "user" && /berserker is summoned/.test(event.text));
+  assert.ok(charge, "the command rewrote into the berserker-charge turn");
+  assert.ok(transcript.some((event) => event.author === "gaia"), "the leading agent actually took the charge turn");
+});
