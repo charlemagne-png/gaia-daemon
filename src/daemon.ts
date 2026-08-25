@@ -51,6 +51,7 @@ import {
 } from "./services/voice.js";
 import { readAloud, readAloudStream, resolveTtsChoice, ttsStackSettings, type ReadAloudDelivery, type ReadAloudResult } from "./services/read-aloud.js";
 import { transcribe, type SttAudioInput } from "./services/transcribe.js";
+import "./services/stt-apple.js"; // registers the apple (on-device Siri) STT engine
 import { TtsCallBridge } from "./services/voice-tts-bridge.js";
 import { SttCallBridge } from "./services/voice-stt-bridge.js";
 import { KeepAwakeManager, keepAwakeCapability, migrateLegacyLaunchdAgent, readKeepAwakeSetting, writeKeepAwakeSetting } from "./services/keep-awake.js";
