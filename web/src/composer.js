@@ -17,6 +17,7 @@ import { buildAudioPlayer } from "./readaloud.js";
 import { activeTask, isBusy, runningSummonRooms, state } from "./state.js";
 import { setArtifactPanelOpen, toggleArtifactPanel } from "./design/artifacts.js";
 import { endCall, setMicMuted } from "./voice.js";
+import { toggleVoiceControl } from "./voice-control.js";
 import {
   abortActiveTranscription,
   cancelDictation,
@@ -1135,6 +1136,8 @@ function VoiceButtons() {
   if (!state.snapshot) return [];
   const recording = state.dictating;
   const busy = state.dictationBusy;
+  const voiceControlPhase = state.voiceControl.phase;
+  const voiceControlOn = state.voiceControl.enabled;
   return [
     h("button", {
       type: "button",
@@ -1151,6 +1154,13 @@ function VoiceButtons() {
         if (recording) cancelDictation();
       },
       text: busy ? "…" : recording ? "⏺" : "\u{1F3A4}",
+    }),
+    h("button", {
+      type: "button",
+      class: `voice-button voice-control${voiceControlOn ? " on" : ""} ${voiceControlPhase}`,
+      title: voiceControlOn ? "voice control mode — click to stop listening" : "voice control mode — continuous listening",
+      onclick: () => void toggleVoiceControl(),
+      text: `voice control: ${voiceControlPhase}`,
     }),
   ];
 }

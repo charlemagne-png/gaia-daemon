@@ -1108,7 +1108,41 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Dictation: recording pulses red, transcribing dims. */
 .voice-button.dictation.recording { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 60%, transparent); animation: dictation-pulse 1.2s ease-in-out infinite; }
 .voice-button.dictation.busy { opacity: 0.6; }
+.voice-button.voice-control { min-width: 162px; justify-content: center; text-transform: lowercase; color: var(--muted); }
+.voice-button.voice-control.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 70%, transparent); background: color-mix(in srgb, var(--ink) 70%, var(--accent) 12%); }
+.voice-button.voice-control.listening { animation: voice-control-pulse 1.45s ease-in-out infinite; }
+.voice-button.voice-control.processing { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 70%, transparent); }
 @keyframes dictation-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent); } 50% { box-shadow: 0 0 0 4px transparent; } }
+@keyframes voice-control-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 42%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
+
+.voice-control-orb {
+  position: relative;
+  height: 168px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 46%, transparent);
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%),
+    linear-gradient(180deg, color-mix(in srgb, var(--ink) 82%, var(--accent) 8%), var(--ink));
+  box-shadow: inset 0 0 32px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.voice-control-orb.processing { border-color: color-mix(in srgb, var(--warn) 56%, transparent); }
+.voice-control-orb-canvas { display: block; width: 100%; height: 100%; }
+.voice-control-orb-label {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  pointer-events: none;
+  text-shadow: 0 1px 3px var(--bg);
+}
+.voice-control-orb-label strong { color: var(--fg); font-weight: 600; }
+.voice-control-orb-label span { color: var(--accent); }
+.voice-control-orb.processing .voice-control-orb-label span { color: var(--warn); }
 
 .dictation-status { margin-bottom: 8px; }
 .dictation-panel {

@@ -54,6 +54,7 @@ import { isNative, isNativeWindowFocused } from "./native.js";
  *   dictationBars: number[],
  *   dictationError: string,
  *   dictationDrafts: {id: string, bytes: number, mtimeMs: number}[],
+ *   voiceControl: {enabled: boolean, phase: "idle"|"listening"|"processing", level: number, pulse: number},
  *   readAloud: {eventId: string, phase: "loading"|"playing"|"paused"|"ended", workspaceId: string, roomId: string}|null,
  *   dario: {open: boolean, loading: boolean, proposal: SanitizeProposal|null, error: string, selected: Set<string>, knownAt: string|null, lastAutoEventId: string},
  *   contextGate: {resolving: boolean, error: string, lastN: number},
@@ -158,6 +159,11 @@ export const state = {
   // composer. Never gates send or the mic — see dictation.js's
   // refreshRecoveredClips.
   dictationDrafts: [],
+  // Continuous voice control (this-tab-only): mic stays open, VAD slices
+  // utterances, each transcript becomes either a room-ref command or a normal
+  // message send. The right-panel orb reads level/pulse directly; renders are
+  // only dirtied for enabled/phase transitions.
+  voiceControl: { enabled: false, phase: "idle", level: 0, pulse: 0 },
   // Transcript read-aloud playback (one message at a time, this tab only).
   readAloud: null,
   // The Thanks-Dario review popup: proposal + which suggestion ids are
