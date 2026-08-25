@@ -319,6 +319,12 @@ export const AGENT_DIALOGUE_MAX_HOPS = 8;
  * event back into the history they just reset. */
 const TRANSCRIPT_STRUCTURAL_COMMANDS = new Set(["clear", "fork", "rewind"]);
 
+/** The turn /berserk rewrites itself into (sendMessage): berserk is the
+ * PLATEAU-BREAKER — summoning the berserker charges the room's leading agent
+ * to name the wall and swarm it, not to sit in a red room alone. */
+const BERSERK_CHARGE =
+  "\u2694\uFE0F The berserker is summoned — a task in this room has hit a wall. Name the plateaued task and the exact wall, one line each. Then BREAK THROUGH: split the wall into independent attack vectors and summon an adversarial swarm of worker lanes — different agents, different angles — each attacking the problem AND the other lanes' approaches. Arbitrate every return SURVIVED/FELLED, force research where reasoning is thin, write the hardened lessons to memory, and report the breach plan plus the lanes you launched.";
+
 /** Command handlers, keyed by parsed type. Adding a command = one entry here
  * plus one line in SLASH_COMMANDS. Each returns the system reply text, with an
  * optional event discriminator when the transcript should render it specially. */
@@ -660,6 +666,27 @@ export class RoomService {
       void this.emitSnapshot();
       return task;
     }
+    // /berserk (on): the deathmode flag lands on the room tree IMMEDIATELY
+    // (synchronous, like /note — works mid-turn), the proclamation is committed
+    // to the transcript, and the command then REWRITES into a real agent turn:
+    // the berserker charge. Berserk exists to break plateaus — the room's
+    // leading agent must name the wall and summon an adversarial swarm at it,
+    // so the toggle without the charge would be theater. /berserk off stays a
+    // pure registry command: standing down needs no swarm.
+    if (command.type === "berserk" && !command.off) {
+      const proclamation = await this.runBerserkCommand(false);
+      const event: RoomEvent = {
+        id: newRoomEventId(),
+        timestamp: new Date().toISOString(),
+        author: "system",
+        text: proclamation,
+      };
+      await this.room.appendEvent(event);
+      this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
+      text = BERSERK_CHARGE;
+      command = { type: "message", text };
+    }
+
     // Harness-native passthrough: an unrecognized `/command` becomes a command
     // TURN to the active agent when that agent has CHECKED that command as a
     // skill (claude builtins like deep-research) and its harness can run them.

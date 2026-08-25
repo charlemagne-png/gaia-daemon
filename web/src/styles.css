@@ -2758,3 +2758,17 @@ body.berserk .main {
   50% { box-shadow: inset 0 0 52px rgba(255, 30, 20, 0.3), 0 0 30px rgba(255, 30, 20, 0.85); }
 }
 @media (prefers-reduced-motion: reduce) { body.berserk .main { animation: none; box-shadow: 0 0 18px rgba(255, 30, 20, 0.6); } }
+
+/* /berserk: the room's CARD burns red wherever it's listed — sidebar included,
+   even when you've clicked out into another room — until the mode is off
+   (nav-item.berserk ← RoomSummary.berserk, tree-resolved server-side). */
+.nav-item.room-item.berserk {
+  background: rgba(120, 8, 6, 0.32);
+  border-radius: 6px;
+  animation: berserk-card 2.2s ease-in-out infinite;
+}
+@keyframes berserk-card {
+  0%, 100% { box-shadow: inset 0 0 0 1px #ff2b1f, 0 0 6px rgba(255, 30, 20, 0.35); }
+  50% { box-shadow: inset 0 0 0 1px #ff2b1f, 0 0 16px rgba(255, 30, 20, 0.8); }
+}
+@media (prefers-reduced-motion: reduce) { .nav-item.room-item.berserk { animation: none; box-shadow: inset 0 0 0 1px #ff2b1f, 0 0 10px rgba(255, 30, 20, 0.55); } }

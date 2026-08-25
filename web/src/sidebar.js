@@ -268,7 +268,7 @@ function RoomNode(room, childrenOf, depth) {
       h(
         "button",
         {
-          class: `nav-item room-item ${room.isCurrent ? "active" : ""} ${focused ? "focused" : ""}`,
+          class: `nav-item room-item ${room.isCurrent ? "active" : ""} ${focused ? "focused" : ""} ${room.berserk ? "berserk" : ""}`,
           title: `${label} — ${room.path}`,
           // Clicking makes this the delete target (the ⌘⌫ / Del chord acts on
           // it) and opens it. Re-clicking the current room just re-targets it.
