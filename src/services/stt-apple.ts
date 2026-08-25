@@ -58,15 +58,24 @@ func respawnDisclaimed() -> Never {
 if !CommandLine.arguments.contains("--disclaimed") { respawnDisclaimed() }
 let args = CommandLine.arguments.filter { $0 != "--disclaimed" }
 guard args.count >= 2 else {
-  FileHandle.standardError.write("usage: gaia-apple-stt <audio> [locale]\\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: gaia-apple-stt <audio> [locale] [device|server]\\n".data(using: .utf8)!)
   exit(64)
 }
 let audioUrl = URL(fileURLWithPath: args[1])
 let locale: Locale = args.count >= 3 && !args[2].isEmpty ? Locale(identifier: args[2]) : Locale.current
+// Single-pass process: "device" = on-device only, "server" = Apple dictation
+// service. SFSpeech allows ONE recognition session per process (an in-process
+// device+server race hangs both — measured 08-26), so the RACE lives in the
+// daemon: it spawns one process per mode in parallel.
+let onDevice = (args.count >= 4 ? args[3] : "device") != "server"
 
-let authSema = DispatchSemaphore(value: 0)
-SFSpeechRecognizer.requestAuthorization { _ in authSema.signal() }
-authSema.wait()
+// Skip the authorization round-trip entirely once granted — it costs real
+// latency on every clip; only block on the prompt when status is undetermined.
+if SFSpeechRecognizer.authorizationStatus() != .authorized {
+  let authSema = DispatchSemaphore(value: 0)
+  SFSpeechRecognizer.requestAuthorization { _ in authSema.signal() }
+  authSema.wait()
+}
 guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
   FileHandle.standardError.write("speech recognition not authorized (System Settings > Privacy & Security > Speech Recognition)\\n".data(using: .utf8)!)
   exit(2)
@@ -75,48 +84,28 @@ guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailabl
   FileHandle.standardError.write("no speech recognizer for locale \\(locale.identifier)\\n".data(using: .utf8)!)
   exit(3)
 }
-
-// Two-pass recognition: on-device first (fast, private), then Apple's server
-// dictation (still keyless + free) when the on-device model comes back EMPTY
-// or errors — observed live 08-26: quieter clips (-33 dB mean) got an empty
-// isFinal from the on-device en model while server dictation heard them fine.
-func recognize(onDevice: Bool) -> String? {
-  let request = SFSpeechURLRecognitionRequest(url: audioUrl)
-  request.shouldReportPartialResults = false
-  request.requiresOnDeviceRecognition = onDevice
-  request.taskHint = .dictation
-  if #available(macOS 13.0, *) {
-    request.addsPunctuation = true
-  }
-  let sema = DispatchSemaphore(value: 0)
-  var transcript: String? = nil
-  recognizer.recognitionTask(with: request) { result, error in
-    if let result = result, result.isFinal {
-      transcript = result.bestTranscription.formattedString
-      sema.signal()
-    } else if let error = error {
-      FileHandle.standardError.write("recognition (onDevice=\\(onDevice)) failed: \\(error.localizedDescription)\\n".data(using: .utf8)!)
-      sema.signal()
-    }
-  }
-  _ = sema.wait(timeout: .now() + 90)
-  return transcript
+if onDevice && !recognizer.supportsOnDeviceRecognition {
+  FileHandle.standardError.write("on-device recognition unsupported for \\(locale.identifier)\\n".data(using: .utf8)!)
+  exit(5)
 }
-
-DispatchQueue.global().async {
-  if recognizer.supportsOnDeviceRecognition {
-    if let text = recognize(onDevice: true), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      print(text)
-      exit(0)
-    }
-    FileHandle.standardError.write("on-device result empty; retrying via Apple dictation service\\n".data(using: .utf8)!)
+let request = SFSpeechURLRecognitionRequest(url: audioUrl)
+request.shouldReportPartialResults = false
+request.requiresOnDeviceRecognition = onDevice
+request.taskHint = .dictation
+if #available(macOS 13.0, *) {
+  request.addsPunctuation = true
+}
+recognizer.recognitionTask(with: request) { result, error in
+  if let result = result, result.isFinal {
+    let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.isEmpty { exit(6) }
+    print(text)
+    exit(0)
   }
-  guard let text = recognize(onDevice: false) else {
-    FileHandle.standardError.write("recognition produced no result\\n".data(using: .utf8)!)
+  if let error = error {
+    FileHandle.standardError.write("recognition failed: \\(error.localizedDescription)\\n".data(using: .utf8)!)
     exit(4)
   }
-  print(text)
-  exit(0)
 }
 dispatchMain()
 `;
@@ -242,13 +231,24 @@ async function appleTranscribe(context: SttContext): Promise<SttResult> {
       );
       if (retry.code !== 0) throw new Error(`ffmpeg could not decode the clip: ${(retry.stderr || decode.stderr).slice(0, 400)}`);
     }
-    // 2. recognize.
+    // 2. recognize — RACE two single-pass helper processes (SFSpeech allows one
+    // recognition session per process; in-process racing hangs both). On-device
+    // wins the moment it yields text (~0.5-0.9s, private); when it comes back
+    // empty (quiet clips) the server pass is ALREADY in flight instead of
+    // starting a serial second pass — measured 2x faster on the fallback path.
     const locale = appleLocale(context.language);
-    const recognized = await run(locale ? [helper, wav, locale] : [helper, wav], undefined, signal);
-    if (recognized.code !== 0) {
-      throw new Error(`Apple speech recognition failed (${recognized.code}): ${recognized.stderr.trim().slice(0, 400)}`);
+    const serverPass = run([helper, wav, locale, "server"], undefined, signal);
+    serverPass.catch(() => {}); // may be abandoned when on-device wins
+    const device = await run([helper, wav, locale, "device"], undefined, signal).catch(() => null);
+    if (device && device.code === 0 && device.stdout.trim()) {
+      return { text: device.stdout.trim() };
     }
-    return { text: recognized.stdout.trim() };
+    context.log("on-device pass empty; using raced Apple dictation result");
+    const server = await serverPass;
+    if (server.code !== 0 || !server.stdout.trim()) {
+      throw new Error(`Apple speech recognition failed (${server.code}): ${(server.stderr || device?.stderr || "").trim().slice(0, 400)}`);
+    }
+    return { text: server.stdout.trim() };
   } finally {
     rm(work, { recursive: true, force: true }).catch(() => {});
   }
