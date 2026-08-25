@@ -4020,6 +4020,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.parentRoomId ? { parentRoomId: state.parentRoomId } : {}),
             ...(state.pendingTurn ? { running: true } : {}),
             ...(state.title ? { title: state.title } : {}),
+            ...(state.activeAgent ? { agent: state.activeAgent } : {}),
             ...(state.favorite ? { favorite: true } : {}),
             ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),

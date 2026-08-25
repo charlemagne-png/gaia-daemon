@@ -242,6 +242,20 @@ function RoomNode(room, childrenOf, depth) {
   const focus = effectiveSidebarFocus();
   const focused = focus?.kind === "room" && focus.id === room.id;
   const label = room.title ?? room.id;
+  /** Agent + model chip for the room card — the id/operator info the title no
+   * longer carries under the living-titles law. Model comes from the agents
+   * roster (AgentStatus.modelLabel) so it tracks what turns actually run.
+   * @param {import("../../src/core/types.ts").RoomSummary} room */
+  const RoomAgentChip = (room) => {
+    if (!room.agent) return null;
+    const info = snapshot?.agents?.find((agent) => agent.id === room.agent);
+    const model = info?.modelLabel ?? "";
+    return h("span", {
+      class: "room-agent",
+      title: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
+      text: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
+    });
+  };
   return h(
     "div",
     { class: "room-node" },
@@ -295,6 +309,9 @@ function RoomNode(room, childrenOf, depth) {
               : null,
           room.favorite ? h("span", { class: "room-star", title: "favorite", text: "★" }) : null,
           room.incognito ? h("span", { class: "room-incognito", title: "incognito — no memory", text: "🕶" }) : null,
+          // Living-titles law: titles carry purpose, so the card itself names the
+          // operator — agent + model ride beside the status dot.
+          RoomAgentChip(room),
           h("span", { class: roomUnread(room) && !room.running ? "room-name unread" : "room-name", text: label }),
         ),
         h("small", {}, room.imported ? document.createTextNode(room.imported.slice(0, 10)) : PathText(room.path)),

@@ -1055,6 +1055,10 @@ export interface RoomSummary {
    * dot lights the moment its turn starts and clears when it commits. */
   running?: boolean;
   title?: string;
+  /** The room's active agent (RoomState.activeAgent) — surfaced so the room
+   * card can show who/what runs here now that titles carry purpose, not ids
+   * (living-titles law): the client pairs it with AgentStatus.modelLabel. */
+  agent?: string;
   /** Human-pinned room (see RoomState.favorite). */
   favorite?: boolean;
   /** User-named checkpoints (see RoomState.bookmarks) — surfaced on the
