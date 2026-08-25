@@ -245,7 +245,12 @@ export async function runConsolidation(options: ConsolidateRunOptions): Promise<
   }
 
   const page = await readEpisodesFrom(options.memoryDir, state.episodeCursor);
-  const episodes = page.items.slice(-MAX_EPISODES_PER_RUN);
+  // Oldest-first paging: take the FIRST N and advance the cursor only past
+  // what the model actually saw. The old slice(-N) + full-page cursor jump
+  // silently burned every episode before the last N on a big backlog
+  // (observed 2026-08-20: artus episodes 83–239 consumed unseen).
+  const episodes = page.items.slice(0, MAX_EPISODES_PER_RUN);
+  const consumedCursor = state.episodeCursor + episodes.length;
   if (!episodes.length && !options.force) {
     return { ...none, reason: "nothing new since last run" };
   }
@@ -294,7 +299,7 @@ export async function runConsolidation(options: ConsolidateRunOptions): Promise<
   // applyDreamProposal. episodeCursorAtPropose records where the cursor WOULD
   // advance to on apply.
   if (options.propose) {
-    const proposal: DreamProposal = { ts: now.toISOString(), episodeCursorAtPropose: page.nextCursor, ops };
+    const proposal: DreamProposal = { ts: now.toISOString(), episodeCursorAtPropose: consumedCursor, ops };
     await writeJsonAtomic(join(options.memoryDir, DREAM_PROPOSAL_FILE), proposal);
     return { ran: true, episodesSeen: episodes.length, factsAdded: 0, factsInvalidated: 0, memoryEdits: 0, opsSkipped: dropped, proposedOps: ops };
   }
@@ -302,7 +307,7 @@ export async function runConsolidation(options: ConsolidateRunOptions): Promise<
   const counts = await applyConsolidateOps(options, ops, now);
 
   await writeConsolidateState(options.memoryDir, {
-    episodeCursor: page.nextCursor,
+    episodeCursor: consumedCursor,
     runs: [...state.runs, now.toISOString()].slice(-RUN_LEDGER_LIMIT),
   });
   return { ran: true, episodesSeen: episodes.length, ...counts, opsSkipped: counts.opsSkipped + dropped };
@@ -460,6 +465,14 @@ function dreamOpLine(op: ConsolidateOp): string {
 export function formatDreamProposal(result: ConsolidateResult, applyHint: string): string {
   if (!result.ran) return `dream: ${result.reason ?? "did not run"}`;
   const ops = result.proposedOps ?? [];
-  if (!ops.length) return "dream: no ops proposed — memory is already tidy.";
+  if (!ops.length) {
+    // Never report "tidy" while hiding budget drops — a model that proposed
+    // real ops which ALL fell to enforceFactBudget looked identical to a
+    // genuinely clean memory (observed 2026-08-20: 6 good facts silently
+    // dropped for exceeding maxFactChars).
+    return result.opsSkipped > 0
+      ? `dream: 0 ops kept — ${result.opsSkipped} proposed op(s) dropped by the fact budget (too many or too long). Nothing applied.`
+      : "dream: no ops proposed — memory is already tidy.";
+  }
   return [...ops.map(dreamOpLine), "", applyHint].join("\n");
 }
