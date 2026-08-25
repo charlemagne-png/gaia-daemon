@@ -313,6 +313,7 @@ function RoomNode(room, childrenOf, depth) {
           // Living-titles law: titles carry purpose, so the card itself names the
           // operator — agent + model ride beside the status dot.
           RoomAgentChip(room),
+          room.refCode ? h("span", { class: "room-ref", title: `room reference ${room.refCode}`, text: room.refCode }) : null,
           h("span", { class: roomUnread(room) && !room.running ? "room-name unread" : "room-name", text: label }),
         ),
         h("small", {}, room.imported ? document.createTextNode(room.imported.slice(0, 10)) : PathText(room.path)),

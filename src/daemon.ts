@@ -20,7 +20,7 @@ import { findModelWithAlias } from "./harness/model-aliases.js";
 import { reapOrphans } from "./harness/reaper.js";
 import type { MemoryAction, MemoryMutationResult } from "./domain/memory.js";
 import { MemoryStore } from "./domain/memory.js";
-import { normalizeRoomState, RoomHandle } from "./domain/rooms.js";
+import { normalizeRoomState, resolveWorkspaceRoomRef, RoomHandle } from "./domain/rooms.js";
 import { listWorkspacePetBindings } from "./domain/pets.js";
 import { DEFAULT_ROOM, ensureWorkspaceRoom, initWorkspace, isValidRoomId, liveMaxSummonsPerRoom, loadWorkspace, setWorkspaceDefaultAgent, setWorkspaceRoom, trashWorkspaceRoom, workspacePath } from "./domain/workspace.js";
 import { setAgentDefaultRole, trashGlobalAgent } from "./domain/agents.js";
@@ -440,6 +440,13 @@ export class Daemon {
     } finally {
       this.servicePending.delete(key);
     }
+  }
+
+  async resolveRoomRef(workspaceId: string, ref: string): Promise<{ roomId: string } | undefined> {
+    const record = await this.registry.find(workspaceId);
+    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
+    const roomId = await resolveWorkspaceRoomRef(record.path, ref);
+    return roomId ? { roomId } : undefined;
   }
 
   private async createService(workspaceId: string, resolvedRoom: string, key: string): Promise<RoomService> {

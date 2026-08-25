@@ -270,6 +270,9 @@ export interface RoomNote {
 
 export interface RoomState {
   activeRoles: Record<string, string>;
+  /** Stable human-speakable workspace-scoped room reference (A01…Z99,
+   * A201…Z299, then A301…); assigned once, persisted in state.json. */
+  refCode?: string;
   /** Room-scoped Codex-pet bindings, keyed by agent id. Absence means pets are
    * off. Each entry binds exactly this room + that agent to one validated pet
    * package; several agents may be bound at once. */
@@ -1057,6 +1060,8 @@ export const NO_SESSION_TO_COMPACT: CompactResult = {
 export interface RoomSummary {
   id: string;
   path: string;
+  /** Stable short reference code for voice/typing room lookup. */
+  refCode?: string;
   isCurrent: boolean;
   parentRoomId?: string;
   /** True while an agent turn is streaming in this room — any room, not just
@@ -1181,6 +1186,8 @@ export interface Snapshot {
   room: {
     id: string;
     statePath: string;
+    /** Stable short reference code for this room, unique inside the workspace. */
+    refCode?: string;
     /** Events carry their runtime details on `details` (v1 sent side-band
      * underscore fields merged client-side; that heuristic is gone). */
     events: RoomEvent[];
