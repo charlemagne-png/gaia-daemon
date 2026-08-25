@@ -7,7 +7,11 @@ import { env } from "./env.js";
 export const DEFAULTS = {
   harness: "pi",
   model: { provider: "deepseek", name: "deepseek-v4-pro" },
-  roomTitleModel: { provider: "deepseek", name: "deepseek-v4-flash" },
+  // Titles ride the ambient login (no per-agent account) — this model MUST be
+  // reachable there. deepseek-v4-flash sat here for weeks with no deepseek
+  // credential installed: every refine threw, the catch ate it, and rooms kept
+  // the raw first-sentence fallback (living-titles law violated silently).
+  roomTitleModel: { provider: "anthropic", name: "haiku" },
   defaultAgent: "gaia",
   room: "default",
   thinking: "medium",

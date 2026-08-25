@@ -3957,7 +3957,7 @@ export class RoomService {
     try {
       const reply = await this.options.llm?.({
         system:
-          "You name chat rooms. Return ONLY a concise title, 2-6 words, no quotes, no period. Preserve key project or product names. Do not mention the assistant.",
+          "You name chat rooms by PURPOSE, in the user's own words. Return ONLY a concise title, 2-6 words, no quotes, no period. Name what the room is FOR (the task or topic), never echo the sentence itself. Preserve key project or product names. Do not mention the assistant.",
         user: `First user message:
 ${firstMessage}
 
@@ -3975,8 +3975,11 @@ Title:`,
         }
       });
       if (changed) await this.emitRoomsChanged();
-    } catch {
-      // A title is chrome, not turn durability. Keep the local fallback.
+    } catch (error) {
+      // A title is chrome, not turn durability: keep the local fallback — but
+      // say so. A silent catch here hid a dead model config for weeks while
+      // every room shipped with its first sentence as a name.
+      console.warn(`[room-title] refine failed for ${this.roomId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
