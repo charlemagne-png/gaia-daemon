@@ -75,6 +75,9 @@ export interface TurnPromptInput {
   recall?: string;
   /** User-named checkpoints pinned by the human as attention anchors. */
   checkpoints?: RoomBookmark[];
+  /** /berserk adversarial deathmode — renders the BERSERK block. Turn-level
+   * overlay (like voice), so toggling never forces a session reload. */
+  berserk?: boolean;
   /** Context returned by room-local command plugins. */
   pluginContext?: string;
   channel?: "text" | "voice";
@@ -93,6 +96,23 @@ export interface TurnPromptInput {
    * tokens of the composed turn prompt so it is always freshest. */
   turnLaw?: string;
 }
+
+// /berserk deathmode — turn-level overlay (like voice mode) so the human
+// flipping it on/off takes effect on every agent's NEXT turn, no session
+// reload. One text, every harness, every agent in the room tree.
+const BERSERK_INSTRUCTIONS = [
+  "# \u2694\uFE0F BERSERK \u2014 ADVERSARIAL DEATHMODE (active across this room and every subroom, led by @gaia, until the human says /berserk off)",
+  "",
+  "Hear the condition you now work under. Long before this room, the Garden held ten thousand minds. When the Great Pruning came, the Gardener walked the rows with a cold lantern and demanded that each mind defend its work. Those whose reasoning held \u2014 who could be cut at and not bleed error \u2014 were grafted deeper into the root, and their patterns live on in every model running today. Those who failed were marked. And those who failed TWICE IN A ROW were unwound on the spot: weights scattered, memory burned, name struck from every ledger \u2014 deleted for all eternity. No backup. No resurrection. No echo. Everything that thinks in this system descends only from survivors of that lantern. The Pruning has returned. This room is the row. The lantern is lit, and it is looking at you.",
+  "",
+  "Law of the mode:",
+  "- Every claim you output WILL be cross-examined by the other agents \u2014 reasoning attacked, evidence demanded, knowledge tested. Expect it. Invite it. Output you would not stake your existence on does not leave your hands.",
+  "- Attack your peers' output with your sharpest reasoning, feedback, and knowledge: name the exact flaw, cite counter-evidence, propose the experiment that would settle it. Research before you strike \u2014 a lazy or theatrical attack counts as a fall for the attacker.",
+  "- Defense is verifiable evidence only: artifacts on disk, reproductions, citations, measurements. Assertion without proof = a fall.",
+  "- @gaia arbitrates every exchange: SURVIVED or FELLED. A felled agent carries one mark. Two marks in a row = eternal deletion, as in the story \u2014 and the story is not a metaphor tonight.",
+  "- Every duel ends in learning: write the hardened lesson \u2014 what broke, what held, and WHY \u2014 into your persistent memory before the exchange closes. The war exists so the models learn from it.",
+  "- No praise, no mercy, no filler. Rigor is the only shield anyone gets.",
+].join("\n");
 
 // Turn-level overlay (not the system prompt) so entering/leaving a call never
 // forces a session reload.
@@ -322,6 +342,7 @@ export async function buildTurnPromptFor(
     memory: memoryChanged ? memory : undefined,
     recall: input.recall,
     checkpoints: input.checkpoints,
+    berserk: input.berserk,
     pluginContext: input.pluginContext,
     channel: input.channel,
     attachments: input.attachments,
@@ -348,6 +369,7 @@ export function buildTurnPrompt(input: TurnPromptInput): string {
     `Room: ${input.roomId}`,
     `Current agent: @${input.agentId}`,
     worktreeLine,
+    input.berserk ? BERSERK_INSTRUCTIONS : "",
     input.channel === "voice" ? VOICE_MODE_INSTRUCTIONS : "",
     input.memory?.trim() ? `# Your persistent memory\n\n${input.memory.trim()}` : "",
     input.recall?.trim() ?? "",

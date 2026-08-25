@@ -15,6 +15,10 @@ test("parseCommand: known commands and arguments", () => {
   assert.deepEqual(parseCommand("/role gaia brainstorm"), { type: "role", agent: "gaia", role: "brainstorm" });
   assert.deepEqual(parseCommand("/summon terry fix the tests"), { type: "summon", agent: "terry", task: "fix the tests" });
   assert.deepEqual(parseCommand("/thinking high"), { type: "thinking", level: "high" });
+  // /berserk: bare = deathmode ON; a single "off" token stands the tree down.
+  assert.deepEqual(parseCommand("/berserk"), { type: "berserk" });
+  assert.deepEqual(parseCommand("/berserk off"), { type: "berserk", off: true });
+  assert.deepEqual(parseCommand("/berserk OFF"), { type: "berserk", off: true });
   assert.deepEqual(parseCommand("/thinking @gaia off"), { type: "thinking", agent: "gaia", level: "off" });
   // GAIA-THINK protocol level: bare numeric or `off` (single token) → thinking-level.
   assert.deepEqual(parseCommand("/thinking 7"), { type: "thinking-level", level: 7 });

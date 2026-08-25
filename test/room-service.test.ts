@@ -3106,3 +3106,52 @@ test("/queue: parks mid-turn instead of steering; pause holds it through settle,
   assert.equal(transcript.filter((event) => event.author === "user" && event.text === "also check the edge case").length, 1);
   assert.equal(transcript.filter((event) => event.author === "gaia").length, 2, "the parked idea ran as its own second turn");
 });
+
+test("/berserk: flag lives on the ROOT ancestor; subroom inherits via the walk; off from the child stands the whole tree down", async () => {
+  const { service: rootService, workspace, root } = await makeService();
+  await rootService.init();
+  // Seed a subroom of "default" before its service opens (parentRoomId chain).
+  await mkdir(join(root, ".gaia", "rooms", "child"), { recursive: true });
+  await writeFile(
+    workspacePaths.roomState(root, "child"),
+    JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, parentRoomId: "default", subroom: true }),
+    "utf8",
+  );
+  const child = await RoomService.open({
+    workspaceId: "ws1",
+    workspace,
+    roomId: "child",
+    memoryStore: new MemoryStore(),
+    runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: "hi" } as AgentEvent]),
+    // The peer hook must be asked for the ROOT room — its resident service does the write.
+    roomPeer: async (roomId) => {
+      assert.equal(roomId, "default");
+      return rootService;
+    },
+  });
+  await child.init();
+
+  // ON from the CHILD: the flag lands on the root's state, never the child's.
+  const onReply = await child.runBerserkCommand();
+  assert.match(onReply, /BERSERK/);
+  const rootState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(rootState.berserk, true, "flag lives on the root ancestor");
+  const childState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "child")));
+  assert.equal(childState.berserk, undefined, "descendants inherit, never carry the flag");
+
+  // Both rooms are effectively berserk (snapshot resolves the walk).
+  assert.equal((await rootService.getSnapshot()).room.berserk, true);
+  assert.equal((await child.getSnapshot()).room.berserk, true);
+  // The rooms list paints every room of the tree, not just the root.
+  const rooms = await scanRoomActivity(root);
+  assert.equal(rooms.find((room) => room.id === "default")?.berserk, true);
+  assert.equal(rooms.find((room) => room.id === "child")?.berserk, true);
+
+  // OFF from the CHILD clears the root — "until I say /berserk off in any of the chats".
+  const offReply = await child.runBerserkCommand(true);
+  assert.match(offReply, /OFF/);
+  const clearedRoot = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(clearedRoot.berserk, undefined);
+  assert.equal((await child.getSnapshot()).room.berserk, undefined);
+  assert.equal((await rootService.getSnapshot()).room.berserk, undefined);
+});

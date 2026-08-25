@@ -29,6 +29,7 @@ export type SlashCommand =
   | { type: "cancel" }
   | { type: "recall"; agent?: string; query?: string }
   | { type: "gaiago"; text?: string }
+  | { type: "berserk"; off?: boolean }
   | { type: "rewind"; count?: string }
   | { type: "thanks-dario"; sub: "on" | "off" | "run" }
   | { type: "reload" }
@@ -75,6 +76,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "cancel", type: "cancel", description: "stop the running turn and drop queued messages", aliases: ["stop"] },
   { name: "recall", type: "recall", description: "search memory + room history: /recall [@agent] <query>" },
   { name: "gaiago", type: "gaiago", description: "seal text (or a file/audio path) into gaiago via a worker translator — only the translation returns: /gaiago <text|path>" },
+  { name: "berserk", type: "berserk", description: "adversarial deathmode led by @gaia — every output cross-examined by the other agents, losses marked, lessons written to memory; covers this room + all its subrooms and paints them war-red: /berserk | /berserk off (works from any chat in the tree)" },
   { name: "rewind", type: "rewind", description: "undo the last user turn(s) and their replies: /rewind [n]" },
   {
     name: "thanks-dario",
@@ -160,6 +162,8 @@ export function parseCommand(input: string): SlashCommand {
       return args[0]?.toLowerCase() === "run" ? { type: "schedule", sub: "run", id: args[1] } : { type: "schedule", sub: "list" };
     case "steer":
       return { type: "steer", text: args.join(" ") || undefined };
+    case "berserk":
+      return { type: "berserk", ...(args[0]?.toLowerCase() === "off" ? { off: true } : {}) };
     case "queue":
       return { type: "queue", text: args.join(" ") || undefined };
     case "note":

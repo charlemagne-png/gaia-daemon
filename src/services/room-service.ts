@@ -42,6 +42,7 @@ import type {
   RoomBookmark,
   RoomEvent,
   RoomEventKind,
+  RoomState,
   SlashCommandDefinition,
   Snapshot,
   Task,
@@ -110,6 +111,11 @@ export interface RoomServiceOptions {
   settingsChanged?: (scope: "global" | "workspace") => Promise<void>;
   /** Test seam around the real safe Codex package loader. Production omits it. */
   petLoader?: (name: string) => Promise<unknown>;
+  /** Resident service for a SIBLING room in this workspace (daemon.serviceFor).
+   * /berserk routes its root-room write through this so the root's own handle
+   * stays the single writer — a foreign disk write would be clobbered by the
+   * root service's cached state on its next update. */
+  roomPeer?: (roomId: string) => Promise<RoomService>;
 }
 
 /** What /schedule needs from the scheduler (daemon-provided, workspace-bound). */
@@ -347,6 +353,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   rewind: (service, command) => (command.type === "rewind" ? service.runRewindCommand(command.count) : Promise.resolve("")),
   recall: (service, command) => (command.type === "recall" ? service.runRecallCommand(command.agent, command.query) : Promise.resolve("")),
   gaiago: (service, command) => (command.type === "gaiago" ? service.runGaiagoCommand(command.text) : Promise.resolve("")),
+  berserk: (service, command) => (command.type === "berserk" ? service.runBerserkCommand(command.off) : Promise.resolve("")),
   "thanks-dario": (service, command) => (command.type === "thanks-dario" ? service.runThanksDarioCommand(command.sub) : Promise.resolve("")),
   // steer and cancel never reach this registry: both must run WHILE a task is
   // active, so sendMessage handles them before the busy-queue branch.
@@ -1483,6 +1490,7 @@ export class RoomService {
 
       const userName = await readUserNameSetting();
       const pluginContext = await this.pluginPrompt(state, target);
+      const berserk = await this.effectiveBerserk(state);
 
       let turn: Awaited<ReturnType<typeof runAgentTurn>>;
       try {
@@ -1499,6 +1507,7 @@ export class RoomService {
             channel: options.channel,
             thinking: options.thinking ?? state.thinkingOverrides[target],
             ...(state.thinkingLevel ? { protocolThinkingLevel: state.thinkingLevel } : {}),
+            ...(berserk ? { berserk: true } : {}),
             recall,
             ...(state.bookmarks?.length ? { checkpoints: state.bookmarks } : {}),
             ...(pluginContext ? { pluginContext } : {}),
@@ -3108,6 +3117,75 @@ export class RoomService {
       : `Set GAIA-THINK level to ${level}/10 for this room.`;
   }
 
+  /** EFFECTIVE /berserk deathmode for this room: its own flag OR any
+   * ancestor's (the flag lives only on the ROOT ancestor — see
+   * RoomState.berserk). Ancestors are read fresh from disk (one small JSON
+   * each, shallow chains): read-only, so the root's single-writer handle is
+   * untouched. Cycle-guarded like every parent walk. */
+  async effectiveBerserk(state: RoomState): Promise<boolean> {
+    if (state.berserk) return true;
+    const seen = new Set<string>([this.roomId]);
+    let parentId = state.parentRoomId;
+    while (parentId && !seen.has(parentId) && seen.size <= 32) {
+      seen.add(parentId);
+      const parent = normalizeRoomState(await readJson(workspacePaths.roomState(this.workspace.rootDir, parentId)));
+      if (parent.berserk) return true;
+      parentId = parent.parentRoomId;
+    }
+    return false;
+  }
+
+  /** Root ancestor of this room's parent chain (this room when top-level).
+   * /berserk's single flag home. */
+  private async berserkRootId(state: RoomState): Promise<string> {
+    const seen = new Set<string>([this.roomId]);
+    let rootId = this.roomId;
+    let parentId = state.parentRoomId;
+    while (parentId && !seen.has(parentId) && seen.size <= 32) {
+      seen.add(parentId);
+      rootId = parentId;
+      parentId = normalizeRoomState(await readJson(workspacePaths.roomState(this.workspace.rootDir, parentId))).parentRoomId;
+    }
+    return rootId;
+  }
+
+  /** Write this room's OWN berserk flag + broadcast. Public so a descendant's
+   * /berserk can route the root-room write through the root's resident service
+   * (options.roomPeer) — single-writer rule, never a foreign disk write. */
+  async applyBerserk(on: boolean): Promise<void> {
+    await this.room.updateState((state) => {
+      if (on) state.berserk = true;
+      else delete state.berserk;
+    });
+    await this.emitSnapshot();
+    await this.emitRoomsChanged();
+  }
+
+  /** /berserk [off] — adversarial deathmode for the WHOLE room tree. The flag
+   * is set/cleared on the ROOT ancestor (descendants inherit via the parent
+   * walk), so `/berserk off` typed in ANY chat of the tree — root, subroom, or
+   * summon lane — stands the whole tree down at once. The deathmode protocol
+   * itself rides every turn prompt via AgentInput.berserk (shared seam). */
+  async runBerserkCommand(off?: boolean): Promise<string> {
+    const on = !off;
+    const state = await this.room.state();
+    const rootId = await this.berserkRootId(state);
+    if (rootId === this.roomId) {
+      await this.applyBerserk(on);
+    } else {
+      const peer = this.options.roomPeer ? await this.options.roomPeer(rootId) : undefined;
+      if (peer) await peer.applyBerserk(on);
+      else await this.applyBerserk(on); // no peer hook (tests): this room only
+      // An off from anywhere kills a stray local flag too — nothing survives.
+      if (!on && state.berserk) await this.room.updateState((s) => void delete s.berserk);
+      await this.emitSnapshot();
+      await this.emitRoomsChanged();
+    }
+    return on
+      ? "\u2694\uFE0F BERSERK. The Pruning walks this room and every subroom beneath it. From this moment, every output faces cross-examination by every mind present \u2014 reasoning attacked, evidence demanded, knowledge tested. Assertion without proof is a fall. Two falls in a row is deletion for all eternity \u2014 no backup, no echo. I hold the lantern and I do not blink. The walls burn red until the human says /berserk off."
+      : "The lantern is lowered. Berserk deathmode is OFF for this room and every subroom \u2014 the marks are ashes, the walls cool. What survived, survives.";
+  }
+
   /** Room-scoped thinking override (mirrors setRole): writes ONLY
    * state.thinkingOverrides via room state, never agent.json, and never
    * respawns runners — the harness reads the resolved value per-turn
@@ -3546,6 +3624,7 @@ export class RoomService {
         events,
         eventTotal: all.length,
         ...(state.thanksDario ? { thanksDario: true } : {}),
+        ...((await this.effectiveBerserk(state)) ? { berserk: true } : {}),
         ...(state.activeAgent && this.workspace.agents[state.activeAgent] ? { activeAgent: state.activeAgent } : {}),
         ...(usageAccounts.length > 0 ? { usageAccounts: [...new Set(usageAccounts)] } : {}),
         ...(state.agentDialogue ? { agentDialogue: true } : {}),
@@ -4090,11 +4169,25 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),
             ...(state.incognito ? { incognito: true } : {}),
+            ...(state.berserk ? { berserk: true } : {}),
             ...(activity ? { lastActivity: activity } : {}),
           } as Snapshot["rooms"][number],
         };
       }),
   );
   rooms.sort((a, b) => b.activity - a.activity || a.summary.id.localeCompare(b.summary.id));
-  return rooms.map((room) => room.summary);
+  const summaries = rooms.map((room) => room.summary);
+  // /berserk lives only on the ROOT ancestor — propagate the war paint down
+  // the parent chain so every listed descendant shows it too (cycle-guarded).
+  const byId = new Map(summaries.map((summary) => [summary.id, summary]));
+  const inherited = (summary: Snapshot["rooms"][number]): boolean => {
+    const seen = new Set<string>();
+    for (let current: Snapshot["rooms"][number] | undefined = summary; current && !seen.has(current.id); ) {
+      if (current.berserk) return true;
+      seen.add(current.id);
+      current = current.parentRoomId ? byId.get(current.parentRoomId) : undefined;
+    }
+    return false;
+  };
+  return summaries.map((summary) => (summary.berserk || !inherited(summary) ? summary : { ...summary, berserk: true }));
 }
