@@ -447,6 +447,7 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(typeof value.workDir === "string" && value.workDir.trim() ? { workDir: value.workDir } : {}),
     ...(typeof value.title === "string" && value.title.trim() ? { title: value.title } : {}),
     ...(value.titleSource === "auto" || value.titleSource === "model" || value.titleSource === "manual" ? { titleSource: value.titleSource } : {}),
+    ...(typeof value.titleDrift === "number" && Number.isFinite(value.titleDrift) && value.titleDrift > 0 ? { titleDrift: Math.floor(value.titleDrift) } : {}),
     ...(value.favorite === true ? { favorite: true } : {}),
     ...(() => {
       const bookmarks = bookmarksFrom(value.bookmarks);

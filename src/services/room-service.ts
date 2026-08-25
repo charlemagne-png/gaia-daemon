@@ -1321,7 +1321,13 @@ export class RoomService {
         // Auto-named rooms take their display title from their first human
         // message (never from a name dialog) — the Claude Code / Codex pattern.
         // Agent-dialogue turns don't count as the human naming the room.
-        if (!options.fromAgentDialogue) await this.maybeAutoTitle(text);
+        if (!options.fromAgentDialogue) {
+          await this.maybeAutoTitle(text);
+          // Living-titles law, drift half: titles are LIVING — every user
+          // message ticks a counter, and periodically the recent conversation
+          // is re-read against the current title. Background, best-effort.
+          void this.maybeRetitleOnDrift();
+        }
       }
       // Authoritative refresh right after the commit: this snapshot has the
       // queued ghost dropped AND the committed user event present, so it
@@ -3951,6 +3957,62 @@ export class RoomService {
     await this.emitRoomsChanged();
 
     if (this.options.llm) void this.refineAutoTitle(text, fallback);
+  }
+
+  /** Drift half of the living-titles law: every TITLE_DRIFT_EVERY user
+   * messages, re-read the recent conversation against the current title and
+   * re-title if the room's purpose has moved (generalize when it broadens,
+   * specialize when it crystallizes). Manual titles are the lock — the drift
+   * pass never touches them; auto/model titles stay living. */
+  private static readonly TITLE_DRIFT_EVERY = 8;
+
+  private async maybeRetitleOnDrift(): Promise<void> {
+    if (this.incognito || !isAutoRoomId(this.roomId) || !this.options.llm) return;
+    const state = await this.room.state();
+    if (!state.title || state.imported || state.titleSource === "manual") return;
+    const title = state.title;
+    let due = false;
+    await this.room.updateState((current) => {
+      const n = (current.titleDrift ?? 0) + 1;
+      if (n >= RoomService.TITLE_DRIFT_EVERY) {
+        delete current.titleDrift;
+        due = true;
+      } else {
+        current.titleDrift = n;
+      }
+    });
+    if (!due) return;
+    try {
+      const events = await this.room.recentEvents(60);
+      const userLines = events
+        .filter((event) => event.author === "user" && typeof event.text === "string" && event.text.trim())
+        .slice(-10)
+        .map((event) => {
+          const text = event.text.replace(/\s+/g, " ").trim();
+          return text.length > 280 ? `${text.slice(0, 280)}…` : text;
+        });
+      if (userLines.length < 3) return;
+      const reply = await this.options.llm?.({
+        system:
+          "You keep chat-room titles honest. Given the current title and the room's recent user messages, decide whether the title still names the room's PURPOSE in the user's own words. If it still fits, return it UNCHANGED. If the room has drifted, return a new concise title, 2-6 words, no quotes, no period — generalize if the room broadened, specialize if it crystallized. Return ONLY the title.",
+        user: `Current title: ${title}\n\nRecent user messages (oldest first):\n${userLines.map((line) => `- ${line}`).join("\n")}\n\nTitle:`,
+        model: DEFAULTS.roomTitleModel,
+      });
+      const next = normalizeRoomTitle(reply ?? "");
+      if (!next || next === title) return;
+      let changed = false;
+      await this.room.updateState((current) => {
+        if (current.title === title && current.titleSource !== "manual" && !current.imported) {
+          current.title = next;
+          current.titleSource = "model";
+          changed = true;
+        }
+      });
+      if (changed) await this.emitRoomsChanged();
+    } catch (error) {
+      // Same visibility rule as refineAutoTitle: keep the old title, say why.
+      console.warn(`[room-title] drift check failed for ${this.roomId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async refineAutoTitle(firstMessage: string, fallback: string): Promise<void> {

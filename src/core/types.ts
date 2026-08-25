@@ -330,6 +330,10 @@ export interface RoomState {
    * be refined only while they are still machine-owned. Absent covers legacy
    * imported titles and old state files. */
   titleSource?: "auto" | "model" | "manual";
+  /** User messages since the last drift re-title check (living-titles law:
+   * titles are LIVING — re-title when the room's purpose drifts). Counter
+   * only; manual titles are never touched by the drift pass. */
+  titleDrift?: number;
   /** Pinned by the human for quick filtering in the room list. Display-only
    * room metadata, like title: the room id/path stay stable. */
   favorite?: boolean;
