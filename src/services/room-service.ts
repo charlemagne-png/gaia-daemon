@@ -828,12 +828,10 @@ export class RoomService {
     // steers exactly like plain text. Uniform: gated on the runtime's
     // supportsSteer, never a harness id.
     //
-    // Voice utterances steer too — conversation demands it. Speaking while the
-    // dispatched agent is mid-turn injects into that turn immediately instead
-    // of queueing behind it (queued voice = dead conversational latency). An
-    // utterance addressed to a DIFFERENT agent (voice dispatch already resolved
-    // targets above) fails aimedAtRunner and falls through to the queue as
-    // before — we never inject one agent's words into another's turn.
+    // Voice utterances steer too — conversation demands it. Speaking while any
+    // agent is mid-turn injects into that turn immediately instead of queueing
+    // behind it (queued voice = dead conversational latency). If Charles wants
+    // queue, he says queue explicitly.
     let recordedSteerEventId: string | undefined;
     if (
       command.type === "message" &&
@@ -844,7 +842,7 @@ export class RoomService {
     ) {
       const runner = this.activeAgentTurn.targets[0];
       const runtime = this.runtimes[runner];
-      const aimedAtRunner = targets.length > 0 && targets.every((id) => id === runner);
+      const aimedAtRunner = options.voice || (targets.length > 0 && targets.every((id) => id === runner));
       if (aimedAtRunner && runtime?.capabilities.supportsSteer) {
         const steered = await this.steerRunningTurn(runner, text, task, options.attachments, options.voice === true);
         if (steered === true) return task;
@@ -2293,6 +2291,7 @@ export class RoomService {
    * steer task completes — the running turn's continued output IS the reply,
    * so there's no turn of its own. */
   private async steerRunningTurn(target: string, text: string, task: Task, attachments?: MessageAttachment[], voice = false): Promise<true | string> {
+    task.targets = [target];
     const event = await this.room.addUserMessage(text, [target], undefined, attachments, undefined, voice);
     this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
     // Attachments travel two ways, uniformly: the same breadcrumb lines the turn
