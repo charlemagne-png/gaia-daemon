@@ -523,7 +523,7 @@ async function speak(text) {
   await task;
 }
 
-/** @param {string} text @returns {Promise<void>} */
+/** @param {string[]} chunks @returns {Promise<void>} */
 async function speakVoiceReplyChunks(chunks) {
   if (!chunks.length || !state.voiceControl.enabled) return;
   const seq = speechSeq;

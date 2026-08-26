@@ -269,10 +269,12 @@ export function connectEvents(resyncOnReady = false) {
     const payload = /** @type {Ev<"text-delta">} */ (JSON.parse(event.data));
     const stream = streamFor(payload);
     if (!stream) return;
+    const workspaceId = state.snapshot?.workspace.id;
+    if (!workspaceId) return;
     stream.text += payload.delta;
     appendSpanBlock(stream.details, "text", payload.delta);
     dispatchClientEvent("gaia:text-delta", {
-      workspaceId: state.snapshot.workspace.id,
+      workspaceId,
       roomId: payload.roomId,
       eventId: payload.eventId,
       taskId: payload.taskId,
