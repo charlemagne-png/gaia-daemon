@@ -145,6 +145,11 @@ export function connectEvents(resyncOnReady = false) {
   // it per workspace to keep the sidebar's workspace-level running/unread dots
   // live even for workspaces we're not viewing. When it's the open workspace,
   // also refresh the room list that drives the rooms tree + tab strip.
+  listen("room-redirect", (event) => {
+    const payload = /** @type {Ev<"room-redirect">} */ (JSON.parse(event.data));
+    void import("./actions.js").then(({ selectRoom }) => selectRoom(payload.workspaceId, payload.roomId));
+  });
+
   listen("rooms", (event) => {
     const payload = /** @type {Ev<"rooms">} */ (JSON.parse(event.data));
     state.workspaceRooms[payload.workspaceId] = payload.rooms;

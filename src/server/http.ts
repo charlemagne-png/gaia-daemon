@@ -894,9 +894,16 @@ export class GaiaWebServer {
       // queue:true is the Cmd/Ctrl+Enter opt-out of steer-by-default — force the
       // durable queue instead of injecting into the running turn.
       const queue = (body as { queue?: unknown }).queue === true;
-      const task = await service.sendMessage(textValue, { ...(attachments ? { attachments } : {}), ...(queue ? { queue } : {}) });
+      const task = await service.sendMessage(textValue, { origin: "human", ...(attachments ? { attachments } : {}), ...(queue ? { queue } : {}) });
       json(response, 202, { task });
       return;
+    }
+
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/active-agent$/))) {
+      const body = await parseBody(request);
+      const agentId = stringField(body, "agentId") ?? stringField(body, "agent");
+      if (!agentId?.trim()) return json(response, 400, { error: "Missing agent id" });
+      return this.respond(response, () => this.daemon.setActiveAgent(params![0], params![1], agentId.trim()));
     }
 
     // Fork-from-message: retry regenerates the reply produced by a user
@@ -1386,7 +1393,7 @@ export class GaiaWebServer {
       
       // Enqueue the message via the existing path
       const service = await this.daemon.serviceFor(resolvedWorkspaceId, resolvedRoomId);
-      const task = await service.sendMessage(addressedText, { recordUserMessage: true });
+      const task = await service.sendMessage(addressedText, { origin: "human", recordUserMessage: true });
 
       // Broadcast acknowledgment to UI
       this.broadcast({
@@ -1737,6 +1744,7 @@ export class GaiaWebServer {
       targets: [call.info.agentId],
       channel: "voice",
       recordUserMessage: turn.kind === "user",
+      ...(turn.kind === "user" ? { origin: "human" as const } : {}),
       thinking: call.info.thinking,
     });
     if (streaming) beginSse(response);
@@ -1830,8 +1838,11 @@ export class GaiaWebServer {
     // event stays scoped by workspace+room (room ids are only locally unique).
     const ambient = event.type === "rooms" || event.type === "pet-bindings" || event.type === "pet-progress";
     for (const client of this.clients) {
-      const scoped = event as { workspaceId?: string; roomId?: string };
-      if (!ambient) {
+      const scoped = event as { workspaceId?: string; roomId?: string; fromWorkspaceId?: string; fromRoomId?: string };
+      if (event.type === "room-redirect") {
+        if (client.workspaceId && scoped.fromWorkspaceId && client.workspaceId !== scoped.fromWorkspaceId) continue;
+        if (client.roomId && scoped.fromRoomId && client.roomId !== scoped.fromRoomId) continue;
+      } else if (!ambient) {
         if (client.workspaceId && scoped.workspaceId && client.workspaceId !== scoped.workspaceId) continue;
         if (client.roomId && scoped.roomId && client.roomId !== scoped.roomId) continue;
       }
