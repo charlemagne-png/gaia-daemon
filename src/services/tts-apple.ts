@@ -33,6 +33,13 @@ export function sanitizeSayVoice(voice?: string): string | undefined {
   return clean || undefined;
 }
 
+/** Clamp a words-per-minute rate to say's sane range; undefined = say default (~175). */
+export function sanitizeSayRate(rate?: number): number | undefined {
+  const n = Number(rate);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(400, Math.max(90, Math.round(n)));
+}
+
 function abortError(): Error {
   const error = new Error("Speech cancelled");
   error.name = "AbortError";
@@ -42,14 +49,15 @@ function abortError(): Error {
 /** Speak one short utterance through macOS say. Calls are serialized FIFO so
  * command acknowledgements never overlap. Abort before start skips the queued
  * utterance; abort while speaking kills the active say process. */
-export function speak(text: string, voice?: string, signal?: AbortSignal): Promise<void> {
+export function speak(text: string, voice?: string, signal?: AbortSignal, rate?: number): Promise<void> {
   const utterance = sanitizeSayText(text);
   const sayVoice = sanitizeSayVoice(voice);
+  const sayRate = sanitizeSayRate(rate);
   if (!utterance) return Promise.reject(new Error("No text to speak"));
   const generation = speakGeneration;
   const run = speakTail.catch(() => undefined).then(() => {
     if (generation !== speakGeneration) return Promise.reject(abortError());
-    return runSay(utterance, sayVoice, signal, generation);
+    return runSay(utterance, sayVoice, sayRate, signal, generation);
   });
   speakTail = run.catch(() => undefined);
   return run;
@@ -69,10 +77,10 @@ export function setSaySpawnForTest(spawnImpl: SaySpawn): () => void {
   return () => { spawnSay = previous; };
 }
 
-function runSay(text: string, voice: string | undefined, signal: AbortSignal | undefined, generation: number): Promise<void> {
+function runSay(text: string, voice: string | undefined, rate: number | undefined, signal: AbortSignal | undefined, generation: number): Promise<void> {
   if (signal?.aborted || generation !== speakGeneration) return Promise.reject(abortError());
   return new Promise((resolve, reject) => {
-    const args = voice ? ["-v", voice, text] : [text];
+    const args = [...(voice ? ["-v", voice] : []), ...(rate ? ["-r", String(rate)] : []), text];
     const child = spawnSay("/usr/bin/say", args, { stdio: ["ignore", "ignore", "pipe"] });
     currentSayChild = child;
     const err: Buffer[] = [];
