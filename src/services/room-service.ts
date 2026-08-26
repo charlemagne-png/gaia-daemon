@@ -827,12 +827,18 @@ export class RoomService {
     // already on disk; see renderAttachmentLines), so a pasted screenshot
     // steers exactly like plain text. Uniform: gated on the runtime's
     // supportsSteer, never a harness id.
+    //
+    // Voice utterances steer too — conversation demands it. Speaking while the
+    // dispatched agent is mid-turn injects into that turn immediately instead
+    // of queueing behind it (queued voice = dead conversational latency). An
+    // utterance addressed to a DIFFERENT agent (voice dispatch already resolved
+    // targets above) fails aimedAtRunner and falls through to the queue as
+    // before — we never inject one agent's words into another's turn.
     let recordedSteerEventId: string | undefined;
     if (
       command.type === "message" &&
       !options.nativeCommand &&
       !options.queue &&
-      !options.voice &&
       this.activeAgentTurn &&
       this.activeAgentTurn.targets.length === 1
     ) {
@@ -840,7 +846,7 @@ export class RoomService {
       const runtime = this.runtimes[runner];
       const aimedAtRunner = targets.length > 0 && targets.every((id) => id === runner);
       if (aimedAtRunner && runtime?.capabilities.supportsSteer) {
-        const steered = await this.steerRunningTurn(runner, text, task, options.attachments);
+        const steered = await this.steerRunningTurn(runner, text, task, options.attachments, options.voice === true);
         if (steered === true) return task;
         // The turn just ended under us: the guidance is ALREADY committed to
         // the transcript (persist-first). Fall through to the queue with the
@@ -2286,8 +2292,8 @@ export class RoomService {
    * renders the message inline right there, live and after commit), and the
    * steer task completes — the running turn's continued output IS the reply,
    * so there's no turn of its own. */
-  private async steerRunningTurn(target: string, text: string, task: Task, attachments?: MessageAttachment[]): Promise<true | string> {
-    const event = await this.room.addUserMessage(text, [target], undefined, attachments);
+  private async steerRunningTurn(target: string, text: string, task: Task, attachments?: MessageAttachment[], voice = false): Promise<true | string> {
+    const event = await this.room.addUserMessage(text, [target], undefined, attachments, undefined, voice);
     this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
     // Attachments travel two ways, uniformly: the same breadcrumb lines the turn
     // prompt uses ride in the text (the file sits on disk at that path, openable
