@@ -2,7 +2,7 @@
 // No browser audio bytes: the daemon speaks on the Mac speaker, and the web
 // client waits for this route so VAD can pause while the Mac is talking.
 
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 
 const MAX_TEXT_CHARS = 500;
 const MAX_VOICE_CHARS = 120;
@@ -11,7 +11,7 @@ type SaySpawn = typeof nodeSpawn;
 
 let speakTail: Promise<void> = Promise.resolve();
 let speakGeneration = 0;
-let currentSayChild: ChildProcessWithoutNullStreams | null = null;
+let currentSayChild: ChildProcess | null = null;
 let spawnSay: SaySpawn = nodeSpawn;
 
 export function sanitizeSayText(text: string): string {
