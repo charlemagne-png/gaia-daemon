@@ -311,6 +311,7 @@ function pendingTurnFrom(value: unknown): PendingTurn | undefined {
     agentId: value.agentId,
     partialReply: typeof value.partialReply === "string" ? value.partialReply : "",
     ...(value.channel === "voice" ? { channel: "voice" as const } : {}),
+    ...(value.voice === true ? { voice: true } : {}),
     startedAt: typeof value.startedAt === "string" ? value.startedAt : "",
   };
 }
@@ -381,6 +382,7 @@ function queueFrom(value: unknown): QueuedMessage[] | undefined {
       text: raw.text,
       targets,
       ...(raw.channel === "voice" ? { channel: "voice" as const } : {}),
+      ...(raw.voice === true ? { voice: true } : {}),
       ...(attachments ? { attachments } : {}),
       ...(raw.fromAgentDialogue === true ? { fromAgentDialogue: true } : {}),
       ...(raw.nativeCommand === true ? { nativeCommand: true } : {}),
@@ -571,7 +573,7 @@ function roomEventFrom(raw: unknown, index: number): RoomEvent | undefined {
   if (raw.author === "user") {
     const targets = Array.isArray(raw.targets) ? raw.targets.filter((t): t is string => typeof t === "string") : [];
     const attachments = attachmentsFrom(raw.attachments);
-    return { ...base, author: "user", targets, ...(attachments ? { attachments } : {}) };
+    return { ...base, author: "user", targets, ...(raw.voice === true ? { voice: true } : {}), ...(attachments ? { attachments } : {}) };
   }
   const details = eventDetailsFrom(raw.details);
   return { ...base, author: raw.author, ...(kind ? { kind } : {}), ...(details ? { details } : {}) };
@@ -645,7 +647,7 @@ export class RoomHandle {
   /** `id` pre-assigns the event id — the queue→transcript hand-off reserves it
    * durably on the QueuedMessage first, so a crash-replayed append is
    * idempotent (see QueuedMessage.eventId). */
-  async addUserMessage(text: string, targets: string[], channel?: string, attachments?: MessageAttachment[], id?: string): Promise<RoomEvent> {
+  async addUserMessage(text: string, targets: string[], channel?: string, attachments?: MessageAttachment[], id?: string, voice?: boolean): Promise<RoomEvent> {
     const event: RoomEvent = {
       id: id ?? newRoomEventId(),
       timestamp: new Date().toISOString(),
@@ -653,6 +655,7 @@ export class RoomHandle {
       targets,
       text,
       ...(channel ? { channel } : {}),
+      ...(voice ? { voice: true } : {}),
       ...(attachments?.length ? { attachments } : {}),
     };
     await this.appendEvent(event);

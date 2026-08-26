@@ -153,6 +153,9 @@ export interface SendMessageOptions {
    * aimed at the busy agent into its live turn. */
   queue?: boolean;
   channel?: "text" | "voice";
+  /** Continuous voice-control origin marker (not live-call channel): prompts get
+   * a one-turn workspace room map only when this is true. */
+  voice?: boolean;
   /** Synthetic prompts (call greetings, silence nudges) skip the user event. */
   recordUserMessage?: boolean;
   thinking?: string;
@@ -794,6 +797,7 @@ export class RoomService {
       command.type === "message" &&
       !options.nativeCommand &&
       !options.queue &&
+      !options.voice &&
       this.activeAgentTurn &&
       this.activeAgentTurn.targets.length === 1
     ) {
@@ -868,6 +872,7 @@ export class RoomService {
       text,
       targets,
       ...(options.channel === "voice" ? { channel: "voice" as const } : {}),
+      ...(options.voice ? { voice: true } : {}),
       ...(options.attachments?.length ? { attachments: options.attachments } : {}),
       ...(options.nativeCommand ? { nativeCommand: true } : {}),
       ...(recordedEventId ? { eventId: recordedEventId } : {}),
@@ -957,6 +962,7 @@ export class RoomService {
           targets: next.targets,
           queued: next,
           ...(next.channel ? { channel: next.channel } : {}),
+          ...(next.voice ? { voice: true } : {}),
           ...(next.attachments?.length ? { attachments: next.attachments } : {}),
           ...(next.fromAgentDialogue ? { fromAgentDialogue: true, recordUserMessage: false } : {}),
           ...(next.recorded ? { recordUserMessage: false } : {}),
@@ -1348,7 +1354,7 @@ export class RoomService {
           eventId = newRoomEventId();
           await this.room.assignQueuedEventId(queued.taskId, eventId);
         }
-        userEvent = await this.room.addUserMessage(text, task.targets, channel, attachments, eventId);
+        userEvent = await this.room.addUserMessage(text, task.targets, channel, attachments, eventId, options.voice === true);
       }
       if (userEvent) {
         this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event: userEvent });
@@ -1456,6 +1462,7 @@ export class RoomService {
           agentId: target,
           partialReply: "",
           ...(channel ? { channel } : {}),
+          ...(options.voice ? { voice: true } : {}),
           startedAt: new Date().toISOString(),
         },
         options.queued ? { consumeQueuedTaskId: options.queued.taskId } : undefined,
@@ -1518,6 +1525,7 @@ export class RoomService {
       const userName = await readUserNameSetting();
       const pluginContext = await this.pluginPrompt(state, target);
       const berserk = await this.effectiveBerserk(state);
+      const voiceRoomMap = options.voice ? await this.buildVoiceRoomMap() : undefined;
 
       let turn: Awaited<ReturnType<typeof runAgentTurn>>;
       try {
@@ -1537,6 +1545,7 @@ export class RoomService {
             ...(berserk ? { berserk: true } : {}),
             recall,
             ...(state.bookmarks?.length ? { checkpoints: state.bookmarks } : {}),
+            ...(voiceRoomMap ? { voiceRoomMap } : {}),
             ...(pluginContext ? { pluginContext } : {}),
             ...(options.nativeCommand ? { nativeCommand: true } : {}),
             ...(userName ? { userName } : {}),
@@ -2024,6 +2033,7 @@ export class RoomService {
       text,
       targets,
       ...(channel ? { channel } : {}),
+      ...(options.voice ? { voice: true } : {}),
       ...(attachments?.length ? { attachments } : {}),
       stallRetried: true,
       queuedAt: retryTask.startedAt,
@@ -2063,6 +2073,7 @@ export class RoomService {
       text,
       targets,
       ...(channel ? { channel } : {}),
+      ...(options.voice ? { voice: true } : {}),
       ...(attachments?.length ? { attachments } : {}),
       authRetries: attempt,
       notBefore: new Date(Date.now() + backoff).toISOString(),
@@ -2839,6 +2850,7 @@ export class RoomService {
         targets: remaining,
         recordUserMessage: false,
         ...(pending.channel ? { channel: pending.channel } : {}),
+        ...(pending.voice ? { voice: true } : {}),
         ...(pending.attachments?.length ? { attachments: pending.attachments } : {}),
       });
     }
@@ -4152,11 +4164,52 @@ Title:`,
     }
   }
 
+  private async buildVoiceRoomMap(): Promise<string> {
+    const summaries = (await scanRoomActivity(this.workspace.rootDir)).slice(0, 60);
+    const now = Date.now();
+    const lines = await Promise.all(
+      summaries.map(async (summary) => {
+        const room = await RoomHandle.open(this.workspace.rootDir, summary.id);
+        const events = await room.recentEvents(40).catch((): RoomEvent[] => []);
+        const recent = [...events].reverse();
+        const lastUser = recent.find((event) => event.author === "user" && event.text.trim());
+        const lastAgent = recent.find((event) => event.author !== "user" && event.author !== "system" && event.text.trim());
+        const gist = [
+          lastUser ? `user: ${voiceMapSnippet(lastUser.text)}` : "",
+          lastAgent ? `@${lastAgent.author}: ${voiceMapSnippet(lastAgent.text)}` : "",
+        ].filter(Boolean).join(" · ") || "gist: (empty)";
+        const ref = summary.refCode ?? "no-ref";
+        const title = voiceMapSnippet(summary.title || "untitled", 72);
+        const agent = summary.agent ? `@${summary.agent}` : "@none";
+        const age = formatActivityAge(summary.lastActivity, now);
+        return `- ${ref} · ${summary.id} · ${title} · ${agent} · ${age} · ${gist}`;
+      }),
+    );
+    return ["Workspace room index (recent-active first; cap 60):", ...lines].join("\n");
+  }
+
   private unknownAgentMessage(agentId: string): string {
     return `Unknown agent: @${agentId}\nAvailable agents: ${Object.keys(this.workspace.agents)
       .map((id) => `@${id}`)
       .join(", ")}`;
   }
+}
+
+function voiceMapSnippet(text: string, max = 120): string {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  return cleaned.length > max ? `${cleaned.slice(0, Math.max(0, max - 1))}…` : cleaned;
+}
+
+function formatActivityAge(timestamp: number | undefined, now = Date.now()): string {
+  if (!timestamp) return "no activity";
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 /**

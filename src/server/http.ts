@@ -894,7 +894,8 @@ export class GaiaWebServer {
       // queue:true is the Cmd/Ctrl+Enter opt-out of steer-by-default — force the
       // durable queue instead of injecting into the running turn.
       const queue = (body as { queue?: unknown }).queue === true;
-      const task = await service.sendMessage(textValue, { ...(attachments ? { attachments } : {}), ...(queue ? { queue } : {}) });
+      const voice = (body as { voice?: unknown }).voice === true;
+      const task = await service.sendMessage(textValue, { ...(attachments ? { attachments } : {}), ...(queue ? { queue } : {}), ...(voice ? { voice } : {}) });
       json(response, 202, { task });
       return;
     }

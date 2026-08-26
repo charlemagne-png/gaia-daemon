@@ -46,6 +46,10 @@ export interface AgentInput {
   recall?: string;
   /** User-named checkpoints from RoomState.bookmarks, rendered by the shared prompt seam. */
   checkpoints?: RoomBookmark[];
+  /** Voice-control concierge overlay: workspace room index for this turn only.
+   * Present only when the triggering user message carried the durable
+   * voice-origin tag. */
+  voiceRoomMap?: string;
   /** Room-local context supplied by installed command plugins. Resolved once in
    * RoomService and threaded through every harness by the shared prompt seam. */
   pluginContext?: string;

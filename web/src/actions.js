@@ -571,8 +571,9 @@ export async function uploadAttachment(file, name, mirrorToDownloads = false) {
 /**
  * @param {string} text
  * @param {import("./types.js").UploadedAttachment[]} [attachments]
- * @param {{ queue?: boolean }} [options] queue:true forces the durable queue
- *   (Cmd/Ctrl+Enter) instead of steering the running turn.
+ * @param {{ queue?: boolean, voice?: boolean }} [options] queue:true forces
+ *   the durable queue (Cmd/Ctrl+Enter) instead of steering the running turn;
+ *   voice:true marks continuous voice-control origin.
  * @returns {Promise<boolean>}
  */
 export async function sendMessage(text, attachments = [], options = {}) {
@@ -588,6 +589,7 @@ export async function sendMessage(text, attachments = [], options = {}) {
         text,
         ...(attachments.length ? { attachments: attachments.map(({ id, name, mime }) => ({ id, name, mime })) } : {}),
         ...(options.queue ? { queue: true } : {}),
+        ...(options.voice ? { voice: true } : {}),
       }),
     });
     // Reflect the accepted task immediately so busy state doesn't wait for SSE.

@@ -101,3 +101,20 @@ test("buildTurnPrompt: turnLaw lands as the very last tokens", () => {
   const bare = buildTurnPrompt({ roomId: "room-1", agentId: "tester", message: "hello", events: [] });
   assert.doesNotMatch(bare, /LAW LINE/);
 });
+
+test("buildTurnPrompt: voiceRoomMap renders concierge block only when supplied", () => {
+  const voice = buildTurnPrompt({
+    roomId: "room-1",
+    agentId: "gaia",
+    message: "@gaia where did that land?",
+    events: [],
+    voiceRoomMap: "Workspace room index (recent-active first; cap 60):\n- A01 · room-alpha · Voice Concierge · @gaia · 2m ago · user: route this · @gaia: landed in A01",
+  });
+  assert.match(voice, /# Voice concierge — workspace map/);
+  assert.match(voice, /Cross-room delivery → `gaia resume <roomId> "message"`/);
+  assert.match(voice, /- A01 · room-alpha · Voice Concierge · @gaia · 2m ago/);
+
+  const typed = buildTurnPrompt({ roomId: "room-1", agentId: "gaia", message: "typed", events: [] });
+  assert.doesNotMatch(typed, /# Voice concierge — workspace map/);
+  assert.doesNotMatch(typed, /Workspace room index/);
+});

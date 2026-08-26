@@ -75,6 +75,9 @@ export interface TurnPromptInput {
   recall?: string;
   /** User-named checkpoints pinned by the human as attention anchors. */
   checkpoints?: RoomBookmark[];
+  /** Voice-control concierge overlay for this turn only (voice-origin user
+   * message); absent on typed turns. */
+  voiceRoomMap?: string;
   /** /berserk adversarial deathmode — renders the BERSERK block. Turn-level
    * overlay (like voice), so toggling never forces a session reload. */
   berserk?: boolean;
@@ -124,6 +127,13 @@ const VOICE_MODE_INSTRUCTIONS = [
   "Plain prose only: no markdown, no headings, no bullet points, no code blocks, no emojis. Everything you write is pronounced literally.",
   "Write numbers, abbreviations and symbols the way they should be spoken.",
   "You can still use your tools; the user only hears your final text.",
+].join("\n");
+
+const VOICE_CONCIERGE_PROTOCOL = [
+  "# Voice concierge — workspace map",
+  "User is speaking by voice; use this map to say where info landed, with room titles/ref codes when useful.",
+  "Cross-room delivery → `gaia resume <roomId> \"message\"` or summon note; use room ids from the map/ref codes.",
+  "Never fabricate room contents; recall/read before claiming details beyond the map gist.",
 ].join("\n");
 
 /** Render an event timestamp (stored as ISO UTC) in the host's local
@@ -343,6 +353,7 @@ export async function buildTurnPromptFor(
     memory: memoryChanged ? memory : undefined,
     recall: input.recall,
     checkpoints: input.checkpoints,
+    voiceRoomMap: input.voiceRoomMap,
     berserk: input.berserk,
     pluginContext: input.pluginContext,
     channel: input.channel,
@@ -366,12 +377,16 @@ export function buildTurnPrompt(input: TurnPromptInput): string {
         "The user pinned these as the room's pivotal moments — weigh them when reasoning about earlier context.",
       ].join("\n")
     : "";
+  const voiceRoomMapBlock = input.voiceRoomMap?.trim()
+    ? `${VOICE_CONCIERGE_PROTOCOL}\n\n${input.voiceRoomMap.trim()}`
+    : "";
   return [
     `Room: ${input.roomId}`,
     `Current agent: @${input.agentId}`,
     worktreeLine,
     input.berserk ? BERSERK_INSTRUCTIONS : "",
     input.channel === "voice" ? VOICE_MODE_INSTRUCTIONS : "",
+    voiceRoomMapBlock,
     input.memory?.trim() ? `# Your persistent memory\n\n${input.memory.trim()}` : "",
     input.recall?.trim() ?? "",
     input.pluginContext?.trim() ?? "",

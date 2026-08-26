@@ -532,7 +532,7 @@ async function routeVoiceControlText(rawText) {
   vcLog("action", "→ @gaia");
   // Gaia is the agent under the voice chat: plain speech is addressed to her
   // in the current room; her reply lands in the transcript as usual.
-  await sendMessage(`@gaia ${rawText.trim()}`, []);
+  await sendMessage(`@gaia ${rawText.trim()}`, [], { voice: true });
 }
 
 /** @param {string} ref */

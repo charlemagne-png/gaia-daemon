@@ -126,6 +126,8 @@ export interface UserRoomEvent {
   targets: string[];
   text: string;
   channel?: string; // "voice" for spoken turns
+  /** Message originated from continuous voice-control routing, not typing. */
+  voice?: boolean;
   attachments?: MessageAttachment[];
   /** Text was rewritten by a sanitize apply; the original line lives in
    * redactions.jsonl beside the transcript. */
@@ -170,6 +172,8 @@ export interface PendingTurn {
   /** Reply text streamed so far — flushed durably as it arrives. */
   partialReply: string;
   channel?: "voice";
+  /** Triggering user message came from voice-control routing (not typed). */
+  voice?: boolean;
   startedAt: string;
   /** This in-flight turn is a monad dispatch: boot resume must re-dispatch it
    * through the monad engine (targets omitted so routing re-derives from
@@ -185,6 +189,8 @@ export interface QueuedMessage {
   text: string;
   targets: string[];
   channel?: "voice";
+  /** Triggering user message came from voice-control routing (not typed). */
+  voice?: boolean;
   attachments?: MessageAttachment[];
   /** This message was produced by room agent-dialogue (one agent addressing
    * another), not typed by a human — drain must treat it as plain text, never

@@ -259,6 +259,35 @@ test("a plain message routes to the default agent and commits a detailed reply",
   assert.equal(delta?.eventId, reply["id" as keyof typeof reply]);
 });
 
+test("voice-origin turns receive a workspace room map; typed turns do not", async () => {
+  const inputs: AgentInput[] = [];
+  const { service } = await makeService({
+    runtimeFactory: (agent) => ({
+      agent,
+      modelLabel: "test/model",
+      capabilities: { gaiaTools: [], granularTools: true, supportsPermissionMode: false },
+      async *send(input: AgentInput) {
+        inputs.push(input);
+        yield { type: "text-delta", delta: "ok" } as AgentEvent;
+      },
+      async abort() {},
+      dispose() {},
+    } as AgentRuntime),
+  });
+
+  await service.sendMessage("typed hello");
+  await service.waitForIdle();
+  await service.sendMessage("@gaia spoken route", { voice: true });
+  await service.waitForIdle();
+
+  assert.equal(inputs.length, 2);
+  assert.equal(inputs[0]?.voiceRoomMap, undefined);
+  assert.match(inputs[1]?.voiceRoomMap ?? "", /#?Workspace room index|Workspace room index/);
+  assert.match(inputs[1]?.voiceRoomMap ?? "", /A\d{2}/);
+  assert.match(inputs[1]?.voiceRoomMap ?? "", /default/);
+  assert.match(inputs[1]?.voiceRoomMap ?? "", /user: @gaia spoken route/);
+});
+
 test("background-task events persist, surface in snapshots, and cap at 20", async () => {
   const { service, root } = await makeService({
     script: () => [
