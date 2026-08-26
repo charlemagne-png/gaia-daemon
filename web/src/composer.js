@@ -1158,10 +1158,13 @@ function VoiceButtons() {
     h("button", {
       type: "button",
       class: `voice-button voice-control${voiceControlOn ? " on" : ""} ${voiceControlPhase}`,
-      title: voiceControlOn ? "voice control mode — click to stop listening" : "voice control mode — continuous listening",
+      title: voiceControlOn
+        ? `voice control: ${voiceControlPhase} — click to stop listening`
+        : "voice control mode — continuous listening",
       onclick: () => void toggleVoiceControl(),
-      text: `voice control: ${voiceControlPhase}`,
-    }),
+    }, [
+      h("img", { class: "voice-control-icon", src: "img/voice-control.png", alt: `voice control: ${voiceControlPhase}` }),
+    ]),
   ];
 }
 

@@ -1,12 +1,17 @@
 // Continuous voice control: one mic stream, VAD-sliced utterance clips, local
 // transcription endpoint, then room-command routing or normal message send.
-import { selectRoom, sendMessage } from "./actions.js";
+import { addRoom, cancelActiveTask, closeRoomTab, selectRoom, sendMessage } from "./actions.js";
 import { h } from "./dom.js";
 import { markDirty, setError } from "./render.js";
 import { state } from "./state.js";
 
 const SILENCE_MS = 800;
-const SPEECH_THRESHOLD = 0.025;
+// ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
+// (proven live 08-26: orb "listening", zero transcribe calls). Speech =
+// level clearly above a tracked noise floor, with a small absolute minimum.
+const MIN_SPEECH_LEVEL = 0.008;
+const NOISE_FLOOR_RATIO = 2.5;
+const NOISE_FLOOR_EMA = 0.05;
 const MIN_UTTERANCE_MS = 260;
 const MIN_VOICE_FRAMES = 3;
 const MIN_CHUNK_BYTES = 900;
@@ -33,6 +38,7 @@ const TRANSCRIBE_TIMEOUT_MS = 180_000;
  * @property {Segment|null} segment
  * @property {boolean} segmentStopping
  * @property {boolean} stopping
+ * @property {number} noiseFloor
  */
 
 /** @type {VoiceControlSession|null} */
@@ -89,6 +95,7 @@ export async function startVoiceControl() {
     segment: null,
     segmentStopping: false,
     stopping: false,
+    noiseFloor: 0.004,
   });
   session = current;
   state.voiceControl.enabled = true;
@@ -142,7 +149,12 @@ function tickAnalyser(current) {
   state.voiceControl.level = level;
 
   const now = Date.now();
-  const speaking = level >= SPEECH_THRESHOLD;
+  const threshold = Math.max(current.noiseFloor * NOISE_FLOOR_RATIO, MIN_SPEECH_LEVEL);
+  const speaking = level >= threshold;
+  if (!speaking) {
+    // Only quiet frames feed the floor, so speech never raises its own bar.
+    current.noiseFloor = Math.max(0.001, current.noiseFloor * (1 - NOISE_FLOOR_EMA) + level * NOISE_FLOOR_EMA);
+  }
   if (speaking) {
     if (!current.segment && !current.segmentStopping) startSegment(current, now);
     if (current.segment) {
@@ -234,7 +246,7 @@ async function completeSegment(segment) {
     !blob ||
     blob.size < MIN_CHUNK_BYTES ||
     durationMs < MIN_UTTERANCE_MS ||
-    segment.peak < SPEECH_THRESHOLD ||
+    segment.peak < MIN_SPEECH_LEVEL ||
     segment.voiceFrames < MIN_VOICE_FRAMES
   ) {
     return;
@@ -288,20 +300,35 @@ async function postTranscribe(blob) {
   }
 }
 
+// -- Native command table -------------------------------------------------
+// Intermediary commands EXECUTE in the client directly — they never become a
+// chat message. Matching is punctuation/case tolerant (Apple dictation adds
+// trailing periods + capitalization). Everything unmatched goes to the room.
+
+/** @type {{ pattern: RegExp, run: (match: RegExpExecArray) => void | Promise<void> }[]} */
+const NATIVE_COMMANDS = [
+  { pattern: /^(voice control off|stop listening)$/i, run: () => stopVoiceControl() },
+  { pattern: /^open ([a-z])\s?(\d{2,3})$/i, run: (m) => routeRoomRef(`${m[1]}${m[2]}`) },
+  { pattern: /^(new|create) (chat|room)$/i, run: () => addRoom() },
+  { pattern: /^(stop|cancel)( turn| that| the turn)?$/i, run: () => cancelActiveTask() },
+  {
+    pattern: /^close (this )?(chat|room|tab)$/i,
+    run: () => { const id = state.snapshot?.room?.id; if (id) return closeRoomTab(id); },
+  },
+];
+
 /** @param {string} rawText */
 async function routeVoiceControlText(rawText) {
-  const text = rawText.trim();
+  const text = rawText.trim().replace(/[.,!?\u3002]+$/, "").trim();
   if (!text) return;
-  if (/^(voice control off|stop listening)$/i.test(text)) {
-    stopVoiceControl();
-    return;
+  for (const command of NATIVE_COMMANDS) {
+    const match = command.pattern.exec(text);
+    if (match) {
+      await command.run(match);
+      return;
+    }
   }
-  const roomMatch = /^open ([a-z]\d{2,3})$/i.exec(text);
-  if (roomMatch) {
-    await routeRoomRef(roomMatch[1]);
-    return;
-  }
-  await sendMessage(text, []);
+  await sendMessage(rawText.trim(), []);
 }
 
 /** @param {string} ref */

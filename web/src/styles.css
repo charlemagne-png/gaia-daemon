@@ -1110,12 +1110,16 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Dictation: recording pulses red, transcribing dims. */
 .voice-button.dictation.recording { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 60%, transparent); animation: dictation-pulse 1.2s ease-in-out infinite; }
 .voice-button.dictation.busy { opacity: 0.6; }
-.voice-button.voice-control { min-width: 162px; justify-content: center; text-transform: lowercase; color: var(--muted); }
-.voice-button.voice-control.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 70%, transparent); background: color-mix(in srgb, var(--ink) 70%, var(--accent) 12%); }
-.voice-button.voice-control.listening { animation: voice-control-pulse 1.45s ease-in-out infinite; }
-.voice-button.voice-control.processing { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 70%, transparent); }
+.voice-button.voice-control { justify-content: center; padding: 2px 8px; color: var(--muted); }
+.voice-control-icon { display: block; width: 30px; height: 30px; image-rendering: pixelated; filter: grayscale(0.55) brightness(0.8); }
+.voice-button.voice-control.on .voice-control-icon { filter: none; }
+.voice-button.voice-control.on { border-color: color-mix(in srgb, #ff3b30 70%, transparent); background: color-mix(in srgb, var(--ink) 72%, #ff3b30 12%); animation: voice-control-pulse 1.45s ease-in-out infinite; }
+.voice-button.voice-control.processing .voice-control-icon { filter: saturate(0.4) brightness(1.25); }
 @keyframes dictation-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent); } 50% { box-shadow: 0 0 0 4px transparent; } }
-@keyframes voice-control-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 42%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
+@keyframes voice-control-pulse {
+  0%, 100% { box-shadow: 0 0 6px 1px rgba(255, 59, 48, 0.35); }
+  50% { box-shadow: 0 0 16px 5px rgba(255, 59, 48, 0.75); }
+}
 
 .voice-control-orb {
   position: relative;
