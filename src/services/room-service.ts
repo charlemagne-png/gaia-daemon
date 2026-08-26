@@ -78,6 +78,21 @@ import { createAgentRuntime } from "../harness/host.js";
 import { configuredModelLabel } from "../harness/model-label.js";
 import { resolveSandboxPolicy } from "../harness/sandbox/spec.js";
 
+export interface HomeWorkspaceRedirectRequest {
+  agent: AgentDef;
+  text?: string;
+  forwardMessage: boolean;
+  fromWorkspaceId: string;
+  fromRoomId: string;
+}
+
+export interface HomeWorkspaceRedirectResult {
+  workspaceId: string;
+  roomId: string;
+  workspaceName: string;
+  roomRef?: string;
+}
+
 export interface RoomServiceOptions {
   workspaceId: string;
   workspace: Workspace;
@@ -116,6 +131,9 @@ export interface RoomServiceOptions {
    * stays the single writer — a foreign disk write would be clobbered by the
    * root service's cached state on its next update. */
   roomPeer?: (roomId: string) => Promise<RoomService>;
+  /** Daemon-owned home-workspace redirect seam. RoomService never writes foreign
+   * workspace files; the daemon resolves registry names/ids and forwards there. */
+  homeWorkspaceRedirect?: (request: HomeWorkspaceRedirectRequest) => Promise<HomeWorkspaceRedirectResult | undefined>;
 }
 
 /** What /schedule needs from the scheduler (daemon-provided, workspace-bound). */
@@ -152,6 +170,9 @@ export interface SendMessageOptions {
    * Cmd/Ctrl+Enter shortcut). Steer-by-default otherwise injects a message
    * aimed at the busy agent into its live turn. */
   queue?: boolean;
+  /** Human-origin turns may trigger home-workspace redirect; daemon/internal
+   * producers (summons, scheduler, agent-dialogue) omit it. */
+  origin?: "human";
   channel?: "text" | "voice";
   /** Continuous voice-control origin marker (not live-call channel): prompts get
    * a one-turn workspace room map only when this is true. */
@@ -764,6 +785,10 @@ export class RoomService {
       for (const target of targets) {
         if (!this.workspace.agents[target]) throw new Error(this.unknownAgentMessage(target));
       }
+      if (options.origin === "human" && !options.nativeCommand && !options.fromAgentDialogue) {
+        const redirected = await this.maybeRedirectHomeWorkspace(text, targets, true);
+        if (redirected) return redirected;
+      }
     }
 
     const task = this.createTask(text, targets);
@@ -1066,6 +1091,67 @@ export class RoomService {
     await this.room.updateState((state) => {
       state.activeAgent = next;
     });
+  }
+
+  /** Human-picked active agent. A pinned agent selected outside its home room
+   * redirects the view instead of mutating this room's activeAgent. */
+  async setActiveAgent(agentId: string, options: { origin?: "human" } = {}): Promise<HomeWorkspaceRedirectResult | undefined> {
+    await this.init();
+    if (!this.workspace.agents[agentId]) throw new Error(this.unknownAgentMessage(agentId));
+    if (options.origin === "human") {
+      const redirected = await this.maybeRedirectHomeWorkspace(undefined, [agentId], false);
+      if (redirected) return redirected;
+    }
+    if ((await this.room.state()).activeAgent !== agentId) {
+      await this.room.updateState((state) => {
+        state.activeAgent = agentId;
+      });
+    }
+    await this.emitSnapshot();
+    return undefined;
+  }
+
+  private async maybeRedirectHomeWorkspace(text: string | undefined, targets: string[], forwardMessage: false): Promise<HomeWorkspaceRedirectResult | undefined>;
+  private async maybeRedirectHomeWorkspace(text: string | undefined, targets: string[], forwardMessage: true): Promise<Task | undefined>;
+  private async maybeRedirectHomeWorkspace(
+    text: string | undefined,
+    targets: string[],
+    forwardMessage: boolean,
+  ): Promise<Task | HomeWorkspaceRedirectResult | undefined> {
+    const targetId = targets.find((id) => this.workspace.agents[id]?.homeWorkspace);
+    if (!targetId) return undefined;
+    const agent = this.workspace.agents[targetId];
+    if (!agent?.homeWorkspace || !this.options.homeWorkspaceRedirect) return undefined;
+    const redirect = await this.options.homeWorkspaceRedirect({
+      agent,
+      ...(text !== undefined ? { text } : {}),
+      forwardMessage,
+      fromWorkspaceId: this.workspaceId,
+      fromRoomId: this.roomId,
+    });
+    if (!redirect) return undefined;
+
+    const label = agent.displayName || `@${agent.id}`;
+    const roomRef = redirect.roomRef ? `#${redirect.roomRef}` : redirect.roomId;
+    const note: RoomEvent = {
+      id: newRoomEventId(),
+      timestamp: new Date().toISOString(),
+      author: "system",
+      text: `${label} is homed in ${redirect.workspaceName} → continuing in ${roomRef}`,
+    };
+    await this.room.appendEvent(note);
+    this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event: note });
+    this.emit({ type: "room-redirect", workspaceId: redirect.workspaceId, roomId: redirect.roomId, fromWorkspaceId: this.workspaceId, fromRoomId: this.roomId });
+    void this.emitSnapshot();
+
+    if (!forwardMessage) return redirect;
+    const task = this.createTask(text ?? "", targets);
+    this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    task.status = "complete";
+    task.endedAt = new Date().toISOString();
+    this.recentTasks = [...this.recentTasks.slice(-9), task];
+    this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    return task;
   }
 
   /** Room agent-dialogue: after @author's reply commits, if the room toggle is

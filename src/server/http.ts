@@ -895,9 +895,16 @@ export class GaiaWebServer {
       // durable queue instead of injecting into the running turn.
       const queue = (body as { queue?: unknown }).queue === true;
       const voice = (body as { voice?: unknown }).voice === true;
-      const task = await service.sendMessage(textValue, { ...(attachments ? { attachments } : {}), ...(queue ? { queue } : {}), ...(voice ? { voice } : {}) });
+      const task = await service.sendMessage(textValue, { origin: "human", ...(attachments ? { attachments } : {}), ...(queue ? { queue } : {}), ...(voice ? { voice } : {}) });
       json(response, 202, { task });
       return;
+    }
+
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/active-agent$/))) {
+      const body = await parseBody(request);
+      const agentId = stringField(body, "agentId") ?? stringField(body, "agent");
+      if (!agentId?.trim()) return json(response, 400, { error: "Missing agent id" });
+      return this.respond(response, () => this.daemon.setActiveAgent(params![0], params![1], agentId.trim()));
     }
 
     // Fork-from-message: retry regenerates the reply produced by a user
@@ -1237,11 +1244,19 @@ export class GaiaWebServer {
       const mime = url.searchParams.get("mime")?.trim() || "audio/webm";
       const engineId = url.searchParams.get("engine")?.trim() || undefined;
       const language = url.searchParams.get("language")?.trim() || undefined;
+      // live=1: a rolling mid-recording pass (live dictation). The clip is
+      // still being appended to by /chunk uploads, so it must NOT be archived
+      // — renaming it away makes the next chunk recreate a headerless .bin
+      // that can never be decoded again (bit live: first pass worked, every
+      // later one silently failed). Only the FINAL pass archives.
+      const live = url.searchParams.get("live") === "1";
       try {
         const result = await this.daemon.transcribe({ data, contentType: mime }, { engineId, language });
-        const finalExt = mime.includes("mp4") ? "m4a" : mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : "bin";
-        await mkdir(globalPaths.voiceClipsDir(), { recursive: true });
-        await rename(clipPath, join(globalPaths.voiceClipsDir(), `final-${Date.now()}.${finalExt}`));
+        if (!live) {
+          const finalExt = mime.includes("mp4") ? "m4a" : mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : "bin";
+          await mkdir(globalPaths.voiceClipsDir(), { recursive: true });
+          await rename(clipPath, join(globalPaths.voiceClipsDir(), `final-${Date.now()}.${finalExt}`));
+        }
         return json(response, 200, { text: result.text, engine: result.engine });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1387,7 +1402,7 @@ export class GaiaWebServer {
       
       // Enqueue the message via the existing path
       const service = await this.daemon.serviceFor(resolvedWorkspaceId, resolvedRoomId);
-      const task = await service.sendMessage(addressedText, { recordUserMessage: true });
+      const task = await service.sendMessage(addressedText, { origin: "human", recordUserMessage: true });
 
       // Broadcast acknowledgment to UI
       this.broadcast({
@@ -1738,6 +1753,7 @@ export class GaiaWebServer {
       targets: [call.info.agentId],
       channel: "voice",
       recordUserMessage: turn.kind === "user",
+      ...(turn.kind === "user" ? { origin: "human" as const } : {}),
       thinking: call.info.thinking,
     });
     if (streaming) beginSse(response);
@@ -1831,8 +1847,11 @@ export class GaiaWebServer {
     // event stays scoped by workspace+room (room ids are only locally unique).
     const ambient = event.type === "rooms" || event.type === "pet-bindings" || event.type === "pet-progress";
     for (const client of this.clients) {
-      const scoped = event as { workspaceId?: string; roomId?: string };
-      if (!ambient) {
+      const scoped = event as { workspaceId?: string; roomId?: string; fromWorkspaceId?: string; fromRoomId?: string };
+      if (event.type === "room-redirect") {
+        if (client.workspaceId && scoped.fromWorkspaceId && client.workspaceId !== scoped.fromWorkspaceId) continue;
+        if (client.roomId && scoped.fromRoomId && client.roomId !== scoped.fromRoomId) continue;
+      } else if (!ambient) {
         if (client.workspaceId && scoped.workspaceId && client.workspaceId !== scoped.workspaceId) continue;
         if (client.roomId && scoped.roomId && client.roomId !== scoped.roomId) continue;
       }
