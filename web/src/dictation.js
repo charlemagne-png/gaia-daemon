@@ -36,6 +36,19 @@ const UPLOAD_FLUSH_WATCHDOG_MS = 2000;
 // Keep this above the daemon's 120s STT fetch window with enough margin for
 // upload + prediction polling, but still bounded so the composer never wedges.
 const TRANSCRIBE_TIMEOUT_MS = 180_000;
+// LIVE rendering (2026-08-26): while recording, the clip-so-far (already
+// streamed to the daemon chunk by chunk) is re-transcribed in a rolling loop
+// and the fresh transcript REPLACES the live region of the composer each
+// pass. Every pass re-reads the WHOLE utterance, so later words correct
+// earlier ones and punctuation settles as the sentence completes —
+// self-correcting with context, no partial-result plumbing needed. The loop
+// is chained (next pass starts only after the previous returns), so cadence
+// degrades gracefully as the clip grows. Truncated tails in a mid-recording
+// pass are fine: the next pass corrects them; only the FINAL pass (on stop /
+// Enter) requires the upload chain to be flushed.
+const LIVE_PASS_TIMEOUT_MS = 20_000;
+const LIVE_PASS_REST_MS = 350;
+const LIVE_POLL_MS = 150;
 
 /** @param {number} ms @returns {AbortSignal|undefined} */
 function fetchTimeout(ms) {
@@ -56,6 +69,9 @@ function fetchTimeout(ms) {
  * @property {Blob[]} chunks
  * @property {string} clipId
  * @property {Promise<void>} uploadChain
+ * @property {string} prefix composer text present when recording started —
+ *   live transcripts render after it, replacing only their own region
+ * @property {boolean} liveRendered at least one live pass reached the composer
  */
 
 /** @type {DictationSession|null} */
@@ -132,6 +148,8 @@ async function startDictation() {
     chunks: [],
     clipId: newClipId(),
     uploadChain: Promise.resolve(),
+    prefix: state.composerText.replace(/\s+$/, ""),
+    liveRendered: false,
   };
   session = current;
   state.dictating = true;
@@ -159,7 +177,46 @@ async function startDictation() {
   };
   recorder.start(1000);
   current.timerId = window.setTimeout(() => void stopAndTranscribe(), MAX_RECORD_MS);
+  void liveLoop(current);
   markDirty("composer");
+}
+
+/** @param {number} ms @returns {Promise<void>} */
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+/**
+ * Rolling live transcription: whenever new audio chunks exist, transcribe the
+ * on-disk clip-so-far and render the result into the composer's live region.
+ * Exits the moment this session stops being the active one — the final
+ * stop/Enter pass owns the composer from then on, so a stale in-flight live
+ * result can never clobber the final transcript.
+ * @param {DictationSession} current
+ */
+async function liveLoop(current) {
+  let transcribedChunks = 0;
+  while (session === current) {
+    if (current.chunks.length <= transcribedChunks) {
+      await sleep(LIVE_POLL_MS);
+      continue;
+    }
+    const target = current.chunks.length;
+    // Wait for flushed uploads, but a partially-flushed file is acceptable
+    // here — the pass after it corrects the tail.
+    await current.uploadChain.catch(() => {});
+    if (session !== current) return;
+    const mime = current.recorder.mimeType || current.chunks[0]?.type || "";
+    const result = await postClipTranscribe(current.clipId, mime || undefined, fetchTimeout(LIVE_PASS_TIMEOUT_MS));
+    if (session !== current) return;
+    const text = result.ok ? result.text.trim() : "";
+    if (text) {
+      setLiveText(current.prefix, text);
+      current.liveRendered = true;
+    }
+    transcribedChunks = target;
+    await sleep(LIVE_PASS_REST_MS);
+  }
 }
 
 /** Stop recording and transcribe what was captured. @returns {Promise<boolean>} */
@@ -218,7 +275,17 @@ async function stopAndTranscribe() {
     current.uploadChain.then(() => true),
     /** @type {Promise<boolean>} */ (new Promise((resolve) => window.setTimeout(() => resolve(false), UPLOAD_FLUSH_WATCHDOG_MS))),
   ]);
-  return await transcribe(clip, current.clipId, clipFileComplete);
+  // Final pass REPLACES the live region (never appends after live renders).
+  const render = (/** @type {string} */ text) => setLiveText(current.prefix, text);
+  const ok = await transcribe(clip, current.clipId, clipFileComplete, render);
+  if (!ok && current.liveRendered) {
+    // The composer already holds the last live transcript — near-final and
+    // visible. A failed final pass must not park an error/retry chip over a
+    // perfectly sendable line.
+    discardFailedDictation();
+    return true;
+  }
+  return ok;
 }
 
 /**
@@ -235,10 +302,13 @@ async function stopAndTranscribe() {
  * @param {boolean} [clipFileComplete] whether every chunk upload for clipId
  *   has landed on disk — the cheaper clip-transcribe path is only safe (and
  *   only tried) when true; otherwise the full blob is uploaded.
+ * @param {(text: string) => void} [render] how the transcript reaches the
+ *   composer — defaults to appending; the live-dictation final pass passes a
+ *   replace-the-live-region renderer instead.
  * @returns {Promise<boolean>}
  */
-export async function transcribe(blob, clipId, clipFileComplete) {
-  const next = queueTail.catch(() => false).then(() => runTranscribe(blob, clipId, clipFileComplete));
+export async function transcribe(blob, clipId, clipFileComplete, render) {
+  const next = queueTail.catch(() => false).then(() => runTranscribe(blob, clipId, clipFileComplete, render));
   queueTail = next;
   activeTranscriptionPromise = next;
   try {
@@ -252,9 +322,11 @@ export async function transcribe(blob, clipId, clipFileComplete) {
  * @param {Blob} blob
  * @param {string} [clipId]
  * @param {boolean} [clipFileComplete]
+ * @param {(text: string) => void} [render]
  * @returns {Promise<boolean>}
  */
-async function runTranscribe(blob, clipId, clipFileComplete) {
+async function runTranscribe(blob, clipId, clipFileComplete, render) {
+  const insert = render ?? insertTranscript;
   state.dictationBusy = true;
   state.dictating = false;
   state.dictationError = "";
@@ -273,7 +345,7 @@ async function runTranscribe(blob, clipId, clipFileComplete) {
     if (clipId && clipFileComplete) {
       const viaClip = await postClipTranscribe(clipId, blob?.type, signal);
       if (viaClip.ok) {
-        insertTranscript(viaClip.text);
+        insert(viaClip.text);
         lastFailedClip = null;
         state.dictationError = "";
         state.dictationBars = flatBars();
@@ -297,7 +369,7 @@ async function runTranscribe(blob, clipId, clipFileComplete) {
       // server renames it to discarded-*, never deletes) so it can't
       // resurface as a ghost recovered-recording chip.
       if (clipId) void fetch(`/api/voice/clip/${clipId}`, { method: "DELETE" }).catch(() => {});
-      insertTranscript(result.text);
+      insert(result.text);
       lastFailedClip = null;
       state.dictationError = "";
       state.dictationBars = flatBars();
@@ -559,7 +631,28 @@ export async function discardRecoveredClip(id) {
  */
 function insertTranscript(text) {
   const existing = state.composerText.replace(/\s+$/, "");
-  state.composerText = existing ? `${existing} ${text}` : text;
+  renderComposerText(existing ? `${existing} ${text}` : text);
+}
+
+/**
+ * Render the LIVE region: everything after the recording-start prefix is
+ * owned by dictation and replaced wholesale on every pass (each pass is a
+ * fresh full-context transcription, not an append). Typing into the live
+ * region mid-recording is not preserved — the composer belongs to the voice
+ * until the recording stops.
+ * @param {string} prefix
+ * @param {string} text
+ */
+function setLiveText(prefix, text) {
+  const line = String(text ?? "").trim();
+  if (!line) return;
+  renderComposerText(prefix ? `${prefix} ${line}` : line);
+}
+
+/** @param {string} value */
+function renderComposerText(value) {
+  state.composerText = value;
+  // Never let the autocomplete popup swallow the Enter that should send.
   state.completionHidden = true;
   markDirty("composer");
   // Put the caret at the end so the user can keep typing / hit Enter.
