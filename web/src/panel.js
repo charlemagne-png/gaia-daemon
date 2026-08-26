@@ -1,6 +1,6 @@
 // The right-hand room panel: agents (role select, main-agent star, voice call
 // button) and recent tasks.
-import { accountsCatalog, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, setActiveAgent, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
+import { accountsCatalog, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, setActiveAgent, setAgentConfig, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
 import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
 import { $, h } from "./dom.js";
 import { LinkedText, PathText } from "./links.js";
@@ -52,6 +52,30 @@ function agentSubtitle(agent, activeAgent) {
   ]
     .filter(Boolean)
     .join(" / ");
+}
+
+/** @param {import("./actions.js").AccountHarnessSummary | undefined} harness @returns {string[]} */
+function harnessProviders(harness) {
+  return harness?.modelProviderIds ?? (harness?.lockedProvider ? [harness.lockedProvider] : []);
+}
+
+/** Model datalist suggestions from harness/account data, with the current
+ * configured value kept even when the catalog is narrower than reality.
+ * @param {import("./types.js").AgentStatus} agent
+ * @param {import("./actions.js").AccountHarnessSummary | undefined} harness
+ * @param {import("./actions.js").AccountRecordSummary[]} accounts
+ */
+function modelSuggestions(agent, harness, accounts) {
+  const values = new Set();
+  if (agent.configuredModel && agent.configuredModel !== "default") values.add(agent.configuredModel);
+  const providers = new Set([...harnessProviders(harness), ...accounts.flatMap((account) => account.providers ?? [])]);
+  const names = harness?.modelNameOptions ?? [];
+  for (const provider of providers) for (const name of names) values.add(`${provider}/${name}`);
+  if (agent.configuredModel?.includes("/")) {
+    const name = agent.configuredModel.slice(agent.configuredModel.indexOf("/") + 1);
+    for (const provider of providers) values.add(`${provider}/${name}`);
+  }
+  return [...values].sort();
 }
 
 function renderPanel() {
@@ -165,11 +189,11 @@ function renderPanel() {
         // "none" is an explicit opt-out; otherwise a room override wins, falling
         // back to the agent's global default role.
         const effectiveRole = agent.activeRole === "none" ? undefined : (agent.activeRole ?? agent.defaultRole);
-        // Only offer an account picker when there's actually a choice: at least
-        // one named account declared for THIS agent's harness. Renders nothing
-        // (not even a "shared login" no-op select) while the catalog is
-        // unresolved, and for harnesses/accounts with zero matches.
         const agentAccounts = (accountsCatalogValue?.accounts ?? []).filter((account) => account.harness === agent.harness);
+        const agentHarness = accountsCatalogValue?.harnesses.find((harness) => harness.id === agent.harness);
+        const modelOptionId = `agent-model-options-${agent.id}`;
+        const modelValue = agent.configuredModel && agent.configuredModel !== "default" ? agent.configuredModel : "";
+        const suggestedModels = modelSuggestions(agent, agentHarness, agentAccounts);
         return h(
           "div",
           {
@@ -182,10 +206,6 @@ function renderPanel() {
           },
           h(
             "div",
-            // The role-select is pinned to this cell's bottom-right (the model
-            // line) and lives OUTSIDE the name's flow, so it can never share
-            // horizontal space with, or overlap, the @name above it. Same
-            // anchoring for the account-select, pinned just left of it.
             { class: `agent-cell ${roles.length > 0 ? "with-role" : ""} ${agentAccounts.length > 0 ? "with-account" : ""}` },
             h(
               "button",
@@ -214,50 +234,67 @@ function renderPanel() {
                 : null,
               agent.status === "compacting" && agent.compact ? CompactBar(agent.compact) : null,
             ),
-            agentAccounts.length > 0
-              ? h(
-                  "select",
-                  {
-                    class: `account-select ${agent.account ? "active" : ""}`,
-                    title: `account for @${agent.id}`,
-                    onchange: (event) => void setAgentAccount(agent.id, /** @type {HTMLSelectElement} */ (event.target).value || null),
-                  },
-                  h("option", { value: "", text: "shared login", selected: !agent.account }),
-                  agentAccounts.map((account) =>
-                    h("option", { value: account.id, text: account.label || account.id, selected: account.id === agent.account }),
-                  ),
-                )
-              : null,
-            roles.length > 0
-              ? h(
-                  "select",
-                  {
-                    class: `role-select ${effectiveRole ? "active" : ""}`,
-                    title: `role for @${agent.id}`,
-                    onchange: (event) => void setAgentRole(agent.id, /** @type {HTMLSelectElement} */ (event.target).value),
-                  },
-                  h("option", {
-                    value: "default",
-                    text: agent.defaultRole ? `default (${agent.defaultRole})` : "default",
-                    selected: !agent.activeRole,
-                  }),
-                  h("option", { value: "none", text: "none", selected: agent.activeRole === "none" }),
-                  roles.map((roleName) => h("option", { value: roleName, text: roleName, selected: roleName === agent.activeRole })),
-                )
-              : null,
-            agent.activeRole && agent.activeRole !== "none"
-              ? h("button", {
-                  class: "role-global-button",
-                  text: "⌂",
-                  title: `make "${agent.activeRole}" the global default for @${agent.id} (all rooms)`,
-                  onclick: async () => {
-                    const role = agent.activeRole;
-                    if (!role) return;
-                    await setAgentDefaultRole(agent.id, role);
-                    await setAgentRole(agent.id, "default");
-                  },
-                })
-              : null,
+            h(
+              "div",
+              { class: "agent-config-row" },
+              h("input", {
+                class: `model-select ${modelValue ? "active" : ""}`,
+                list: modelOptionId,
+                value: modelValue,
+                placeholder: "model",
+                title: `model for @${agent.id}: provider/name; blank = default`,
+                onchange: (event) => void setAgentConfig(agent.id, { model: /** @type {HTMLInputElement} */ (event.target).value.trim() || null }),
+              }),
+              h(
+                "datalist",
+                { id: modelOptionId },
+                suggestedModels.map((model) => h("option", { value: model })),
+              ),
+              agentAccounts.length > 0
+                ? h(
+                    "select",
+                    {
+                      class: `account-select ${agent.account ? "active" : ""}`,
+                      title: `account for @${agent.id}`,
+                      onchange: (event) => void setAgentConfig(agent.id, { account: /** @type {HTMLSelectElement} */ (event.target).value || null }),
+                    },
+                    h("option", { value: "", text: "shared login", selected: !agent.account }),
+                    agentAccounts.map((account) =>
+                      h("option", { value: account.id, text: account.label || account.id, selected: account.id === agent.account }),
+                    ),
+                  )
+                : null,
+              roles.length > 0
+                ? h(
+                    "select",
+                    {
+                      class: `role-select ${effectiveRole ? "active" : ""}`,
+                      title: `role for @${agent.id}`,
+                      onchange: (event) => void setAgentRole(agent.id, /** @type {HTMLSelectElement} */ (event.target).value),
+                    },
+                    h("option", {
+                      value: "default",
+                      text: agent.defaultRole ? `default (${agent.defaultRole})` : "default",
+                      selected: !agent.activeRole,
+                    }),
+                    h("option", { value: "none", text: "none", selected: agent.activeRole === "none" }),
+                    roles.map((roleName) => h("option", { value: roleName, text: roleName, selected: roleName === agent.activeRole })),
+                  )
+                : null,
+              agent.activeRole && agent.activeRole !== "none"
+                ? h("button", {
+                    class: "role-global-button",
+                    text: "⌂",
+                    title: `make "${agent.activeRole}" the global default for @${agent.id} (all rooms)`,
+                    onclick: async () => {
+                      const role = agent.activeRole;
+                      if (!role) return;
+                      await setAgentDefaultRole(agent.id, role);
+                      await setAgentRole(agent.id, "default");
+                    },
+                  })
+                : null,
+            ),
           ),
           h("button", {
             class: `main-button ${agent.id === activeAgent ? "active" : ""}`,
