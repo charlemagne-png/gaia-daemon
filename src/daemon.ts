@@ -719,9 +719,9 @@ export class Daemon {
   }
 
   /** Rename a room's display title without changing its durable id/path. */
-  async renameRoom(workspaceId: string, roomId: string, title: string): Promise<{ rooms: Snapshot["rooms"] }> {
+  async renameRoom(workspaceId: string, roomId: string, title: string, source: "auto" | "model" | "manual" = "manual"): Promise<{ rooms: Snapshot["rooms"] }> {
     const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    await service.setTitle(title);
+    await service.setTitle(title, source);
     return this.refreshRoomList(workspaceId);
   }
 

@@ -35,6 +35,11 @@ let heartbeatTimer;
 /** @type {number | undefined} */
 let livenessWatchdog;
 
+/** @param {string} type @param {unknown} detail */
+function dispatchClientEvent(type, detail) {
+  window.dispatchEvent(new CustomEvent(type, { detail }));
+}
+
 /**
  * Open the room event channel. A watchdog-triggered replacement asks the
  * ready handler to reseed from a fresh snapshot, because its missed events
@@ -200,6 +205,7 @@ export function connectEvents(resyncOnReady = false) {
       markStreamsStalled(payload.event.text);
     }
     if (payload.event.author === "user" && payload.event.channel === "voice") voiceTurnCommitted();
+    dispatchClientEvent("gaia:room-event", { workspaceId: payload.workspaceId, roomId: payload.roomId, event: payload.event });
     maybeAutoDario(payload.event);
     markDirty("transcript", "panel", "status", "tabs", "sidebar");
   });
@@ -525,6 +531,7 @@ async function adoptSnapshotKeepingRoom(snapshot) {
   state.snapshot = snapshot;
   pruneStreams();
   seedLiveTurn();
+  dispatchClientEvent("gaia:snapshot", { snapshot });
   syncReadMarks();
   refreshAttention();
   syncOlderFromSnapshot();
@@ -557,6 +564,7 @@ function streamFor(scope) {
     // here drops the "reconnecting…" pill in the very same repaint.
     entry.stalled = false;
   }
+  dispatchClientEvent("gaia:live-turn", { workspaceId: state.snapshot.workspace.id, roomId: scope.roomId, taskId: scope.taskId, eventId: scope.eventId });
   // Every turn-scoped SSE payload is activity, including tool and thinking
   // deltas that do not append visible prose.
   entry.lastDeltaAt = Date.now();
@@ -711,6 +719,7 @@ export function seedLiveTurn() {
     // retry gap renders "reconnecting…" instead of a frozen bubble.
     ...(live.stalled ? { stalled: true } : {}),
   });
+  dispatchClientEvent("gaia:live-turn", { workspaceId: snapshot.workspace.id, roomId: snapshot.room.id, taskId: live.taskId, eventId: live.eventId });
   syncLiveTimers();
   markDirty("transcript");
 }

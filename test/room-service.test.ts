@@ -406,6 +406,11 @@ test("auto-created rooms get a fallback title and manual rename locks it", async
   state = await RoomHandle.open(root, "chat-test123").then((room) => room.state());
   assert.equal(state.title, "Readable room titles");
   assert.equal(state.titleSource, "manual");
+
+  await service.setTitle("voice control — 08/26 08:50", "auto");
+  state = await RoomHandle.open(root, "chat-test123").then((room) => room.state());
+  assert.equal(state.title, "voice control — 08/26 08:50");
+  assert.equal(state.titleSource, "auto");
 });
 
 test("bookmarks upsert by event id, round-trip through normalized state, and remove idempotently", async () => {

@@ -356,17 +356,30 @@ function newAutoRoomId(prefix) {
  * Create a new room in the current workspace and switch to it — instantly, no
  * name dialog. The room is auto-named (its title is distilled from the first
  * message). ⌥-click / `incognito:true` makes it memory-off instead.
- * @param {{ incognito?: boolean }} [opts]
+ * @param {{ incognito?: boolean, title?: string }} [opts]
+ * @returns {Promise<{ workspaceId: string, roomId: string } | null>}
  */
 export async function addRoom(opts = {}) {
   const snapshot = state.snapshot;
-  if (!snapshot) return;
+  if (!snapshot) return null;
   const incognito = opts.incognito === true;
   const roomId = newAutoRoomId(incognito ? "incognito-" : "chat-");
   try {
     await selectRoom(snapshot.workspace.id, roomId, { incognito });
+    const title = String(opts.title ?? "").trim();
+    if (title) {
+      const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/title`, {
+        method: "POST",
+        body: JSON.stringify({ title, source: "auto" }),
+      });
+      applyRoomsPayload(snapshot.workspace.id, body.rooms);
+      if (state.snapshot?.workspace.id === snapshot.workspace.id && state.snapshot.room.id === roomId) /** @type {any} */ (state.snapshot.room).title = title;
+      markDirty("sidebar", "tabs", "status");
+    }
+    return { workspaceId: snapshot.workspace.id, roomId };
   } catch (error) {
     setError(error);
+    return null;
   }
 }
 
@@ -594,9 +607,9 @@ export async function uploadAttachment(file, name, mirrorToDownloads = false) {
 /**
  * @param {string} text
  * @param {import("./types.js").UploadedAttachment[]} [attachments]
- * @param {{ queue?: boolean, voice?: boolean }} [options] queue:true forces
+ * @param {{ queue?: boolean, voice?: boolean, onTask?: (task: import("./types.js").Task) => void }} [options] queue:true forces
  *   the durable queue (Cmd/Ctrl+Enter) instead of steering the running turn;
- *   voice:true marks continuous voice-control origin.
+ *   voice:true marks continuous voice-control origin; onTask observes the accepted task.
  * @returns {Promise<boolean>}
  */
 export async function sendMessage(text, attachments = [], options = {}) {
@@ -615,6 +628,7 @@ export async function sendMessage(text, attachments = [], options = {}) {
         ...(options.voice ? { voice: true } : {}),
       }),
     });
+    if (body.task) options.onTask?.(body.task);
     // Reflect the accepted task immediately so busy state doesn't wait for SSE.
     if (body.task && state.snapshot === snapshot && !snapshot.tasks.some((task) => task.id === body.task.id)) {
       snapshot.tasks.push(body.task);

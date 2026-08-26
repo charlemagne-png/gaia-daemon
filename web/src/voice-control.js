@@ -4,6 +4,8 @@ import { addRoom, cancelActiveTask, closeRoomTab, selectRoom, sendMessage } from
 import { h } from "./dom.js";
 import { markDirty, setError } from "./render.js";
 import { state } from "./state.js";
+import { chunkVoiceReplyText, voiceControlRoomTitle } from "./voice-control-readout.js";
+export { chunkVoiceReplyText, sanitizeVoiceReplyText, voiceControlRoomTitle } from "./voice-control-readout.js";
 
 const SILENCE_MS = 800;
 // ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
@@ -67,6 +69,11 @@ const speechControllers = new Set();
 let activeSpeechRequests = 0;
 let speaking = false;
 let speechSeq = 0;
+let readoutHolds = 0;
+/** @type {{ workspaceId: string, roomId: string } | null} */
+let voiceSessionTarget = null;
+/** @type {Map<string, { workspaceId: string, roomId: string, eventId?: string }>} */
+const pendingVoiceReplies = new Map();
 
 /** @returns {boolean} */
 export function voiceControlEnabled() {
@@ -107,6 +114,13 @@ export async function startVoiceControl() {
     return;
   }
 
+  const room = await addRoom({ title: voiceControlRoomTitle() });
+  if (!room) {
+    for (const track of stream.getTracks()) track.stop();
+    return;
+  }
+  voiceSessionTarget = room;
+
   const current = /** @type {VoiceControlSession} */ ({
     stream,
     audioCtx: null,
@@ -137,6 +151,8 @@ export function stopVoiceControl() {
   state.voiceControl.enabled = false;
   state.voiceControl.level = 0;
   pendingConfirm = null;
+  voiceSessionTarget = null;
+  pendingVoiceReplies.clear();
   cancelSpeech();
   if (current) {
     current.stopping = true;
@@ -388,12 +404,17 @@ function isAbortError(error) {
   return !!error && typeof error === "object" && "name" in error && error.name === "AbortError";
 }
 
+function refreshSpeaking() {
+  speaking = activeSpeechRequests > 0 || readoutHolds > 0;
+}
+
 function cancelSpeech() {
   speechSeq += 1;
   for (const controller of speechControllers) controller.abort();
   speechControllers.clear();
   activeSpeechRequests = 0;
-  speaking = false;
+  readoutHolds = 0;
+  refreshSpeaking();
   speechTail = Promise.resolve();
   updateVoiceControlPhase();
 }
@@ -409,7 +430,7 @@ async function speak(text) {
     const controller = new AbortController();
     speechControllers.add(controller);
     activeSpeechRequests += 1;
-    speaking = true;
+    refreshSpeaking();
     updateVoiceControlPhase();
     try {
       const response = await fetch("/api/voice/speak", {
@@ -425,12 +446,72 @@ async function speak(text) {
     } finally {
       speechControllers.delete(controller);
       activeSpeechRequests = Math.max(0, activeSpeechRequests - 1);
-      speaking = activeSpeechRequests > 0;
+      refreshSpeaking();
       updateVoiceControlPhase();
     }
   });
   speechTail = task.catch(() => undefined);
   await task;
+}
+
+/** @param {string} text @returns {Promise<void>} */
+async function speakVoiceReply(text) {
+  const chunks = chunkVoiceReplyText(text);
+  if (!chunks.length || !state.voiceControl.enabled) return;
+  const seq = speechSeq;
+  readoutHolds += 1;
+  refreshSpeaking();
+  updateVoiceControlPhase();
+  try {
+    for (const chunk of chunks) {
+      if (seq !== speechSeq || !state.voiceControl.enabled) return;
+      await speak(chunk);
+    }
+  } finally {
+    readoutHolds = Math.max(0, readoutHolds - 1);
+    refreshSpeaking();
+    updateVoiceControlPhase();
+  }
+}
+
+/** @param {import("./types.js").Task} task */
+function rememberVoiceTask(task) {
+  const snapshot = state.snapshot;
+  if (!snapshot || !task?.id) return;
+  pendingVoiceReplies.set(task.id, { workspaceId: snapshot.workspace.id, roomId: snapshot.room.id });
+}
+
+/** @param {{ workspaceId: string, roomId: string, taskId: string, eventId: string }} scope */
+export function noteVoiceLiveTurn(scope) {
+  const pending = pendingVoiceReplies.get(scope.taskId);
+  if (!pending || pending.workspaceId !== scope.workspaceId || pending.roomId !== scope.roomId) return;
+  pending.eventId = scope.eventId;
+}
+
+/** @param {{ workspaceId: string, roomId: string, event: import("./types.js").RoomEvent }} payload */
+export function noteVoiceRoomEvent(payload) {
+  for (const [taskId, pending] of pendingVoiceReplies) {
+    if (pending.workspaceId !== payload.workspaceId || pending.roomId !== payload.roomId || pending.eventId !== payload.event.id) continue;
+    pendingVoiceReplies.delete(taskId);
+    if (payload.event.author !== "user" && payload.event.author !== "system") void speakVoiceReply(payload.event.text);
+    return;
+  }
+}
+
+/** @param {import("./types.js").Snapshot} snapshot */
+export function noteVoiceSnapshot(snapshot) {
+  const workspaceId = snapshot.workspace.id;
+  const roomId = snapshot.room.id;
+  if (snapshot.room.liveTurn) {
+    noteVoiceLiveTurn({ workspaceId, roomId, taskId: snapshot.room.liveTurn.taskId, eventId: snapshot.room.liveTurn.eventId });
+  }
+  for (const event of snapshot.room.events) noteVoiceRoomEvent({ workspaceId, roomId, event });
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("gaia:live-turn", (event) => noteVoiceLiveTurn(/** @type {CustomEvent} */ (event).detail));
+  window.addEventListener("gaia:room-event", (event) => noteVoiceRoomEvent(/** @type {CustomEvent} */ (event).detail));
+  window.addEventListener("gaia:snapshot", (event) => noteVoiceSnapshot(/** @type {CustomEvent} */ (event).detail.snapshot));
 }
 
 /** @param {string} label @returns {string} */
@@ -473,7 +554,7 @@ let pendingConfirm = null;
 const NATIVE_COMMANDS = [
   { pattern: /^(voice control off|stop listening)$/i, label: () => "voice control off", run: () => stopVoiceControl() },
   { pattern: /^open ([a-z])\s?(\d{2,3})$/i, label: (m) => `open ${m[1].toUpperCase()}${m[2]}`, run: (m) => routeRoomRef(`${m[1]}${m[2]}`) },
-  { pattern: /^(new|create) (chat|room)$/i, label: () => "OPEN a new chat", confirm: true, run: () => addRoom() },
+  { pattern: /^(new|create) (chat|room)$/i, label: () => "OPEN a new chat", confirm: true, run: async () => { await addRoom(); } },
   { pattern: /^(stop|cancel)( turn| that| the turn)?$/i, label: () => "CANCEL the running turn", confirm: true, run: () => cancelActiveTask() },
   {
     pattern: /^close (this )?(chat|room|tab)$/i,
@@ -485,12 +566,23 @@ const NATIVE_COMMANDS = [
 
 const YES_RE = /^(yes|yeah|yep|do it|confirm|go ahead|sure)$/i;
 const NO_RE = /^(no|nope|cancel|never mind|nevermind|stop)$/i;
+const READOUT_STOP_RE = /^(stop|cancel)$/i;
+
+async function ensureVoiceSessionRoom() {
+  if (!voiceSessionTarget || state.snapshot?.room.id === voiceSessionTarget.roomId) return;
+  await selectRoom(voiceSessionTarget.workspaceId, voiceSessionTarget.roomId);
+}
 
 /** @param {string} rawText */
 async function routeVoiceControlText(rawText) {
   const text = rawText.trim().replace(/[.,!?\u3002]+$/, "").trim();
   if (!text) return;
   vcLog("heard", text);
+  if (READOUT_STOP_RE.test(text) && readoutHolds > 0) {
+    cancelSpeech();
+    vcLog("action", "stopped readout", true);
+    return;
+  }
   if (pendingConfirm) {
     const pending = pendingConfirm;
     if (YES_RE.test(text)) {
@@ -531,8 +623,9 @@ async function routeVoiceControlText(rawText) {
   }
   vcLog("action", "→ @gaia");
   // Gaia is the agent under the voice chat: plain speech is addressed to her
-  // in the current room; her reply lands in the transcript as usual.
-  await sendMessage(`@gaia ${rawText.trim()}`, [], { voice: true });
+  // in the session room; her reply lands in the transcript as usual.
+  await ensureVoiceSessionRoom();
+  await sendMessage(`@gaia ${rawText.trim()}`, [], { voice: true, onTask: rememberVoiceTask });
 }
 
 /** @param {string} ref */
@@ -557,6 +650,7 @@ async function routeRoomRef(ref) {
       return;
     }
     await selectRoom(targetWorkspaceId, roomId);
+    voiceSessionTarget = { workspaceId: targetWorkspaceId, roomId };
   } catch {
     vcLog("error", `unknown chat code ${ref.toUpperCase()}`, true);
     void speak("unknown chat code");

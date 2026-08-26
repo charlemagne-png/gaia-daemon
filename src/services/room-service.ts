@@ -3834,12 +3834,12 @@ export class RoomService {
 
   /** Human rename. This is display metadata only: the durable room id/path stay
    * unchanged, so transcripts, tabs, summons, and references don't break. */
-  async setTitle(rawTitle: string): Promise<void> {
+  async setTitle(rawTitle: string, source: "auto" | "model" | "manual" = "manual"): Promise<void> {
     const title = normalizeRoomTitle(rawTitle);
     if (!title) throw new Error("Room title cannot be empty.");
     await this.room.updateState((state) => {
       state.title = title;
-      state.titleSource = "manual";
+      state.titleSource = source;
     });
     await this.emitRoomsChanged();
   }

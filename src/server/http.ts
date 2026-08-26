@@ -803,8 +803,10 @@ export class GaiaWebServer {
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/title$/))) {
       const body = await parseBody(request);
       const title = stringField(body, "title")?.trim();
+      const rawSource = stringField(body, "source")?.trim();
+      const source = rawSource === "auto" || rawSource === "model" || rawSource === "manual" ? rawSource : "manual";
       if (!title) return json(response, 400, { error: "Missing room title" });
-      return this.respond(response, () => this.daemon.renameRoom(params![0], params![1], title));
+      return this.respond(response, () => this.daemon.renameRoom(params![0], params![1], title, source));
     }
 
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/favorite$/))) {
