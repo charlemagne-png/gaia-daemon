@@ -1,6 +1,7 @@
 // GaiaVoice: one mic stream, VAD-sliced utterance clips, local
 // transcription endpoint, then room-command routing or normal message send.
 import { addRoom, cancelActiveTask, closeRoomTab, selectRoom, sendMessage } from "./actions.js";
+import { api } from "./api.js";
 import { h } from "./dom.js";
 import { markDirty, setError } from "./render.js";
 import { state } from "./state.js";
@@ -153,7 +154,7 @@ export async function startVoiceControl() {
     return;
   }
 
-  const room = target.kind === "current" ? null : await addRoom({ title: voiceControlRoomTitle(), voiceSession: target.kind === "dispatcher" });
+  const room = target.kind === "current" ? null : target.kind === "dispatcher" ? await resolveCurrentVoiceRoom() : await addRoom({ title: voiceControlRoomTitle(), voiceSession: false });
   if (target.kind !== "current" && !room) {
     for (const track of stream.getTracks()) track.stop();
     return;
@@ -764,8 +765,21 @@ const YES_RE = /^(yes|yeah|yep|do it|confirm|go ahead|sure)$/i;
 const NO_RE = /^(no|nope|cancel|never mind|nevermind|stop)$/i;
 const READOUT_STOP_RE = /^(stop|cancel)$/i;
 
+async function resolveCurrentVoiceRoom() {
+  const workspaceId = state.snapshot?.workspace.id;
+  if (!workspaceId) return null;
+  const body = await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/voice/room`);
+  const roomId = String(body?.roomId ?? body?.room?.id ?? "");
+  return roomId ? { workspaceId: String(body?.workspaceId ?? workspaceId), roomId } : null;
+}
+
 async function ensureVoiceSessionRoom() {
-  if (!voiceSessionTarget || state.snapshot?.room.id === voiceSessionTarget.roomId) return;
+  if (!voiceSessionTarget) return;
+  if (voiceSessionUsesDispatcher) {
+    const current = await resolveCurrentVoiceRoom();
+    if (current) voiceSessionTarget = current;
+  }
+  if (state.snapshot?.room.id === voiceSessionTarget.roomId) return;
   await selectRoom(voiceSessionTarget.workspaceId, voiceSessionTarget.roomId);
 }
 
@@ -825,6 +839,7 @@ async function routeVoiceControlText(rawText) {
   await ensureVoiceSessionRoom();
   const outbound = voiceSessionUsesDispatcher ? rawText.trim() : `@gaia ${rawText.trim()}`;
   await sendMessage(outbound, [], { voice: true, onTask: rememberVoiceTask });
+  await ensureVoiceSessionRoom();
 }
 
 /** @param {string} ref */

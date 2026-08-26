@@ -1895,6 +1895,37 @@ export class RoomService {
     if (!this.taskCancelled(task)) this.settleTask(task, "complete");
   }
 
+  /** Estimate the invisible GaiaVoice room's prompt load before accepting the
+   * next dispatch turn. Uses the same harness-declared context-window data as
+   * the ctx chip; transcript tokens are a conservative seam when no live usage
+   * event has landed yet. */
+  async estimateVoiceDispatchContext(additionalText = ""): Promise<{ usedTokens: number; maxTokens: number }> {
+    await this.init();
+    const dispatcher = (await this.availableVoiceDispatcherId()) ?? (await this.voiceDispatcherId()) ?? this.workspace.config.defaultAgent;
+    const agent = this.workspace.agents[dispatcher] ?? this.workspace.agents[this.workspace.config.defaultAgent];
+    const maxTokens = agent ? (contextWindowFor(harnessIdFor(agent, this.workspace), agent.model?.name) ?? DEFAULT_CONTEXT_WARN_TOKENS) : DEFAULT_CONTEXT_WARN_TOKENS;
+    const state = await this.room.state();
+    const live = state.contextUsage?.[dispatcher]?.usedTokens;
+    if (typeof live === "number" && Number.isFinite(live) && live > 0) return { usedTokens: live, maxTokens };
+    const { events: rawEvents } = await this.room.eventsFrom(0);
+    const transcript = renderRoomTranscript(rawEvents.filter((event) => event.author !== "system"));
+    return { usedTokens: estimateTokens(`${transcript}\n${additionalText}`), maxTokens };
+  }
+
+  async markVoiceRotatedTo(nextRoomId: string): Promise<void> {
+    await this.room.updateState((state) => {
+      state.voiceRotatedTo = nextRoomId;
+    });
+  }
+
+  async appendSystemNote(text: string): Promise<RoomEvent> {
+    const event: RoomEvent = { id: newId("system"), timestamp: new Date().toISOString(), author: "system", text };
+    await this.room.appendEvent(event);
+    this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
+    void this.emitSnapshot();
+    return event;
+  }
+
   /** The ctx chip's usage figure for the snapshot. Live usage wins, but the
    * window size (maxTokens) is only learned from a clean turn-end `result`; a
    * fresh agent, a room whose turns were all steered/cancelled before a result,

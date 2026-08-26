@@ -947,16 +947,16 @@ export class GaiaWebServer {
     }
 
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/messages$/))) {
-      const service = await this.daemon.serviceFor(params[0], params[1]);
       const body = await parseBody(request);
       const textValue = stringField(body, "text") ?? "";
       const refs = attachmentRefs(body);
       // A picture with no words is a valid message; no words and no files is not.
       if (!textValue.trim() && !refs) return json(response, 400, { error: "Missing message text" });
+      const requestedService = await this.daemon.serviceFor(params[0], params[1]);
       let attachments;
       if (refs) {
         try {
-          attachments = await service.resolveAttachments(refs);
+          attachments = await requestedService.resolveAttachments(refs);
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : String(error) });
         }
@@ -965,8 +965,9 @@ export class GaiaWebServer {
       // durable queue instead of injecting into the running turn.
       const queue = (body as { queue?: unknown }).queue === true;
       const voice = (body as { voice?: unknown }).voice === true;
+      const service = voice ? await this.daemon.voiceDispatchService(params[0], params[1], textValue) : requestedService;
       const task = await service.sendMessage(textValue, { origin: "human", ...(attachments ? { attachments } : {}), ...(queue ? { queue } : {}), ...(voice ? { voice } : {}) });
-      json(response, 202, { task });
+      json(response, 202, { task, ...(voice ? { roomId: service.roomId } : {}) });
       return;
     }
 
@@ -1202,6 +1203,10 @@ export class GaiaWebServer {
       }
       if (!response.writableEnded) response.end();
       return;
+    }
+
+    if (method === "GET" && (params = match(/^\/api\/workspaces\/([^/]+)\/voice\/room$/))) {
+      return this.respond(response, () => this.daemon.ensureCurrentVoiceRoom(params![0]));
     }
 
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/voice\/(start|stop)$/))) {

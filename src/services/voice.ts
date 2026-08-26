@@ -591,17 +591,19 @@ export class VoiceStackManager {
 }
 
 // ---------------------------------------------------------------------------
-// Durable call overrides (~/.gaia/voice-state.json). A call-scoped change
-// (thinking forced off for latency) is recorded HERE, atomically, BEFORE it is
-// applied anywhere — so the invariant is: if an override is in effect, the
-// record exists. Restore clears the record; boot sweeps and restores any
-// orphan a crash mid-call left behind. This closes v1's leaked-override gap
-// by protocol, not by care (DESIGN.md §durability).
+// Durable voice runtime state (~/.gaia/voice-state.json). A call-scoped
+// thinking override and the current invisible GaiaVoice room registry share one
+// atomic file; helpers merge their own key so neither clobbers the other.
 
 export interface VoiceCallOverride {
   agentId: string;
   /** The agent's thinking level before the call ("" = unset). */
   previousThinking: string;
+}
+
+interface VoiceRuntimeState {
+  callOverride?: VoiceCallOverride;
+  currentVoiceRooms?: Record<string, string>;
 }
 
 function overrideFrom(raw: unknown): VoiceCallOverride | undefined {
@@ -611,19 +613,57 @@ function overrideFrom(raw: unknown): VoiceCallOverride | undefined {
   return { agentId: value.agentId, previousThinking: typeof value.previousThinking === "string" ? value.previousThinking : "" };
 }
 
+function stringMapFrom(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const entries = Object.entries(raw as Record<string, unknown>)
+    .filter((entry): entry is [string, string] => Boolean(entry[0].trim()) && typeof entry[1] === "string" && Boolean(entry[1].trim()));
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function voiceRuntimeStateFrom(raw: unknown): VoiceRuntimeState {
+  if (!raw || typeof raw !== "object") return {};
+  const value = raw as Record<string, unknown>;
+  return {
+    ...(overrideFrom(value.callOverride) ? { callOverride: overrideFrom(value.callOverride) } : overrideFrom(value) ? { callOverride: overrideFrom(value) } : {}),
+    ...(stringMapFrom(value.currentVoiceRooms) ? { currentVoiceRooms: stringMapFrom(value.currentVoiceRooms) } : {}),
+  };
+}
+
+async function readVoiceRuntimeState(): Promise<VoiceRuntimeState> {
+  return voiceRuntimeStateFrom(await readJson(globalPaths.voiceState()));
+}
+
+async function writeVoiceRuntimeState(state: VoiceRuntimeState): Promise<void> {
+  await writeJsonAtomic(globalPaths.voiceState(), state);
+}
+
 /** Record a live call override durably. MUST be awaited before applying it. */
 export async function persistCallOverride(override: VoiceCallOverride): Promise<void> {
-  await writeJsonAtomic(globalPaths.voiceState(), override);
+  const state = await readVoiceRuntimeState();
+  await writeVoiceRuntimeState({ ...state, callOverride: override });
 }
 
 /** Clear the override record after the override is restored (hang-up). */
 export async function clearCallOverride(): Promise<void> {
-  await writeJsonAtomic(globalPaths.voiceState(), {});
+  const state = await readVoiceRuntimeState();
+  delete state.callOverride;
+  await writeVoiceRuntimeState(state);
 }
 
 /** The currently recorded override, if any (exposed for boot logging/tests). */
 export async function readCallOverride(): Promise<VoiceCallOverride | undefined> {
-  return overrideFrom(await readJson(globalPaths.voiceState()));
+  return (await readVoiceRuntimeState()).callOverride;
+}
+
+/** Current invisible GaiaVoice dispatcher room for a workspace, if registered. */
+export async function readCurrentVoiceRoom(workspaceId: string): Promise<string | undefined> {
+  return (await readVoiceRuntimeState()).currentVoiceRooms?.[workspaceId];
+}
+
+/** Switch the durable current-room registry without touching call overrides. */
+export async function writeCurrentVoiceRoom(workspaceId: string, roomId: string): Promise<void> {
+  const state = await readVoiceRuntimeState();
+  await writeVoiceRuntimeState({ ...state, currentVoiceRooms: { ...(state.currentVoiceRooms ?? {}), [workspaceId]: roomId } });
 }
 
 /**

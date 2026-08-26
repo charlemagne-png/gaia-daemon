@@ -546,6 +546,8 @@ export function normalizeRoomState(value: unknown): RoomState {
     })(),
     ...(typeof value.imported === "string" && value.imported.trim() ? { imported: value.imported } : {}),
     ...(value.voiceSession === true ? { voiceSession: true } : {}),
+    ...(typeof value.voiceRotatedTo === "string" && value.voiceRotatedTo.trim() ? { voiceRotatedTo: value.voiceRotatedTo } : {}),
+    ...(typeof value.predecessorRoomId === "string" && value.predecessorRoomId.trim() ? { predecessorRoomId: value.predecessorRoomId } : {}),
     ...(monad ? { monad } : {}),
     ...(pendingTurn ? { pendingTurn } : {}),
     ...(queue ? { queue } : {}),

@@ -21,8 +21,10 @@ import {
   modelListPayload,
   persistCallOverride,
   readCallOverride,
+  readCurrentVoiceRoom,
   readVoiceSettings,
   sweepOrphanOverrides,
+  writeCurrentVoiceRoom,
   wsToHttp,
   type ActiveVoiceCall,
   type SpawnedService,
@@ -401,6 +403,22 @@ test("overrides: apply → crash (no restore) → sweepOrphanOverrides restores 
     await sweepOrphanOverrides(async () => {
       throw new Error("should not be called");
     });
+  });
+});
+
+test("voice state: registry switch persists current voice room without clobbering call override", async () => {
+  await withTempHome(async () => {
+    await persistCallOverride({ agentId: "gaia", previousThinking: "medium" });
+    await writeCurrentVoiceRoom("ws1", "voice_a");
+    await writeCurrentVoiceRoom("ws2", "voice_other");
+    assert.deepEqual(await readCallOverride(), { agentId: "gaia", previousThinking: "medium" });
+    assert.equal(await readCurrentVoiceRoom("ws1"), "voice_a");
+    await writeCurrentVoiceRoom("ws1", "voice_b");
+    assert.equal(await readCurrentVoiceRoom("ws1"), "voice_b");
+    assert.equal(await readCurrentVoiceRoom("ws2"), "voice_other");
+    await clearCallOverride();
+    assert.equal(await readCallOverride(), undefined);
+    assert.equal(await readCurrentVoiceRoom("ws1"), "voice_b");
   });
 });
 

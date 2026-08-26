@@ -40,9 +40,10 @@ async function writeIfMissing(path: string, content: string): Promise<void> {
   await writeText(path, content);
 }
 
-export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean }): Promise<void> {
+export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean; predecessorRoomId?: string }): Promise<void> {
   assertRoomId(roomId);
   if (opts?.parentRoomId) assertRoomId(opts.parentRoomId);
+  if (opts?.predecessorRoomId) assertRoomId(opts.predecessorRoomId);
   await writeIfMissing(workspacePaths.transcript(cwd, roomId), "");
   // `incognito` is seeded here and ONLY here — writeIfMissing means it lands in
   // the initial state of a brand-new room and is never rewritten, so the flag is
@@ -55,6 +56,7 @@ export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { 
     ...(opts?.incognito ? { incognito: true } : {}),
     ...(opts?.parentRoomId ? { parentRoomId: opts.parentRoomId, subroom: true } : {}),
     ...(opts?.voiceSession ? { voiceSession: true } : {}),
+    ...(opts?.predecessorRoomId ? { predecessorRoomId: opts.predecessorRoomId } : {}),
   });
   await writeIfMissing(workspacePaths.roomState(cwd, roomId), jsonText(initial));
   await ensureWorkspaceRoomRefCodes(cwd);

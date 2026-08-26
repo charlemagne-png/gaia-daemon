@@ -10,6 +10,7 @@ import { readdir, readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { Bus } from "./core/bus.js";
+import { newId } from "./core/ids.js";
 import { DEFAULTS } from "./core/config.js";
 import { globalPaths, workspacePaths } from "./core/paths.js";
 import { readJson, writeJsonAtomic } from "./core/store.js";
@@ -45,8 +46,10 @@ import {
   clearCallOverride,
   ensureVoiceSettingsFile,
   persistCallOverride,
+  readCurrentVoiceRoom,
   readVoiceSettings,
   sweepOrphanOverrides,
+  writeCurrentVoiceRoom,
   type VoiceSettings,
 } from "./services/voice.js";
 import { readAloud, readAloudStream, resolveTtsChoice, ttsStackSettings, type ReadAloudDelivery, type ReadAloudResult } from "./services/read-aloud.js";
@@ -448,6 +451,45 @@ export class Daemon {
     if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
     const roomId = await resolveWorkspaceRoomRef(record.path, ref);
     return roomId ? { roomId } : undefined;
+  }
+
+  async ensureCurrentVoiceRoom(workspaceId: string): Promise<{ workspaceId: string; roomId: string }> {
+    const record = await this.registry.find(workspaceId);
+    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
+    const existing = await readCurrentVoiceRoom(workspaceId);
+    if (existing && this.roomIdsOnDisk(record.path).includes(existing)) {
+      const state = normalizeRoomState(await readJson(workspacePaths.roomState(record.path, existing)).catch(() => ({})));
+      if (state.voiceSession) return { workspaceId, roomId: existing };
+    }
+    const roomId = await this.createVoiceRoom(workspaceId);
+    return { workspaceId, roomId };
+  }
+
+  async voiceDispatchService(workspaceId: string, _requestedRoomId: string, text: string): Promise<RoomService> {
+    const current = await this.ensureCurrentVoiceRoom(workspaceId);
+    let service = await this.serviceFor(workspaceId, current.roomId);
+    const estimate = await service.estimateVoiceDispatchContext(text);
+    if (estimate.usedTokens <= estimate.maxTokens * 0.2) return service;
+    const nextRoomId = await this.createVoiceRoom(workspaceId, current.roomId);
+    await service.markVoiceRotatedTo(nextRoomId);
+    service = await this.serviceFor(workspaceId, nextRoomId);
+    this.broadcast({ type: "rooms", workspaceId, rooms: await service.listRooms() });
+    return service;
+  }
+
+  private async createVoiceRoom(workspaceId: string, predecessorRoomId?: string): Promise<string> {
+    const record = await this.registry.find(workspaceId);
+    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
+    let roomId = newId("voice");
+    while (this.roomIdsOnDisk(record.path).includes(roomId)) roomId = newId("voice");
+    await ensureWorkspaceRoom(record.path, roomId, { voiceSession: true, ...(predecessorRoomId ? { predecessorRoomId } : {}) });
+    const room = await RoomHandle.open(record.path, roomId);
+    await room.updateState((state) => {
+      state.title = "GaiaVoice dispatch";
+      state.titleSource = "auto";
+    });
+    await writeCurrentVoiceRoom(workspaceId, roomId);
+    return roomId;
   }
 
   private async createService(workspaceId: string, resolvedRoom: string, key: string): Promise<RoomService> {

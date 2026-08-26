@@ -372,6 +372,10 @@ export interface RoomState {
   notes?: RoomNote[];
   /** GaiaVoice dispatcher stickiness: last routed target + timestamp. */
   voiceDispatch?: VoiceDispatchState;
+  /** Invisible GaiaVoice room that replaced this one after context rotation. */
+  voiceRotatedTo?: string;
+  /** Invisible GaiaVoice room whose sealed transcript precedes this one. */
+  predecessorRoomId?: string;
   /** Latest harness-reported context accounting per agent, keyed by agent id.
    * Persisted so the composer's `ctx` chip survives a restart instead of
    * blanking until the next turn re-reports. Harness-agnostic — every runtime

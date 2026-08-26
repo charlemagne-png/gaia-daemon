@@ -349,6 +349,15 @@ test("voice dispatch falls back unchanged when Hermes is missing", async () => {
   assert.equal((await service.getSnapshot()).room.voiceDispatcherAvailable, false);
 });
 
+test("voice dispatch context estimate crosses the 20% rotation trigger", async () => {
+  const { service, root } = await makeService({ agents: ["gaia", "hermes"] });
+  const room = await RoomHandle.open(root, "default");
+  await room.appendEvent({ id: "u_big", timestamp: new Date().toISOString(), author: "user", text: "word ".repeat(90_000) });
+
+  const estimate = await service.estimateVoiceDispatchContext("next spoken turn");
+  assert.ok(estimate.usedTokens > estimate.maxTokens * 0.2);
+});
+
 test("snapshot exposes voice dispatcher availability from the dispatch fallback seam", async () => {
   const present = await makeService({ agents: ["gaia", "hermes"] });
   assert.equal((await present.service.getSnapshot()).room.voiceDispatcherAvailable, true);
