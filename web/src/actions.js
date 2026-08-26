@@ -81,6 +81,7 @@ function applySnapshotPayload(body) {
   state.settingsWorkspaceFiles = body.workspaceFiles ?? [];
   state.voice = body.voice ?? null;
   rememberLocation(state.snapshot);
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("gaia:snapshot", { detail: { snapshot: state.snapshot } }));
 }
 
 /** @param {string} workspaceId */

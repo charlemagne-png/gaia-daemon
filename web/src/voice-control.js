@@ -581,6 +581,7 @@ export function noteVoiceRoomEvent(payload) {
 export function noteVoiceSnapshot(snapshot) {
   const workspaceId = snapshot.workspace.id;
   const roomId = snapshot.room.id;
+  if (state.voiceControl.enabled) voiceSessionTarget = { workspaceId, roomId };
   for (const event of snapshot.room.events) noteVoiceRoomEvent({ workspaceId, roomId, event });
 }
 

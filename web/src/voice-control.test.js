@@ -36,6 +36,8 @@ test("voice-control toggle-on seam creates/selects a fresh titled room", () => {
   expect(actionsSource).toContain("/rooms/${encodeURIComponent(roomId)}/title");
   expect(actionsSource).toContain('body: JSON.stringify({ title, source: "auto" })');
   expect(actionsSource).toContain("state.snapshot.room).title = title");
+  expect(actionsSource).toContain('window.dispatchEvent(new CustomEvent("gaia:snapshot"');
+  expect(voiceSource).toContain("if (state.voiceControl.enabled) voiceSessionTarget = { workspaceId, roomId }");
 });
 
 test("summon-return/session-room agent completions speak; session-off, other-room, old, and duplicate completions do not", () => {
