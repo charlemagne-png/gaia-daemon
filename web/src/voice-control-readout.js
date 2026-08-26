@@ -133,7 +133,11 @@ export function stopVoiceReadoutStream(readout) {
 function takeVoiceReadoutPending(readout) {
   const clean = sanitizeVoiceReplyText(readout.pending);
   readout.pending = "";
-  if (!clean || readout.spokenChars >= REPLY_TOTAL_CHARS) return [];
+  if (!clean) return [];
+  if (readout.spokenChars >= REPLY_TOTAL_CHARS) {
+    readout.capReached = true;
+    return [];
+  }
   const remaining = REPLY_TOTAL_CHARS - readout.spokenChars;
   const overflow = clean.length > remaining;
   const limited = overflow ? clean.slice(0, remaining).trim() : clean;

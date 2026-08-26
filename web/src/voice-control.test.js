@@ -38,10 +38,10 @@ test("voice-control toggle-on seam creates/selects a fresh titled room", () => {
   expect(actionsSource).toContain("state.snapshot.room).title = title");
 });
 
-test("session-room agent completions speak; session-off, other-room, old, and duplicate completions do not", () => {
+test("summon-return/session-room agent completions speak; session-off, other-room, old, and duplicate completions do not", () => {
   const spoken = new Set();
   const target = { workspaceId: "w1", roomId: "voice-room" };
-  const event = { id: "evt1", timestamp: "2026-08-26T07:10:00.000Z", author: "gaia", text: "Done." };
+  const event = { id: "evt1", timestamp: "2026-08-26T07:10:00.000Z", author: "gaia", text: "Done.", details: { summonResult: { childRoomId: "worker", failed: false } } };
   expect(shouldReadVoiceRoomEvent({ workspaceId: "w1", roomId: "voice-room", event }, target, Date.parse("2026-08-26T07:09:00.000Z"), spoken)).toBe(true);
   expect(shouldReadVoiceRoomEvent({ workspaceId: "w1", roomId: "other", event }, target, Date.parse("2026-08-26T07:09:00.000Z"), spoken)).toBe(false);
   expect(shouldReadVoiceRoomEvent({ workspaceId: "w1", roomId: "voice-room", event }, null, Date.parse("2026-08-26T07:09:00.000Z"), spoken)).toBe(false);
@@ -61,6 +61,15 @@ test("incremental readout emits completed sentences once, skips code fences spli
   spoken.push(...finalizeVoiceReadoutStream(readout));
   spoken.push(...finalizeVoiceReadoutStream(readout));
   expect(spoken).toEqual(["First sentence.", "Second sentence!", "Third line", "Tail with no"]);
+});
+
+test("streaming readout emits more notice once when total spoken cap is exceeded before completion", () => {
+  const readout = createVoiceStreamReadoutState();
+  const spoken = [];
+  for (let i = 0; i < 14; i += 1) spoken.push(...appendVoiceReadoutDelta(readout, `${"word ".repeat(20)}.`));
+  spoken.push(...finalizeVoiceReadoutStream(readout));
+  expect(spoken.at(-1)).toBe("…more in the chat");
+  expect(spoken.filter((chunk) => chunk === "…more in the chat")).toHaveLength(1);
 });
 
 test("streaming readout seams consume text deltas and finalize on room-event", () => {
