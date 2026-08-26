@@ -51,6 +51,7 @@ import {
 } from "./services/voice.js";
 import { readAloud, readAloudStream, resolveTtsChoice, ttsStackSettings, type ReadAloudDelivery, type ReadAloudResult } from "./services/read-aloud.js";
 import { transcribe, type SttAudioInput } from "./services/transcribe.js";
+import { speak as speakApple } from "./services/tts-apple.js";
 import "./services/stt-apple.js"; // registers the apple (on-device Siri) STT engine
 import { TtsCallBridge } from "./services/voice-tts-bridge.js";
 import { SttCallBridge } from "./services/voice-stt-bridge.js";
@@ -1449,6 +1450,12 @@ export class Daemon {
       signal: opts.signal,
       log: (message) => this.log(message),
     });
+  }
+
+  /** Speak a short voice-control prompt/ack on the local Mac speaker. */
+  async speakVoiceControl(text: string, opts: { signal?: AbortSignal } = {}): Promise<void> {
+    const settings = await readVoiceSettings();
+    await speakApple(text, settings.ttsVoice, opts.signal);
   }
 
   // --- files + hints -------------------------------------------------------------------

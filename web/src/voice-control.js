@@ -51,6 +51,13 @@ let session = null;
 /** @type {Promise<void>} */
 let transcriptionTail = Promise.resolve();
 let activeTranscriptions = 0;
+/** @type {Promise<void>} */
+let speechTail = Promise.resolve();
+/** @type {Set<AbortController>} */
+const speechControllers = new Set();
+let activeSpeechRequests = 0;
+let speaking = false;
+let speechSeq = 0;
 
 /** @returns {boolean} */
 export function voiceControlEnabled() {
@@ -117,6 +124,8 @@ export function stopVoiceControl() {
   session = null;
   state.voiceControl.enabled = false;
   state.voiceControl.level = 0;
+  pendingConfirm = null;
+  cancelSpeech();
   if (current) {
     current.stopping = true;
     if (current.rafId) cancelAnimationFrame(current.rafId);
@@ -151,18 +160,23 @@ function startAnalyser(current) {
 /** @param {VoiceControlSession} current */
 function tickAnalyser(current) {
   if (session !== current || current.stopping || !current.analyser || !current.analyserData) return;
+  if (speaking) {
+    state.voiceControl.level = 0;
+    current.rafId = requestAnimationFrame(() => tickAnalyser(current));
+    return;
+  }
   current.analyser.getByteTimeDomainData(current.analyserData);
   const level = rmsLevel(current.analyserData);
   state.voiceControl.level = level;
 
   const now = Date.now();
   const threshold = Math.max(current.noiseFloor * NOISE_FLOOR_RATIO, MIN_SPEECH_LEVEL);
-  const speaking = level >= threshold;
-  if (!speaking) {
+  const hearsSpeech = level >= threshold;
+  if (!hearsSpeech) {
     // Only quiet frames feed the floor, so speech never raises its own bar.
     current.noiseFloor = Math.min(NOISE_FLOOR_MAX, Math.max(0.001, current.noiseFloor * (1 - NOISE_FLOOR_EMA) + level * NOISE_FLOOR_EMA));
   }
-  if (speaking) {
+  if (hearsSpeech) {
     if (!current.segment && !current.segmentStopping) startSegment(current, now);
     if (current.segment) {
       current.segment.lastSpeechAtMs = now;
@@ -295,16 +309,84 @@ async function postTranscribe(blob) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      vcLog("error", String(data.error ?? `voice control transcription failed: ${response.status}`), true);
+      void speak("transcription failed");
       setError(new Error(String(data.error ?? `voice control transcription failed: ${response.status}`)));
       return "";
     }
     return String(data.text ?? "").trim();
   } catch (error) {
-    setError(error);
+    if (!isAbortError(error)) {
+      vcLog("error", "transcription failed", true);
+      void speak("transcription failed");
+      setError(error);
+    }
     return "";
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** @param {unknown} error */
+function isAbortError(error) {
+  return !!error && typeof error === "object" && "name" in error && error.name === "AbortError";
+}
+
+function cancelSpeech() {
+  speechSeq += 1;
+  for (const controller of speechControllers) controller.abort();
+  speechControllers.clear();
+  activeSpeechRequests = 0;
+  speaking = false;
+  speechTail = Promise.resolve();
+  updateVoiceControlPhase();
+}
+
+/** @param {string} text @returns {Promise<void>} */
+async function speak(text) {
+  const utterance = String(text ?? "").replace(/\s+/g, " ").trim().slice(0, 500).trim();
+  if (!utterance || !state.voiceControl.enabled) return;
+  const seq = speechSeq;
+  const task = speechTail.catch(() => undefined).then(async () => {
+    if (seq !== speechSeq || !state.voiceControl.enabled) return;
+    if (session?.segment) finishSegment(session, true);
+    const controller = new AbortController();
+    speechControllers.add(controller);
+    activeSpeechRequests += 1;
+    speaking = true;
+    updateVoiceControlPhase();
+    try {
+      const response = await fetch("/api/voice/speak", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: utterance }),
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok && state.voiceControl.enabled) setError(new Error(String(data.error ?? `voice speech failed: ${response.status}`)));
+    } catch (error) {
+      if (!isAbortError(error) && state.voiceControl.enabled) setError(error);
+    } finally {
+      speechControllers.delete(controller);
+      activeSpeechRequests = Math.max(0, activeSpeechRequests - 1);
+      speaking = activeSpeechRequests > 0;
+      updateVoiceControlPhase();
+    }
+  });
+  speechTail = task.catch(() => undefined);
+  await task;
+}
+
+/** @param {string} label @returns {string} */
+function spokenAckForLabel(label) {
+  const open = /^open ([a-z]\d{2,3})$/i.exec(label);
+  if (open) return `opening ${open[1].toUpperCase()}`;
+  const normalized = label.toLowerCase();
+  if (normalized === "voice control off") return "stopped";
+  if (normalized.includes("new chat")) return "new chat";
+  if (normalized.includes("cancel")) return "stopped";
+  if (normalized.includes("close")) return "closed";
+  return "";
 }
 
 // -- Voice console log ------------------------------------------------------
@@ -314,9 +396,9 @@ async function postTranscribe(blob) {
 
 const VC_LOG_CAP = 24;
 
-/** @param {"heard"|"action"|"ask"|"error"} kind @param {string} text */
-function vcLog(kind, text) {
-  state.voiceControl.log.push({ kind, text, ts: Date.now() });
+/** @param {"heard"|"action"|"ask"|"error"} kind @param {string} text @param {boolean} [spoken] */
+function vcLog(kind, text, spoken = false) {
+  state.voiceControl.log.push({ kind, text, ts: Date.now(), ...(spoken ? { spoken: true } : {}) });
   if (state.voiceControl.log.length > VC_LOG_CAP) state.voiceControl.log.splice(0, state.voiceControl.log.length - VC_LOG_CAP);
   markDirty("panel");
 }
@@ -357,13 +439,15 @@ async function routeVoiceControlText(rawText) {
     const pending = pendingConfirm;
     if (YES_RE.test(text)) {
       pendingConfirm = null;
-      vcLog("action", `confirmed — ${pending.question}`);
+      vcLog("action", `confirmed — ${pending.question}`, true);
+      void speak(spokenAckForLabel(pending.question) || "confirmed");
       await pending.run();
       return;
     }
     if (NO_RE.test(text)) {
       pendingConfirm = null;
-      vcLog("action", `dropped — ${pending.question}`);
+      vcLog("action", `dropped — ${pending.question}`, true);
+      void speak("cancelled");
       return;
     }
     pendingConfirm = null;
@@ -376,10 +460,15 @@ async function routeVoiceControlText(rawText) {
       const label = command.label(match);
       if (command.confirm) {
         pendingConfirm = { question: label, run: () => command.run(match) };
-        vcLog("ask", `should I ${label}? (yes/no)`);
+        const question = `should I ${label}? (yes/no)`;
+        vcLog("ask", question, true);
+        void speak(question);
         return;
       }
-      vcLog("action", label);
+      const ack = spokenAckForLabel(label);
+      vcLog("action", label, !!ack);
+      if (ack && label === "voice control off") await speak(ack);
+      else if (ack) void speak(ack);
       await command.run(match);
       return;
     }
@@ -397,7 +486,8 @@ async function routeRoomRef(ref) {
   try {
     const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/rooms/resolve?ref=${encodeURIComponent(ref)}`);
     if (!response.ok) {
-      vcLog("error", `unknown chat code ${ref.toUpperCase()}`);
+      vcLog("error", `unknown chat code ${ref.toUpperCase()}`, true);
+      void speak("unknown chat code");
       setError("unknown chat code");
       return;
     }
@@ -405,13 +495,15 @@ async function routeRoomRef(ref) {
     const roomId = resolvedRoomId(data);
     const targetWorkspaceId = resolvedWorkspaceId(data) || workspaceId;
     if (!roomId) {
-      vcLog("error", `unknown chat code ${ref.toUpperCase()}`);
+      vcLog("error", `unknown chat code ${ref.toUpperCase()}`, true);
+      void speak("unknown chat code");
       setError("unknown chat code");
       return;
     }
     await selectRoom(targetWorkspaceId, roomId);
   } catch {
-    vcLog("error", `unknown chat code ${ref.toUpperCase()}`);
+    vcLog("error", `unknown chat code ${ref.toUpperCase()}`, true);
+    void speak("unknown chat code");
     setError("unknown chat code");
   }
 }
@@ -427,7 +519,7 @@ function resolvedWorkspaceId(data) {
 }
 
 function updateVoiceControlPhase() {
-  const next = state.voiceControl.enabled ? (activeTranscriptions > 0 ? "processing" : "listening") : "idle";
+  const next = state.voiceControl.enabled ? (activeTranscriptions > 0 || activeSpeechRequests > 0 ? "processing" : "listening") : "idle";
   const changed = state.voiceControl.phase !== next;
   state.voiceControl.phase = next;
   if (changed) markDirty("composer", "panel");
@@ -459,7 +551,7 @@ export function VoiceControlConsole() {
   if (!state.voiceControl.enabled) return null;
   const rows = state.voiceControl.log.slice(-8).map((entry) =>
     h("div", { class: `voice-console-row ${entry.kind}` },
-      h("span", { class: "voice-console-kind", text: entry.kind === "heard" ? "●" : entry.kind === "ask" ? "?" : entry.kind === "error" ? "⚠" : "→" }),
+      h("span", { class: "voice-console-kind", text: entry.spoken ? "🔊" : entry.kind === "heard" ? "●" : entry.kind === "ask" ? "?" : entry.kind === "error" ? "⚠" : "→" }),
       h("span", { class: "voice-console-text", text: entry.text }),
     ),
   );

@@ -1166,6 +1166,28 @@ export class GaiaWebServer {
       return;
     }
 
+    // Voice-control TTS (voice OUTPUT): speaks a short ack/question on the Mac
+    // itself via local macOS say. No audio bytes return to the browser; the
+    // response lands only after speech finishes so the client can pause VAD.
+    if (method === "POST" && match(/^\/api\/voice\/speak$/)) {
+      const body = await parseBody(request);
+      const utterance = stringField(body, "text")?.trim();
+      if (!utterance) return json(response, 400, { error: "No text to speak" });
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      try {
+        await this.daemon.speakVoiceControl(utterance, { signal: controller.signal });
+        return json(response, 200, { ok: true });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : String(error);
+        return json(response, message.startsWith("No text") ? 400 : 502, { error: message });
+      } finally {
+        request.off("aborted", abort);
+      }
+    }
+
     // Composer dictation (voice INPUT): the recorded clip is POSTed as the bare
     // body (content-type = the recorder's MIME), transcribed by the resolved STT
     // engine (voice.json sttEngine; ?engine= / ?language= override), and the

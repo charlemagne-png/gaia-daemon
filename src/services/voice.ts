@@ -51,6 +51,8 @@ export interface VoiceSettings {
   /** Default read-aloud TTS engine for the transcript play button; agents
    * override per-persona via agent.json `tts.engine`. */
   ttsEngine: string;
+  /** Optional macOS `say` voice for voice-control spoken acks/questions. */
+  ttsVoice: string;
   /** Append-only archive of rendered read-aloud clips. Empty uses
    * ~/.gaia/voice-archive/tts, resolved at runtime. */
   ttsArchiveDir: string;
@@ -110,6 +112,7 @@ export const VOICE_SETTINGS_DEFAULTS: VoiceSettings = {
   silenceDelaySec: 7,
   disableThinking: true,
   ttsEngine: "kyutai",
+  ttsVoice: "",
   // Empty = ~/.gaia/voice-archive/tts, resolved at runtime; never persist a
   // stale absolute home path in voice.json.
   ttsArchiveDir: "",
@@ -173,6 +176,7 @@ export async function readVoiceSettings(): Promise<VoiceSettings> {
   if (typeof raw.silenceDelaySec === "number" && raw.silenceDelaySec > 0) settings.silenceDelaySec = raw.silenceDelaySec;
   if (typeof raw.disableThinking === "boolean") settings.disableThinking = raw.disableThinking;
   if (typeof raw.ttsEngine === "string" && raw.ttsEngine.trim()) settings.ttsEngine = raw.ttsEngine.trim();
+  if (typeof raw.ttsVoice === "string") settings.ttsVoice = raw.ttsVoice.trim();
   // Empty explicitly selects the runtime default archive path.
   if (typeof raw.ttsArchiveDir === "string") settings.ttsArchiveDir = raw.ttsArchiveDir.trim();
   if (typeof raw.claudeVoiceUrl === "string" && raw.claudeVoiceUrl.trim()) settings.claudeVoiceUrl = raw.claudeVoiceUrl.trim();
