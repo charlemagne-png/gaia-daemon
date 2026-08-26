@@ -2834,3 +2834,5 @@ body.berserk .main {
   50% { box-shadow: inset 0 0 0 1px #ff2b1f, 0 0 16px rgba(255, 30, 20, 0.8); }
 }
 @media (prefers-reduced-motion: reduce) { .nav-item.room-item.berserk { animation: none; box-shadow: inset 0 0 0 1px #ff2b1f, 0 0 10px rgba(255, 30, 20, 0.55); } }
+.voice-console-header { color: var(--muted); font-size: 10px; letter-spacing: 0.4px; text-transform: lowercase; padding-bottom: 2px; border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent); margin-bottom: 3px; }
+.voice-console-header strong { color: var(--accent); font-weight: 600; }

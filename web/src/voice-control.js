@@ -9,9 +9,14 @@ const SILENCE_MS = 800;
 // ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
 // (proven live 08-26: orb "listening", zero transcribe calls). Speech =
 // level clearly above a tracked noise floor, with a small absolute minimum.
-const MIN_SPEECH_LEVEL = 0.008;
-const NOISE_FLOOR_RATIO = 2.5;
+// Retuned 08-26 against Charles's measured mic: speech PEAKS at 0.0146 RMS,
+// ambient ~0.005 — the previous ratio×2.5 threshold (~0.012) let speech graze
+// it for a frame or two and every segment died at the accept gates. Floor is
+// CAPPED so the threshold can never climb above quiet speech.
+const MIN_SPEECH_LEVEL = 0.005;
+const NOISE_FLOOR_RATIO = 1.7;
 const NOISE_FLOOR_EMA = 0.05;
+const NOISE_FLOOR_MAX = 0.007;
 const MIN_UTTERANCE_MS = 260;
 const MIN_VOICE_FRAMES = 3;
 const MIN_CHUNK_BYTES = 900;
@@ -155,7 +160,7 @@ function tickAnalyser(current) {
   const speaking = level >= threshold;
   if (!speaking) {
     // Only quiet frames feed the floor, so speech never raises its own bar.
-    current.noiseFloor = Math.max(0.001, current.noiseFloor * (1 - NOISE_FLOOR_EMA) + level * NOISE_FLOOR_EMA);
+    current.noiseFloor = Math.min(NOISE_FLOOR_MAX, Math.max(0.001, current.noiseFloor * (1 - NOISE_FLOOR_EMA) + level * NOISE_FLOOR_EMA));
   }
   if (speaking) {
     if (!current.segment && !current.segmentStopping) startSegment(current, now);
@@ -379,8 +384,10 @@ async function routeVoiceControlText(rawText) {
       return;
     }
   }
-  vcLog("action", "→ sent to current chat");
-  await sendMessage(rawText.trim(), []);
+  vcLog("action", "→ @gaia");
+  // Gaia is the agent under the voice chat: plain speech is addressed to her
+  // in the current room; her reply lands in the transcript as usual.
+  await sendMessage(`@gaia ${rawText.trim()}`, []);
 }
 
 /** @param {string} ref */
@@ -457,6 +464,7 @@ export function VoiceControlConsole() {
     ),
   );
   return h("div", { class: "voice-control-console" },
+    h("div", { class: "voice-console-header" }, h("strong", { text: "@gaia" }), h("span", { text: " · voice chat" })),
     rows.length ? rows : [h("div", { class: "voice-console-row empty", text: "say something — I'll show what I hear" })],
   );
 }
