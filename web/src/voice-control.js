@@ -91,9 +91,13 @@ let activeSpeechRequests = 0;
 let speaking = false;
 let speechSeq = 0;
 let readoutHolds = 0;
+/** @typedef {{ kind: "current", workspaceId: string, roomId: string } | { kind: "new" }} VoiceStartTarget */
+
 /** @type {{ workspaceId: string, roomId: string } | null} */
 let voiceSessionTarget = null;
 let voiceSessionStartedAtMs = 0;
+/** @type {Promise<VoiceStartTarget|null>|null} */
+let voiceStartChoicePromise = null;
 /** @type {Set<string>} */
 const spokenVoiceEventKeys = new Set();
 /** @type {Map<string, ReturnType<typeof createVoiceStreamReadoutState>>} */
@@ -129,6 +133,9 @@ export async function startVoiceControl() {
     return;
   }
 
+  const target = await chooseVoiceStartTarget();
+  if (!target || state.voiceControl.enabled) return;
+
   /** @type {MediaStream} */
   let stream;
   try {
@@ -140,12 +147,12 @@ export async function startVoiceControl() {
     return;
   }
 
-  const room = await addRoom({ title: voiceControlRoomTitle() });
-  if (!room) {
+  const room = target.kind === "new" ? await addRoom({ title: voiceControlRoomTitle() }) : null;
+  if (target.kind === "new" && !room) {
     for (const track of stream.getTracks()) track.stop();
     return;
   }
-  voiceSessionTarget = room;
+  voiceSessionTarget = target.kind === "current" ? { workspaceId: target.workspaceId, roomId: target.roomId } : room;
   voiceSessionStartedAtMs = Date.now();
   spokenVoiceEventKeys.clear();
   voiceReadoutStates.clear();
@@ -173,6 +180,66 @@ export async function startVoiceControl() {
   state.voiceControl.pulse = 0;
   updateVoiceControlPhase();
   startAnalyser(current);
+}
+
+/** @returns {Promise<VoiceStartTarget|null>} */
+function chooseVoiceStartTarget() {
+  if (voiceStartChoicePromise) return voiceStartChoicePromise;
+  voiceStartChoicePromise = new Promise((resolve) => {
+    let settled = false;
+    /** @param {VoiceStartTarget|null} value */
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("keydown", onKey, true);
+      backdrop.remove();
+      voiceStartChoicePromise = null;
+      resolve(value);
+    };
+
+    /** @param {KeyboardEvent} event */
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(null);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+
+    const chooseCurrent = () => {
+      const snapshot = state.snapshot;
+      if (!snapshot) return finish(null);
+      finish({ kind: "current", workspaceId: snapshot.workspace.id, roomId: snapshot.room.id });
+    };
+
+    const backdrop = h(
+      "div",
+      {
+        class: "modal-backdrop",
+        onmousedown: (/** @type {MouseEvent} */ event) => {
+          if (event.target === backdrop) finish(null);
+        },
+      },
+      h(
+        "section",
+        { class: "modal prompt-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "voice-start-title", tabindex: "-1" },
+        h("div", { class: "panel-head" },
+          h("h2", { id: "voice-start-title", text: "Start GaiaVoice in…" }),
+          h("button", { class: "prompt-btn", type: "button", "aria-label": "Dismiss", onclick: () => finish(null), text: "✕" }),
+        ),
+        h("p", { class: "prompt-detail", text: "Choose where GaiaVoice should send and read messages." }),
+        h(
+          "div",
+          { class: "prompt-actions" },
+          h("button", { class: "prompt-btn", type: "button", onclick: chooseCurrent, text: "This chat" }),
+          h("button", { class: "prompt-btn", type: "button", onclick: () => finish({ kind: "new" }), text: "New chat" }),
+        ),
+      ),
+    );
+    document.body.append(backdrop);
+    /** @type {HTMLElement|null} */ (backdrop.querySelector(".prompt-modal"))?.focus();
+  });
+  return voiceStartChoicePromise;
 }
 
 export function stopVoiceControl() {
