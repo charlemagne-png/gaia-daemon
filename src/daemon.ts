@@ -710,6 +710,14 @@ export class Daemon {
     return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
   }
 
+  async createRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean }): Promise<{ rooms: Snapshot["rooms"] }> {
+    const record = await this.registry.find(workspaceId);
+    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
+    await ensureWorkspaceRoom(record.path, roomId, opts);
+    await this.serviceFor(workspaceId, roomId);
+    return this.refreshRoomList(workspaceId);
+  }
+
   private roomIdsOnDisk(workspaceRoot: string): string[] {
     const dir = workspacePaths.roomsDir(workspaceRoot);
     if (!existsSync(dir)) return [];
@@ -1498,7 +1506,7 @@ export class Daemon {
   /** Speak a short voice-control prompt/ack on the local Mac speaker. */
   async speakVoiceControl(text: string, opts: { signal?: AbortSignal } = {}): Promise<void> {
     const settings = await readVoiceSettings();
-    await speakApple(text, settings.ttsVoice, opts.signal, settings.ttsRate || undefined);
+    await speakApple(text, settings.ttsVoice, opts.signal, settings.ttsRate || 260);
   }
 
   cancelVoiceControlSpeech(): void {

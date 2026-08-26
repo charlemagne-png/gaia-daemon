@@ -820,6 +820,14 @@ export class GaiaWebServer {
       return this.respond(response, () => this.daemon.selectRoom(params![0], roomId.trim(), { incognito, ...(voiceSession ? { voiceSession } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
     }
 
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/create$/))) {
+      const createBody = await parseBody(request);
+      const incognito = boolField(createBody, "incognito");
+      const voiceSession = boolField(createBody, "voiceSession");
+      const parentRoomId = stringField(createBody, "parentRoomId")?.trim();
+      return this.respond(response, () => this.daemon.createRoom(params![0], params![1], { incognito, ...(voiceSession ? { voiceSession } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
+    }
+
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/(?:select|activate)$/))) {
       // The body is optional; when a room is being CREATED via select, it may
       // carry `incognito: true` and/or `parentRoomId` (user-opened subroom) —

@@ -28,12 +28,12 @@ test("chunkVoiceReplyText chunks 1400 chars into <=449 pieces with truncation no
   expect(chunks.slice(0, -1).join(" ").length).toBeLessThanOrEqual(1210);
 });
 
-test("GaiaVoice toggle-on seam enters dispatcher session without start dialog", () => {
+test("GaiaVoice toggle-on seam enters hidden dispatcher session without start dialog", () => {
   expect(voiceSource).toContain("const target = await resolveVoiceStartTarget();");
   expect(voiceSource.indexOf("const target = await resolveVoiceStartTarget();")).toBeLessThan(voiceSource.indexOf("navigator.mediaDevices.getUserMedia"));
   expect(voiceSource).toContain('state.snapshot.room.voiceDispatcherAvailable !== false');
   expect(voiceSource).toContain('return Promise.resolve({ kind: "dispatcher" });');
-  expect(voiceSource).toContain('await addRoom({ title: voiceControlRoomTitle(), voiceSession: target.kind === "dispatcher" })');
+  expect(voiceSource).toContain('await createRoom({ title: voiceControlRoomTitle(), voiceSession: true })');
   expect(voiceSource).toContain('voiceSessionUsesDispatcher = target.kind === "dispatcher";');
   expect(voiceSource).toContain('const outbound = voiceSessionUsesDispatcher ? rawText.trim() : `@gaia ${rawText.trim()}`;');
 });
@@ -52,26 +52,27 @@ test("GaiaVoice missing-dispatcher fallback keeps the in-app start dialog before
 
 test("GaiaVoice fallback start choice: this chat targets current room and creates no room", () => {
   expect(voiceSource).toContain('finish({ kind: "current", workspaceId: snapshot.workspace.id, roomId: snapshot.room.id })');
-  expect(voiceSource).toContain('const room = target.kind === "current" ? null : await addRoom({ title: voiceControlRoomTitle(), voiceSession: target.kind === "dispatcher" });');
+  expect(voiceSource).toContain('const room = target.kind === "current" ? null : await createRoom({ title: voiceControlRoomTitle(), voiceSession: true });');
   expect(voiceSource).toContain('voiceSessionTarget = target.kind === "current" ? { workspaceId: target.workspaceId, roomId: target.roomId } : room;');
+  expect(voiceSource).toContain('voiceSessionFollowsCurrent = target.kind === "current";');
 });
 
-test("GaiaVoice fallback start choice: new chat preserves fresh titled room flow", () => {
+test("GaiaVoice fallback start choice: new chat creates a hidden titled session", () => {
   expect(voiceControlRoomTitle(new Date(2026, 7, 26, 8, 50))).toBe("gaiavoice — 08/26 08:50");
   expect(voiceSource).toContain('onclick: () => finish({ kind: "new" }), text: "New chat"');
-  expect(voiceSource).toContain('await addRoom({ title: voiceControlRoomTitle(), voiceSession: target.kind === "dispatcher" })');
-  expect(actionsSource).toContain("await selectRoom(snapshot.workspace.id, roomId, { incognito, ...(opts.voiceSession ? { voiceSession: true } : {}) })");
-  expect(actionsSource).toContain("/rooms/${encodeURIComponent(roomId)}/title");
-  expect(actionsSource).toContain('body: JSON.stringify({ title, source: "auto" })');
-  expect(actionsSource).toContain("state.snapshot.room).title = title");
-  expect(actionsSource).toContain('window.dispatchEvent(new CustomEvent("gaia:snapshot"');
-  expect(voiceSource).toContain("if (state.voiceControl.enabled) voiceSessionTarget = { workspaceId, roomId }");
+  expect(voiceSource).toContain('await createRoom({ title: voiceControlRoomTitle(), voiceSession: true })');
+  expect(actionsSource).toContain('/rooms/${encodeURIComponent(roomId)}/create');
+  expect(actionsSource).toContain('...(opts.voiceSession ? { voiceSession: true } : {})');
+  expect(actionsSource).toContain("applyRoomsPayload(snapshot.workspace.id, created.rooms)");
+  expect(actionsSource).toContain("applyRoomsPayload(snapshot.workspace.id, titled.rooms)");
+  expect(actionsSource).toContain('Create a room without selecting/opening it');
+  expect(voiceSource).toContain("if (state.voiceControl.enabled && voiceSessionFollowsCurrent) voiceSessionTarget = { workspaceId, roomId }");
 });
 
 test("GaiaVoice fallback start dismiss keeps session off with no room or mic", () => {
   expect(voiceSource).toContain("const target = await resolveVoiceStartTarget();\n  if (!target || state.voiceControl.enabled) return;");
   expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("navigator.mediaDevices.getUserMedia"));
-  expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("await addRoom({ title: voiceControlRoomTitle()"));
+  expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("await createRoom({ title: voiceControlRoomTitle()"));
   expect(voiceSource).toContain("state.voiceControl.enabled = true;");
   expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("state.voiceControl.enabled = true;"));
 });
@@ -121,6 +122,8 @@ test("streaming readout seams consume text deltas and finalize on room-event", (
   expect(voiceSource).toContain("finalizeVoiceReadoutStream(readout)");
   expect(voiceSource).toContain("vcAppendReply(key, payload.agentId, payload.delta)");
   expect(voiceSource).toContain("vcSetReply(key, payload.event.author, payload.event.text)");
+  expect(voiceSource).toContain("if (state.voiceControl.enabled && voiceSessionFollowsCurrent) voiceSessionTarget");
+  expect(voiceSource).toContain("sendVoiceSessionMessage(outbound)");
   expect(voiceSource).toContain("spokenVoiceEventKeys.add(key)");
 });
 

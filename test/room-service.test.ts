@@ -1675,6 +1675,12 @@ test("steer-by-default: a plain message to the busy agent injects; @other and qu
   assert.equal(steered.status, "complete", "steer settles while the turn still runs");
   assert.deepEqual(steerCalls, ["also check the logs"]);
 
+  // Voice-control follow-up to the same busy agent steers too — never waits in
+  // the hidden GaiaVoice session queue.
+  const voiceSteered = await service.sendMessage("voice follow-up", { voice: true });
+  assert.equal(voiceSteered.status, "complete", "voice follow-up steers while the turn still runs");
+  assert.deepEqual(steerCalls, ["also check the logs", "voice follow-up"]);
+
   // An explicit @other isn't for the running agent → durable queue.
   const toOther = await service.sendMessage("@terry take a look");
   assert.equal(toOther.status, "queued");
@@ -1698,6 +1704,10 @@ test("steer-by-default: a plain message to the busy agent injects; @other and qu
   assert.ok(
     transcript.some((event) => event.text === "also check the logs" && event.author === "user"),
     "steered message recorded for history",
+  );
+  assert.ok(
+    transcript.some((event) => event.text === "voice follow-up" && event.author === "user" && event.voice === true),
+    "voice steered message recorded for history",
   );
 });
 

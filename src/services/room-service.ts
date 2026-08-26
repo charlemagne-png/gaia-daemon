@@ -832,7 +832,6 @@ export class RoomService {
       command.type === "message" &&
       !options.nativeCommand &&
       !options.queue &&
-      !options.voice &&
       this.activeAgentTurn &&
       this.activeAgentTurn.targets.length === 1
     ) {
@@ -840,7 +839,7 @@ export class RoomService {
       const runtime = this.runtimes[runner];
       const aimedAtRunner = targets.length > 0 && targets.every((id) => id === runner);
       if (aimedAtRunner && runtime?.capabilities.supportsSteer) {
-        const steered = await this.steerRunningTurn(runner, text, task, options.attachments);
+        const steered = await this.steerRunningTurn(runner, text, task, options.attachments, options.voice === true);
         if (steered === true) return task;
         // The turn just ended under us: the guidance is ALREADY committed to
         // the transcript (persist-first). Fall through to the queue with the
@@ -2286,8 +2285,8 @@ export class RoomService {
    * renders the message inline right there, live and after commit), and the
    * steer task completes — the running turn's continued output IS the reply,
    * so there's no turn of its own. */
-  private async steerRunningTurn(target: string, text: string, task: Task, attachments?: MessageAttachment[]): Promise<true | string> {
-    const event = await this.room.addUserMessage(text, [target], undefined, attachments);
+  private async steerRunningTurn(target: string, text: string, task: Task, attachments?: MessageAttachment[], voice?: boolean): Promise<true | string> {
+    const event = await this.room.addUserMessage(text, [target], undefined, attachments, undefined, voice === true);
     this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
     // Attachments travel two ways, uniformly: the same breadcrumb lines the turn
     // prompt uses ride in the text (the file sits on disk at that path, openable
@@ -4370,6 +4369,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
           (info) => info.mtimeMs,
           () => 0,
         );
+        const voiceSession = state.voiceSession || /^gaiavoice\b/i.test(state.title ?? "");
         return {
           activity,
           summary: {
@@ -4385,7 +4385,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),
             ...(state.incognito ? { incognito: true } : {}),
-            ...(state.voiceSession ? { voiceSession: true } : {}),
+            ...(voiceSession ? { voiceSession: true } : {}),
             ...(state.berserk ? { berserk: true } : {}),
             ...(activity ? { lastActivity: activity } : {}),
           } as Snapshot["rooms"][number],
