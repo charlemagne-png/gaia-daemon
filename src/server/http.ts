@@ -1236,11 +1236,19 @@ export class GaiaWebServer {
       const mime = url.searchParams.get("mime")?.trim() || "audio/webm";
       const engineId = url.searchParams.get("engine")?.trim() || undefined;
       const language = url.searchParams.get("language")?.trim() || undefined;
+      // live=1: a rolling mid-recording pass (live dictation). The clip is
+      // still being appended to by /chunk uploads, so it must NOT be archived
+      // — renaming it away makes the next chunk recreate a headerless .bin
+      // that can never be decoded again (bit live: first pass worked, every
+      // later one silently failed). Only the FINAL pass archives.
+      const live = url.searchParams.get("live") === "1";
       try {
         const result = await this.daemon.transcribe({ data, contentType: mime }, { engineId, language });
-        const finalExt = mime.includes("mp4") ? "m4a" : mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : "bin";
-        await mkdir(globalPaths.voiceClipsDir(), { recursive: true });
-        await rename(clipPath, join(globalPaths.voiceClipsDir(), `final-${Date.now()}.${finalExt}`));
+        if (!live) {
+          const finalExt = mime.includes("mp4") ? "m4a" : mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : "bin";
+          await mkdir(globalPaths.voiceClipsDir(), { recursive: true });
+          await rename(clipPath, join(globalPaths.voiceClipsDir(), `final-${Date.now()}.${finalExt}`));
+        }
         return json(response, 200, { text: result.text, engine: result.engine });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

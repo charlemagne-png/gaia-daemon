@@ -207,7 +207,7 @@ async function liveLoop(current) {
     await current.uploadChain.catch(() => {});
     if (session !== current) return;
     const mime = current.recorder.mimeType || current.chunks[0]?.type || "";
-    const result = await postClipTranscribe(current.clipId, mime || undefined, fetchTimeout(LIVE_PASS_TIMEOUT_MS));
+    const result = await postClipTranscribe(current.clipId, mime || undefined, fetchTimeout(LIVE_PASS_TIMEOUT_MS), true);
     if (session !== current) return;
     const text = result.ok ? result.text.trim() : "";
     if (text) {
@@ -397,8 +397,13 @@ async function runTranscribe(blob, clipId, clipFileComplete, render) {
  * @param {AbortSignal} [signal]
  * @returns {Promise<{ok: boolean, text: string, engine: string, error: string, status: number}>}
  */
-async function postClipTranscribe(clipId, mimeType, signal) {
-  const query = mimeType ? `?mime=${encodeURIComponent(mimeType)}` : "";
+async function postClipTranscribe(clipId, mimeType, signal, live = false) {
+  const params = new URLSearchParams();
+  if (mimeType) params.set("mime", mimeType);
+  // live passes must not archive the clip — the recording is still appending
+  // to it (see the daemon route: archive-on-success would orphan the stream).
+  if (live) params.set("live", "1");
+  const query = params.size ? `?${params}` : "";
   try {
     const response = await fetch(`/api/voice/clip/${clipId}/transcribe${query}`, { method: "POST", signal });
     const data = await response.json().catch(() => ({}));
