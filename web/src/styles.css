@@ -1479,6 +1479,31 @@ body.resizing { cursor: col-resize; user-select: none; }
 
 .role-global-button:hover { color: var(--fg); }
 
+.agent-config-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 7px 25px;
+}
+.agent-config-row .model-select,
+.agent-config-row .account-select,
+.agent-config-row .role-select {
+  position: static;
+  right: auto;
+  bottom: auto;
+  min-width: 0;
+  padding: 2px 4px;
+  font-size: 0.82em;
+  color: var(--muted);
+  background: var(--ink);
+  border: 1px solid var(--border);
+}
+.agent-config-row .model-select { flex: 1 1 110px; width: 110px; }
+.agent-config-row .account-select { flex: 0 0 76px; width: 76px; }
+.agent-config-row .role-select { flex: 0 0 62px; width: 62px; }
+.agent-config-row .role-global-button { position: static; right: auto; bottom: auto; flex: 0 0 auto; }
+.model-select.active { color: var(--warn); border-color: var(--warn); text-shadow: 0 0 6px color-mix(in srgb, var(--warn) 40%, transparent); }
+
 .call-button, .main-button { border: none; border-left: 1px solid var(--border); background: transparent; box-shadow: none; }
 .call-button { padding: 0 10px; }
 .call-button.active { color: var(--danger); text-shadow: 0 0 8px var(--danger); }

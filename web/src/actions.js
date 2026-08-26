@@ -229,36 +229,40 @@ export async function setAgentDefaultRole(agentId, role) {
   }
 }
 
-/** Set (or clear) the named account an agent's harness subprocess runs under.
- * Global (not per-room/workspace), so unlike setAgentRole this has no snapshot
- * in its response — the daemon's own applySettingsChange("global") reload
- * broadcasts a fresh snapshot over the already-open SSE stream, same as any
- * other global settings edit.
- * @param {string} agentId @param {string | null} account */
-export async function setAgentAccount(agentId, account) {
-  // Optimistic UI update: immediately update local state before API call completes
-  const agent = state.snapshot?.agents.find((a) => a.id === agentId);
+/** Set an agent's global model/account patch. Response is intentionally
+ * small; the daemon broadcasts the reloaded snapshot over SSE.
+ * @param {string} agentId
+ * @param {{ model?: string | null, account?: string | null }} patch */
+export async function setAgentConfig(agentId, patch) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  const agent = snapshot.agents.find((a) => a.id === agentId);
+  const previous = agent ? { account: agent.account, configuredModel: agent.configuredModel } : undefined;
   if (agent) {
-    agent.account = account || undefined;
+    if ("account" in patch) agent.account = patch.account || undefined;
+    if ("model" in patch) agent.configuredModel = patch.model || "default";
     markDirty("panel");
   }
-  
   try {
-    await api(`/api/agents/${encodeURIComponent(agentId)}/account`, {
-      method: "POST",
-      body: JSON.stringify({ account: account || null }),
+    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/agents/${encodeURIComponent(agentId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
     });
     state.error = "";
-    // SSE snapshot will arrive and re-sync state
   } catch (error) {
-    // Revert optimistic update on error
-    if (agent) {
-      const snapshot = await api("/api/snapshot");
-      state.snapshot = snapshot;
+    if (agent && previous) {
+      agent.account = previous.account;
+      agent.configuredModel = previous.configuredModel;
       markDirty();
     }
     setError(error);
   }
+}
+
+/** Set (or clear) the named account an agent's harness subprocess runs under.
+ * @param {string} agentId @param {string | null} account */
+export async function setAgentAccount(agentId, account) {
+  await setAgentConfig(agentId, { account });
 }
 
 /** Reversible agent delete: moves agent dir to trash (recoverable).
@@ -285,7 +289,7 @@ export async function deleteAgent(agentId) {
 }
 
 /** @typedef {{ id: string, harness: string, label?: string, email?: string, workspace?: string, providers?: string[] }} AccountRecordSummary */
-/** @typedef {{ id: string, label?: string, login: boolean }} AccountHarnessSummary */
+/** @typedef {{ id: string, label?: string, login: boolean, lockedProvider?: string, modelProviderIds?: string[], modelNameOptions?: string[] }} AccountHarnessSummary */
 /** @typedef {{ accounts: AccountRecordSummary[], harnesses: AccountHarnessSummary[] }} AccountsCatalog */
 
 /** Cached GET /api/accounts — every caller (Settings' Accounts tab, the

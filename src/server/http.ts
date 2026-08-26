@@ -16,13 +16,13 @@ import { bundledDir, globalPaths, workspacePaths } from "../core/paths.js";
 import { newId } from "../core/ids.js";
 import { ATTACHMENT_MAX_BYTES, attachmentMime } from "../core/attachments.js";
 import { bearerToken, json, parseBody, readRawBody, text } from "../core/http.js";
-import { readJson, writeJsonAtomic } from "../core/store.js";
-import type { UiEvent } from "../core/types.js";
+import { normalizeAgentAccountInput, normalizeAgentModelInput, patchAgentDefConfig, readAgentDefConfig } from "../core/agent-def.js";
+import type { AgentModelConfig, UiEvent } from "../core/types.js";
 import type { MemoryAction } from "../domain/memory.js";
 import { scaffoldGlobalAgent } from "../domain/agents.js";
 import { installGitGuard } from "../domain/git-guard.js";
 import { findAccount, redactedAccounts, removeAccount, updateAccount } from "../domain/accounts.js";
-import { harnessSpecs } from "../harness/spec.js";
+import { findHarness, harnessIdFor, harnessSpecs } from "../harness/spec.js";
 import { agentRoster } from "../harness/tools.js";
 import { globalAgentsPath } from "../domain/workspace.js";
 import { Daemon } from "../daemon.js";
@@ -87,6 +87,29 @@ function stringField(body: unknown, field: string): string | undefined {
 function boolField(body: unknown, field: string): boolean {
   if (!body || typeof body !== "object") return false;
   return (body as Record<string, unknown>)[field] === true;
+}
+
+function hasBodyField(body: unknown, field: string): boolean {
+  return Boolean(body && typeof body === "object" && field in (body as Record<string, unknown>));
+}
+
+function modelLabel(config: AgentModelConfig | undefined): string | undefined {
+  return config?.provider && config.name ? `${config.provider}/${config.name}` : undefined;
+}
+
+function assertModelAllowedByHarness(model: AgentModelConfig, harnessId: string): void {
+  const ui = findHarness(harnessId)?.ui;
+  if (!ui) throw new Error(`Unsupported harness '${harnessId}'`);
+  const providers = ui.modelProviderIds ?? (ui.lockedProvider ? [ui.lockedProvider] : undefined);
+  if (providers && model.provider && !providers.includes(model.provider)) {
+    throw new Error(`model provider '${model.provider}' is not supported by harness '${harnessId}'`);
+  }
+}
+
+function accountProviderIds(account: NonNullable<ReturnType<typeof findAccount>>, harnessId: string): string[] {
+  if (account.providers?.length) return account.providers;
+  const ui = findHarness(harnessId)?.ui;
+  return ui?.modelProviderIds ?? (ui?.lockedProvider ? [ui.lockedProvider] : []);
 }
 
 /** An array-of-strings field, present (even empty) vs. absent distinguished —
@@ -622,7 +645,15 @@ export class GaiaWebServer {
         accounts: redactedAccounts(),
         harnesses: harnessSpecs()
           .filter((s) => s.accounts)
-          .map((s) => ({ id: s.id, label: s.accounts?.label, login: Boolean(s.accounts?.login), loginVariants: s.accounts?.login?.variants })),
+          .map((s) => ({
+            id: s.id,
+            label: s.accounts?.label,
+            login: Boolean(s.accounts?.login),
+            loginVariants: s.accounts?.login?.variants,
+            ...(s.ui.lockedProvider ? { lockedProvider: s.ui.lockedProvider } : {}),
+            ...(s.ui.modelProviderIds ? { modelProviderIds: s.ui.modelProviderIds } : {}),
+            ...(s.ui.modelNameOptions ? { modelNameOptions: s.ui.modelNameOptions } : {}),
+          })),
       }));
     }
 
@@ -689,30 +720,65 @@ export class GaiaWebServer {
       });
     }
 
-    // Per-agent account binding: which named account (if any) an agent's
-    // harness subprocess runs under. Harness-blind — compares harness id
-    // STRINGS pulled from agent.json/accounts.json data, never a literal id.
+    // Agent model/account patch: global agent.json edit, scoped by workspace
+    // only to resolve the effective harness and validate the requested account
+    // + model provider before writing. Takes effect on the next turn via the
+    // ordinary settings hot-reload; no restart.
+    if (method === "PATCH" && (params = match(/^\/api\/workspaces\/([^/]+)\/agents\/([^/]+)$/))) {
+      const [workspaceId, agentId] = params;
+      const body = await parseBody(request);
+      if (!hasBodyField(body, "model") && !hasBodyField(body, "account")) return json(response, 400, { error: "Missing model or account" });
+      const configPath = join(globalAgentsPath(), agentId, "agent.json");
+      if (!existsSync(configPath)) return json(response, 404, { error: `unknown agent '${agentId}'` });
+      try {
+        const service = await this.daemon.serviceFor(workspaceId);
+        const agent = service.workspace.agents[agentId];
+        if (!agent) return json(response, 404, { error: `unknown agent '${agentId}' in workspace '${workspaceId}'` });
+        const model = normalizeAgentModelInput((body as Record<string, unknown>).model);
+        const account = normalizeAgentAccountInput((body as Record<string, unknown>).account);
+        const config = await readAgentDefConfig(configPath);
+        const currentModel = agent.model ?? DEFAULTS.model;
+        const nextModel = model === undefined ? currentModel : model === null ? DEFAULTS.model : model;
+        const currentAccount = typeof config.account === "string" && config.account.trim() ? config.account.trim() : agent.account;
+        const nextAccount = account === undefined ? currentAccount : account === null ? undefined : account;
+        const harnessId = harnessIdFor(agent, service.workspace);
+        assertModelAllowedByHarness(nextModel, harnessId);
+        if (nextAccount) {
+          const record = findAccount(nextAccount);
+          if (!record) return json(response, 400, { error: `unknown account '${nextAccount}'` });
+          if (record.harness !== harnessId) return json(response, 400, { error: `account '${nextAccount}' is for harness '${record.harness}', agent uses '${harnessId}'` });
+          const providers = accountProviderIds(record, harnessId);
+          if (providers.length > 0 && nextModel.provider && !providers.includes(nextModel.provider)) {
+            return json(response, 400, { error: `account '${nextAccount}' grants ${providers.join(", ")}; model uses '${nextModel.provider}'` });
+          }
+        }
+        await patchAgentDefConfig(configPath, { ...(model !== undefined ? { model } : {}), ...(account !== undefined ? { account } : {}) });
+        await this.daemon.applySettingsChange("global");
+        json(response, 200, { agent: { id: agentId, model: modelLabel(model === null ? undefined : nextModel), account: nextAccount ?? null } });
+      } catch (error) {
+        json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    // Per-agent account binding: legacy alias for clients that only change the
+    // account. Kept behind the same validation/write helper as the workspace
+    // PATCH route above.
     if (method === "POST" && (params = match(/^\/api\/agents\/([^/]+)\/account$/))) {
       const agentId = params[0];
       const configPath = join(globalAgentsPath(), agentId, "agent.json");
       if (!existsSync(configPath)) return json(response, 404, { error: `unknown agent '${agentId}'` });
       const body = await parseBody(request);
-      const rawAccount = (body as { account?: unknown } | undefined)?.account;
-      const account = typeof rawAccount === "string" && rawAccount.trim() ? rawAccount.trim() : null;
       try {
-        const config = ((await readJson(configPath)) ?? {}) as Record<string, unknown>;
+        const account = normalizeAgentAccountInput((body as Record<string, unknown>).account) ?? null;
+        const config = await readAgentDefConfig(configPath);
         if (account) {
           const record = findAccount(account);
           if (!record) return json(response, 400, { error: `unknown account '${account}'` });
           const agentHarness = typeof config.harness === "string" && config.harness.trim() ? config.harness : DEFAULTS.harness;
-          if (record.harness !== agentHarness) {
-            return json(response, 400, { error: `account '${account}' is for harness '${record.harness}', agent uses '${agentHarness}'` });
-          }
-          config.account = account;
-        } else {
-          delete config.account;
+          if (record.harness !== agentHarness) return json(response, 400, { error: `account '${account}' is for harness '${record.harness}', agent uses '${agentHarness}'` });
         }
-        await writeJsonAtomic(configPath, config);
+        await patchAgentDefConfig(configPath, { account });
         await this.daemon.applySettingsChange("global");
         json(response, 200, { agent: { id: agentId, account } });
       } catch (error) {
