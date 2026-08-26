@@ -56,7 +56,7 @@ const TRANSCRIBE_TIMEOUT_MS = 180_000;
 const HERMES_SPLAT_URL = "/img/hermes-splat-samples.json";
 
 /** @typedef {{kind:"sphere", x:number, y:number, z:number, seed:number, size:number, audio:number, warm:boolean}} SphereOrbPoint */
-/** @typedef {{kind:"hermes", nx:number, ny:number, r:number, g:number, b:number, aspect:number, seed:number, size:number, audio:number}} HermesOrbPoint */
+/** @typedef {{kind:"hermes", nx:number, ny:number, r:number, g:number, b:number, aspect:number, seed:number, depth:number, size:number, audio:number}} HermesOrbPoint */
 /** @typedef {SphereOrbPoint|HermesOrbPoint} VoiceOrbPoint */
 
 /**
@@ -1068,6 +1068,8 @@ function hermesPointFrom(row, index, aspect) {
   const [nx, ny, r, g, b] = row;
   if (![nx, ny, r, g, b].every((value) => typeof value === "number" && Number.isFinite(value))) return null;
   const seed = seededUnit(index + 1);
+  // Pseudo-depth from luminance: bright pigment reads as near, shadow recedes.
+  const depth = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 - 0.5;
   return {
     kind: "hermes",
     nx: clamp01(nx),
@@ -1077,6 +1079,7 @@ function hermesPointFrom(row, index, aspect) {
     b: Math.max(0, Math.min(255, Math.round(b))),
     aspect,
     seed,
+    depth,
     size: seededUnit(index + 101),
     audio: 0.35 + seededUnit(index + 211) * 0.9,
   };
@@ -1093,11 +1096,15 @@ function drawHermesPoint(ctx, p, w, hgt, t, level, pulse) {
   const tx = left + p.nx * targetW;
   const ty = top + p.ny * targetH;
   const breath = 1 + Math.sin(t * 1.35) * 0.012 + level * p.audio * 0.052 + pulse * p.audio * 0.034;
-  const drift = 0.8 + level * 2.6 + pulse * 1.5;
-  const x = cx + (tx - cx) * breath + Math.sin(t * 1.9 + p.seed * 12.7) * drift;
-  const y = cy + (ty - cy) * breath + Math.cos(t * 1.6 + p.seed * 10.1) * drift;
-  const alpha = Math.max(0.26, Math.min(0.92, 0.48 + level * 0.26 + pulse * 0.20 + Math.sin(p.seed * 8.3) * 0.08));
-  const size = 0.48 + p.size * 1.16 + level * 1.05 + pulse * 0.75;
+  const drift = 0.55 + level * 2.2 + pulse * 1.3;
+  const depth = p.depth ?? 0;
+  // Slight 3D: bright (near) points sway with a slow virtual camera, dark points counter-sway.
+  const sway = Math.sin(t * 0.55) * depth * targetW * 0.055;
+  const lift = Math.cos(t * 0.42) * depth * targetH * 0.02;
+  const x = cx + (tx - cx) * breath + sway + Math.sin(t * 1.9 + p.seed * 12.7) * drift;
+  const y = cy + (ty - cy) * breath + lift + Math.cos(t * 1.6 + p.seed * 10.1) * drift;
+  const alpha = Math.max(0.24, Math.min(0.95, 0.52 + depth * 0.22 + level * 0.24 + pulse * 0.18 + Math.sin(p.seed * 8.3) * 0.06));
+  const size = (0.30 + p.size * 0.55 + level * 0.55 + pulse * 0.4) * (1 + depth * 0.55);
   ctx.beginPath();
   ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${alpha})`;
   ctx.arc(x, y, size, 0, Math.PI * 2);
