@@ -10,7 +10,7 @@ import { openAgentSettings } from "./settings.js";
 import { state } from "./state.js";
 import { jumpToEvent } from "./transcript.js";
 import { toggleCall } from "./voice.js";
-import { VoiceControlOrb } from "./voice-control.js";
+import { VoiceControlConsole, VoiceControlOrb } from "./voice-control.js";
 
 /** Account catalog for the per-agent picker below: fetched once (accountsCatalog()
  * caches the request itself), held here as the last resolved value so a render
@@ -70,6 +70,7 @@ function renderPanel() {
   const bookmarks = currentRoom?.bookmarks ?? [];
   const roomId = snapshot?.room.id ?? "";
   const voiceControlOrb = VoiceControlOrb();
+  const voiceControlConsole = VoiceControlConsole();
   
   // Group agents by workspace
   const agentsByWorkspace = new Map();
@@ -83,6 +84,7 @@ function renderPanel() {
   const agentMenu = AgentContextMenu();
   panel.replaceChildren(
     ...(voiceControlOrb ? [voiceControlOrb] : []),
+    ...(voiceControlConsole ? [voiceControlConsole] : []),
     h(
       "div",
       { class: "panel-head" },

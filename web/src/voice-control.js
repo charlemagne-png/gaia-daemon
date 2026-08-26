@@ -99,6 +99,8 @@ export async function startVoiceControl() {
   });
   session = current;
   state.voiceControl.enabled = true;
+  state.voiceControl.log = [];
+  pendingConfirm = null;
   state.voiceControl.level = 0;
   state.voiceControl.pulse = 0;
   updateVoiceControlPhase();
@@ -300,34 +302,84 @@ async function postTranscribe(blob) {
   }
 }
 
-// -- Native command table -------------------------------------------------
+// -- Voice console log ------------------------------------------------------
+// Every utterance renders beneath the orb: what was HEARD, what was DONE, and
+// text QUESTIONS the mode asks back (answered by voice). This is the
+// correction surface — misheard text is visible before it does damage.
+
+const VC_LOG_CAP = 24;
+
+/** @param {"heard"|"action"|"ask"|"error"} kind @param {string} text */
+function vcLog(kind, text) {
+  state.voiceControl.log.push({ kind, text, ts: Date.now() });
+  if (state.voiceControl.log.length > VC_LOG_CAP) state.voiceControl.log.splice(0, state.voiceControl.log.length - VC_LOG_CAP);
+  markDirty("panel");
+}
+
+/** @type {{ question: string, run: () => void | Promise<void> } | null} */
+let pendingConfirm = null;
+
+// -- Native command table ---------------------------------------------------
 // Intermediary commands EXECUTE in the client directly — they never become a
 // chat message. Matching is punctuation/case tolerant (Apple dictation adds
-// trailing periods + capitalization). Everything unmatched goes to the room.
+// trailing periods + capitalization). Commands with `confirm` ask a text
+// question in the console first and wait for a spoken yes/no. Everything
+// unmatched goes to the room.
 
-/** @type {{ pattern: RegExp, run: (match: RegExpExecArray) => void | Promise<void> }[]} */
+/** @type {{ pattern: RegExp, label: (m: RegExpExecArray) => string, confirm?: boolean, run: (match: RegExpExecArray) => void | Promise<void> }[]} */
 const NATIVE_COMMANDS = [
-  { pattern: /^(voice control off|stop listening)$/i, run: () => stopVoiceControl() },
-  { pattern: /^open ([a-z])\s?(\d{2,3})$/i, run: (m) => routeRoomRef(`${m[1]}${m[2]}`) },
-  { pattern: /^(new|create) (chat|room)$/i, run: () => addRoom() },
-  { pattern: /^(stop|cancel)( turn| that| the turn)?$/i, run: () => cancelActiveTask() },
+  { pattern: /^(voice control off|stop listening)$/i, label: () => "voice control off", run: () => stopVoiceControl() },
+  { pattern: /^open ([a-z])\s?(\d{2,3})$/i, label: (m) => `open ${m[1].toUpperCase()}${m[2]}`, run: (m) => routeRoomRef(`${m[1]}${m[2]}`) },
+  { pattern: /^(new|create) (chat|room)$/i, label: () => "OPEN a new chat", confirm: true, run: () => addRoom() },
+  { pattern: /^(stop|cancel)( turn| that| the turn)?$/i, label: () => "CANCEL the running turn", confirm: true, run: () => cancelActiveTask() },
   {
     pattern: /^close (this )?(chat|room|tab)$/i,
+    label: () => "CLOSE this chat",
+    confirm: true,
     run: () => { const id = state.snapshot?.room?.id; if (id) return closeRoomTab(id); },
   },
 ];
+
+const YES_RE = /^(yes|yeah|yep|do it|confirm|go ahead|sure)$/i;
+const NO_RE = /^(no|nope|cancel|never mind|nevermind|stop)$/i;
 
 /** @param {string} rawText */
 async function routeVoiceControlText(rawText) {
   const text = rawText.trim().replace(/[.,!?\u3002]+$/, "").trim();
   if (!text) return;
+  vcLog("heard", text);
+  if (pendingConfirm) {
+    const pending = pendingConfirm;
+    if (YES_RE.test(text)) {
+      pendingConfirm = null;
+      vcLog("action", `confirmed — ${pending.question}`);
+      await pending.run();
+      return;
+    }
+    if (NO_RE.test(text)) {
+      pendingConfirm = null;
+      vcLog("action", `dropped — ${pending.question}`);
+      return;
+    }
+    pendingConfirm = null;
+    vcLog("action", `question dropped (no yes/no) — ${pending.question}`);
+    // fall through: treat this utterance normally
+  }
   for (const command of NATIVE_COMMANDS) {
     const match = command.pattern.exec(text);
     if (match) {
+      const label = command.label(match);
+      if (command.confirm) {
+        pendingConfirm = { question: label, run: () => command.run(match) };
+        vcLog("ask", `should I ${label}? (yes/no)`);
+        return;
+      }
+      vcLog("action", label);
       await command.run(match);
       return;
     }
   }
+  vcLog("action", "→ sent to current chat");
   await sendMessage(rawText.trim(), []);
 }
 
@@ -338,6 +390,7 @@ async function routeRoomRef(ref) {
   try {
     const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/rooms/resolve?ref=${encodeURIComponent(ref)}`);
     if (!response.ok) {
+      vcLog("error", `unknown chat code ${ref.toUpperCase()}`);
       setError("unknown chat code");
       return;
     }
@@ -345,11 +398,13 @@ async function routeRoomRef(ref) {
     const roomId = resolvedRoomId(data);
     const targetWorkspaceId = resolvedWorkspaceId(data) || workspaceId;
     if (!roomId) {
+      vcLog("error", `unknown chat code ${ref.toUpperCase()}`);
       setError("unknown chat code");
       return;
     }
     await selectRoom(targetWorkspaceId, roomId);
   } catch {
+    vcLog("error", `unknown chat code ${ref.toUpperCase()}`);
     setError("unknown chat code");
   }
 }
@@ -390,6 +445,20 @@ export function VoiceControlOrb() {
   );
   queueMicrotask(() => startOrb(canvas));
   return node;
+}
+
+/** Text console under the orb: heard/done/asked rows, newest last. */
+export function VoiceControlConsole() {
+  if (!state.voiceControl.enabled) return null;
+  const rows = state.voiceControl.log.slice(-8).map((entry) =>
+    h("div", { class: `voice-console-row ${entry.kind}` },
+      h("span", { class: "voice-console-kind", text: entry.kind === "heard" ? "●" : entry.kind === "ask" ? "?" : entry.kind === "error" ? "⚠" : "→" }),
+      h("span", { class: "voice-console-text", text: entry.text }),
+    ),
+  );
+  return h("div", { class: "voice-control-console" },
+    rows.length ? rows : [h("div", { class: "voice-console-row empty", text: "say something — I'll show what I hear" })],
+  );
 }
 
 /** @param {HTMLCanvasElement} canvas */

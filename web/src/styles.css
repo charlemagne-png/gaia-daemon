@@ -1147,6 +1147,28 @@ body.resizing { cursor: col-resize; user-select: none; }
   text-shadow: 0 1px 3px var(--bg);
 }
 .voice-control-orb-label strong { color: var(--fg); font-weight: 600; }
+.voice-control-console {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 86%, transparent);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.voice-console-row { display: flex; gap: 7px; align-items: baseline; color: var(--muted); }
+.voice-console-row.heard { color: var(--fg); }
+.voice-console-row.ask { color: var(--warn); font-weight: 600; }
+.voice-console-row.error { color: var(--danger, #ff5c57); }
+.voice-console-row.empty { color: var(--muted); font-style: italic; }
+.voice-console-kind { flex: none; width: 12px; text-align: center; opacity: 0.8; }
+.voice-console-text { min-width: 0; overflow-wrap: anywhere; }
 .voice-control-orb-label span { color: var(--accent); }
 .voice-control-orb.processing .voice-control-orb-label span { color: var(--warn); }
 
