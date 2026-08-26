@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import { GaiaWebServer } from "../src/server/http.js";
 import { cancelSpeechQueue, setSaySpawnForTest } from "../src/services/tts-apple.js";
 import { createTempDir } from "./helpers/temp.js";
@@ -48,6 +49,7 @@ test("POST /api/voice/speak/cancel kills active say child and drains queued spee
   const temp = await createTempDir();
   const previousHome = process.env.GAIA_HOME;
   process.env.GAIA_HOME = join(temp.path, "home");
+  await mkdir(process.env.GAIA_HOME, { recursive: true });
   const children: FakeSayChild[] = [];
   const restore = setSaySpawnForTest((() => {
     const child = new FakeSayChild();
