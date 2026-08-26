@@ -21,6 +21,8 @@ const RELEASE_RATIO = 1.35;   // exit speech: back near ambient (hysteresis)
 const SPEAK_MARGIN = 0.006;   // absolute margin in SCALED units, floors the ratios on dead-quiet rooms
 const NOISE_FLOOR_EMA = 0.04;
 const MAX_UTTERANCE_MS = 10_000; // hard cap — a segment can never run away again
+const AMBIENT_BLOCK_FRAMES = 90;   // ~1.5s window for the ambient self-heal
+const AMBIENT_RAISE_RATIO = 1.4;   // window min this far above floor = floor was calibrated too low
 const MIN_UTTERANCE_MS = 260;
 const MIN_VOICE_FRAMES = 3;
 const MIN_CHUNK_BYTES = 900;
@@ -49,6 +51,8 @@ const TRANSCRIBE_TIMEOUT_MS = 180_000;
  * @property {boolean} stopping
  * @property {number} noiseFloor
  * @property {number} calibrationFrames
+ * @property {number} blockMin
+ * @property {number} blockFrames
  */
 
 /** @type {VoiceControlSession|null} */
@@ -114,6 +118,8 @@ export async function startVoiceControl() {
     stopping: false,
     noiseFloor: 0,
     calibrationFrames: 0,
+    blockMin: Infinity,
+    blockFrames: 0,
   });
   session = current;
   state.voiceControl.enabled = true;
@@ -176,6 +182,20 @@ function tickAnalyser(current) {
   state.voiceControl.level = level;
 
   const now = Date.now();
+  // Ambient self-heal: the true floor is the minimum level of any recent
+  // window — even mid-segment. If the mic's auto-gain ramped AFTER initial
+  // calibration, the floor sits below real ambient, the gate never releases,
+  // and every utterance rides to the 10s cap (huge latency + silence clips).
+  // Adopting the window min repairs that within ~1.5s.
+  current.blockFrames += 1;
+  current.blockMin = Math.min(current.blockMin, level);
+  if (current.blockFrames >= AMBIENT_BLOCK_FRAMES) {
+    if (current.calibrationFrames >= CALIBRATION_FRAMES && current.blockMin > current.noiseFloor * AMBIENT_RAISE_RATIO) {
+      current.noiseFloor = current.blockMin;
+    }
+    current.blockFrames = 0;
+    current.blockMin = Infinity;
+  }
   // Calibration: the first frames define this room's ambient floor. No
   // segments may start until the floor is real.
   if (current.calibrationFrames < CALIBRATION_FRAMES) {
@@ -327,22 +347,40 @@ async function postTranscribe(blob) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      vcLog("error", String(data.error ?? `voice control transcription failed: ${response.status}`), true);
-      void speak("transcription failed");
-      setError(new Error(String(data.error ?? `voice control transcription failed: ${response.status}`)));
+      const message = String(data.error ?? `voice control transcription failed: ${response.status}`);
+      if (/no speech detected/i.test(message)) {
+        // A silence-only segment is normal gate noise, not a failure worth a
+        // spoken announcement — console row only.
+        vcLog("heard", "(silence — nothing transcribed)");
+        return "";
+      }
+      vcLog("error", message, true);
+      maybeSpeakFailure();
+      setError(new Error(message));
       return "";
     }
     return String(data.text ?? "").trim();
   } catch (error) {
     if (!isAbortError(error)) {
       vcLog("error", "transcription failed", true);
-      void speak("transcription failed");
+      maybeSpeakFailure();
       setError(error);
     }
     return "";
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+let lastFailureSpokenAt = 0;
+
+/** Speak "transcription failed" at most once per 30s — a stuck gate can emit
+ * failures back-to-back and the voice must not nag. */
+function maybeSpeakFailure() {
+  const now = Date.now();
+  if (now - lastFailureSpokenAt < 30_000) return;
+  lastFailureSpokenAt = now;
+  void speak("transcription failed");
 }
 
 /** @param {unknown} error */
