@@ -159,7 +159,7 @@ export const state = {
   // composer. Never gates send or the mic — see dictation.js's
   // refreshRecoveredClips.
   dictationDrafts: [],
-  // Continuous voice control (this-tab-only): mic stays open, VAD slices
+  // GaiaVoice (this-tab-only): mic stays open, VAD slices
   // utterances, each transcript becomes either a room-ref command or a normal
   // message send. The right-panel orb reads level/pulse directly; renders are
   // only dirtied for enabled/phase transitions.

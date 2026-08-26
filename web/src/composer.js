@@ -1159,11 +1159,12 @@ function VoiceButtons() {
       type: "button",
       class: `voice-button voice-control${voiceControlOn ? " on" : ""} ${voiceControlPhase}`,
       title: voiceControlOn
-        ? `voice control: ${voiceControlPhase} — click to stop listening`
-        : "voice control mode — continuous listening",
+        ? `GaiaVoice: ${voiceControlPhase} — click to stop listening`
+        : "GaiaVoice — continuous listening",
+      "aria-label": voiceControlOn ? `GaiaVoice: ${voiceControlPhase}` : "GaiaVoice",
       onclick: () => void toggleVoiceControl(),
     }, [
-      h("img", { class: "voice-control-icon", src: "img/voice-control.png", alt: `voice control: ${voiceControlPhase}` }),
+      h("img", { class: "voice-control-icon", src: "img/voice-control.png", alt: `GaiaVoice: ${voiceControlPhase}` }),
     ]),
   ];
 }

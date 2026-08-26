@@ -1,4 +1,4 @@
-// @ts-nocheck — pure helpers + source seam assertions for browser voice-control.
+// @ts-nocheck — pure helpers + source seam assertions for browser GaiaVoice.
 import { expect, test } from "bun:test";
 import {
   appendVoiceReadoutDelta,
@@ -28,8 +28,8 @@ test("chunkVoiceReplyText chunks 1400 chars into <=449 pieces with truncation no
   expect(chunks.slice(0, -1).join(" ").length).toBeLessThanOrEqual(1210);
 });
 
-test("voice-control toggle-on seam creates/selects a fresh titled room", () => {
-  expect(voiceControlRoomTitle(new Date(2026, 7, 26, 8, 50))).toBe("voice control — 08/26 08:50");
+test("GaiaVoice toggle-on seam creates/selects a fresh titled room", () => {
+  expect(voiceControlRoomTitle(new Date(2026, 7, 26, 8, 50))).toBe("gaiavoice — 08/26 08:50");
   expect(voiceSource).toContain("await addRoom({ title: voiceControlRoomTitle() })");
   expect(voiceSource).toContain("voiceSessionTarget = room");
   expect(actionsSource).toContain("await selectRoom(snapshot.workspace.id, roomId, { incognito })");
@@ -38,6 +38,8 @@ test("voice-control toggle-on seam creates/selects a fresh titled room", () => {
   expect(actionsSource).toContain("state.snapshot.room).title = title");
   expect(actionsSource).toContain('window.dispatchEvent(new CustomEvent("gaia:snapshot"');
   expect(voiceSource).toContain("if (state.voiceControl.enabled) voiceSessionTarget = { workspaceId, roomId }");
+  expect(voiceSource).toContain("gaiavoice (off|stop)|voice control off|stop listening");
+  expect(voiceSource).toContain('label: () => "GaiaVoice off"');
 });
 
 test("summon-return/session-room agent completions speak; session-off, other-room, old, and duplicate completions do not", () => {

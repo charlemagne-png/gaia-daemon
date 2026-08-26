@@ -1,4 +1,4 @@
-// Continuous voice control: one mic stream, VAD-sliced utterance clips, local
+// GaiaVoice: one mic stream, VAD-sliced utterance clips, local
 // transcription endpoint, then room-command routing or normal message send.
 import { addRoom, cancelActiveTask, closeRoomTab, selectRoom, sendMessage } from "./actions.js";
 import { h } from "./dom.js";
@@ -117,7 +117,7 @@ export async function toggleVoiceControl() {
 export async function startVoiceControl() {
   if (state.voiceControl.enabled) return;
   if (state.voice) {
-    setError(new Error(`You're on a call with @${state.voice.agentId}. Hang up before voice control mode.`));
+    setError(new Error(`You're on a call with @${state.voice.agentId}. Hang up before GaiaVoice.`));
     return;
   }
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -213,7 +213,7 @@ function startAnalyser(current) {
   } catch {
     // Recording still works in browsers that allow MediaRecorder but not the
     // analyser. Without VAD there is no safe utterance boundary, so stop loudly.
-    setError(new Error("voice control needs microphone level analysis"));
+    setError(new Error("GaiaVoice needs microphone level analysis"));
     stopVoiceControl();
   }
 }
@@ -398,7 +398,7 @@ async function postTranscribe(blob) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const message = String(data.error ?? `voice control transcription failed: ${response.status}`);
+      const message = String(data.error ?? `GaiaVoice transcription failed: ${response.status}`);
       if (/no speech detected/i.test(message)) {
         // A silence-only segment is normal gate noise, not a failure worth a
         // spoken announcement — console row only.
@@ -597,7 +597,7 @@ function spokenAckForLabel(label) {
   const open = /^open ([a-z]\d{2,3})$/i.exec(label);
   if (open) return `opening ${open[1].toUpperCase()}`;
   const normalized = label.toLowerCase();
-  if (normalized === "voice control off") return "stopped";
+  if (normalized === "gaiavoice off") return "stopped";
   if (normalized.includes("new chat")) return "new chat";
   if (normalized.includes("cancel")) return "stopped";
   if (normalized.includes("close")) return "closed";
@@ -630,7 +630,7 @@ let pendingConfirm = null;
 
 /** @type {{ pattern: RegExp, label: (m: RegExpExecArray) => string, confirm?: boolean, run: (match: RegExpExecArray) => void | Promise<void> }[]} */
 const NATIVE_COMMANDS = [
-  { pattern: /^(voice control off|stop listening)$/i, label: () => "voice control off", run: () => stopVoiceControl() },
+  { pattern: /^(gaiavoice (off|stop)|voice control off|stop listening)$/i, label: () => "GaiaVoice off", run: () => stopVoiceControl() },
   { pattern: /^open ([a-z])\s?(\d{2,3})$/i, label: (m) => `open ${m[1].toUpperCase()}${m[2]}`, run: (m) => routeRoomRef(`${m[1]}${m[2]}`) },
   { pattern: /^(new|create) (chat|room)$/i, label: () => "OPEN a new chat", confirm: true, run: async () => { await addRoom(); } },
   { pattern: /^(stop|cancel)( turn| that| the turn)?$/i, label: () => "CANCEL the running turn", confirm: true, run: () => cancelActiveTask() },
@@ -694,7 +694,7 @@ async function routeVoiceControlText(rawText) {
       }
       const ack = spokenAckForLabel(label);
       vcLog("action", label, !!ack);
-      if (ack && label === "voice control off") await speak(ack);
+      if (ack && label === "GaiaVoice off") await speak(ack);
       else if (ack) void speak(ack);
       await command.run(match);
       return;
@@ -767,9 +767,9 @@ export function VoiceControlOrb() {
   const canvas = /** @type {HTMLCanvasElement} */ (h("canvas", { class: "voice-control-orb-canvas", width: "320", height: "168" }));
   const node = h(
     "div",
-    { class: `voice-control-orb ${phase}`, title: "voice control mode — audio reactive" },
+    { class: `voice-control-orb ${phase}`, title: "GaiaVoice — audio reactive" },
     canvas,
-    h("div", { class: "voice-control-orb-label" }, h("strong", { text: "voice control" }), h("span", { text: phase })),
+    h("div", { class: "voice-control-orb-label" }, h("strong", { text: "GaiaVoice" }), h("span", { text: phase })),
   );
   queueMicrotask(() => startOrb(canvas));
   return node;
@@ -785,7 +785,7 @@ export function VoiceControlConsole() {
     ),
   );
   return h("div", { class: "voice-control-console" },
-    h("div", { class: "voice-console-header" }, h("strong", { text: "@gaia" }), h("span", { text: " · voice chat" })),
+    h("div", { class: "voice-console-header" }, h("strong", { text: "GaiaVoice" }), h("span", { text: " · @gaia" })),
     rows.length ? rows : [h("div", { class: "voice-console-row empty", text: "say something — I'll show what I hear" })],
   );
 }
