@@ -688,7 +688,7 @@ export class Daemon {
     return record;
   }
 
-  async selectRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string }): Promise<SelectionPayload> {
+  async selectRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean }): Promise<SelectionPayload> {
     const record = await this.registry.find(workspaceId);
     if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
 

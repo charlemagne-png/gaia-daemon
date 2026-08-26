@@ -545,6 +545,7 @@ export function normalizeRoomState(value: unknown): RoomState {
       return bookmarks ? { bookmarks } : {};
     })(),
     ...(typeof value.imported === "string" && value.imported.trim() ? { imported: value.imported } : {}),
+    ...(value.voiceSession === true ? { voiceSession: true } : {}),
     ...(monad ? { monad } : {}),
     ...(pendingTurn ? { pendingTurn } : {}),
     ...(queue ? { queue } : {}),

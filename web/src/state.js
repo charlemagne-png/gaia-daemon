@@ -54,7 +54,7 @@ import { isNative, isNativeWindowFocused } from "./native.js";
  *   dictationBars: number[],
  *   dictationError: string,
  *   dictationDrafts: {id: string, bytes: number, mtimeMs: number}[],
- *   voiceControl: {enabled: boolean, phase: "idle"|"listening"|"processing", level: number, pulse: number, log: {kind: "heard"|"action"|"ask"|"error", text: string, ts: number, spoken?: boolean}[]},
+ *   voiceControl: {enabled: boolean, phase: "idle"|"listening"|"processing", level: number, pulse: number, log: {kind: "heard"|"action"|"ask"|"error"|"reply", text: string, ts: number, spoken?: boolean, key?: string, author?: string}[]},
  *   readAloud: {eventId: string, phase: "loading"|"playing"|"paused"|"ended", workspaceId: string, roomId: string}|null,
  *   dario: {open: boolean, loading: boolean, proposal: SanitizeProposal|null, error: string, selected: Set<string>, knownAt: string|null, lastAutoEventId: string},
  *   contextGate: {resolving: boolean, error: string, lastN: number},

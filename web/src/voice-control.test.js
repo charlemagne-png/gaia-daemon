@@ -41,15 +41,15 @@ test("GaiaVoice toggle-on seam opens an in-app start dialog before mic access", 
 
 test("GaiaVoice start choice: this chat targets current room and creates no room", () => {
   expect(voiceSource).toContain('finish({ kind: "current", workspaceId: snapshot.workspace.id, roomId: snapshot.room.id })');
-  expect(voiceSource).toContain('const room = target.kind === "new" ? await addRoom({ title: voiceControlRoomTitle() }) : null;');
+  expect(voiceSource).toContain('const room = target.kind === "new" ? await addRoom({ title: voiceControlRoomTitle(), voiceSession: true }) : null;');
   expect(voiceSource).toContain('voiceSessionTarget = target.kind === "current" ? { workspaceId: target.workspaceId, roomId: target.roomId } : room;');
 });
 
 test("GaiaVoice start choice: new chat preserves fresh titled room flow", () => {
   expect(voiceControlRoomTitle(new Date(2026, 7, 26, 8, 50))).toBe("gaiavoice — 08/26 08:50");
   expect(voiceSource).toContain('onclick: () => finish({ kind: "new" }), text: "New chat"');
-  expect(voiceSource).toContain('target.kind === "new" ? await addRoom({ title: voiceControlRoomTitle() }) : null');
-  expect(actionsSource).toContain("await selectRoom(snapshot.workspace.id, roomId, { incognito })");
+  expect(voiceSource).toContain('target.kind === "new" ? await addRoom({ title: voiceControlRoomTitle(), voiceSession: true }) : null');
+  expect(actionsSource).toContain("await selectRoom(snapshot.workspace.id, roomId, { incognito, ...(opts.voiceSession ? { voiceSession: true } : {}) })");
   expect(actionsSource).toContain("/rooms/${encodeURIComponent(roomId)}/title");
   expect(actionsSource).toContain('body: JSON.stringify({ title, source: "auto" })');
   expect(actionsSource).toContain("state.snapshot.room).title = title");
@@ -60,7 +60,7 @@ test("GaiaVoice start choice: new chat preserves fresh titled room flow", () => 
 test("GaiaVoice start dismiss keeps session off with no room or mic", () => {
   expect(voiceSource).toContain("const target = await chooseVoiceStartTarget();\n  if (!target || state.voiceControl.enabled) return;");
   expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("navigator.mediaDevices.getUserMedia"));
-  expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("await addRoom({ title: voiceControlRoomTitle() })"));
+  expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("await addRoom({ title: voiceControlRoomTitle(), voiceSession: true })"));
   expect(voiceSource).toContain("state.voiceControl.enabled = true;");
   expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("state.voiceControl.enabled = true;"));
 });
@@ -108,7 +108,23 @@ test("streaming readout seams consume text deltas and finalize on room-event", (
   expect(eventsSource).toContain('dispatchClientEvent("gaia:text-delta"');
   expect(voiceSource).toContain('window.addEventListener("gaia:text-delta"');
   expect(voiceSource).toContain("finalizeVoiceReadoutStream(readout)");
+  expect(voiceSource).toContain("vcAppendReply(key, payload.agentId, payload.delta)");
+  expect(voiceSource).toContain("vcSetReply(key, payload.event.author, payload.event.text)");
   expect(voiceSource).toContain("spokenVoiceEventKeys.add(key)");
+});
+
+test("Hermes embodiment uses the copied splat asset and keeps sphere as fallback only", () => {
+  expect(voiceSource).toContain('const HERMES_SPLAT_URL = "/img/hermes-splat-samples.json";');
+  expect(voiceSource).toContain("data?.hermes");
+  expect(voiceSource).toContain('kind: "hermes"');
+  expect(voiceSource).toContain("drawHermesPoint(ctx, p, w, hgt, t, level, pulse)");
+  expect(voiceSource).toContain("points = orbPoints();");
+});
+
+test("GaiaVoice transcript renders under the splat and autoscrolls newest visible", () => {
+  expect(voiceSource).toContain("GaiaVoice transcript");
+  expect(voiceSource).toContain('entry.kind === "reply"');
+  expect(voiceSource).toContain("node.scrollTop = node.scrollHeight");
 });
 
 test("barge threshold ignores Zoe echo frames and trips on sustained louder voice frames", () => {

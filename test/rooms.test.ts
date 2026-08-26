@@ -96,6 +96,18 @@ test("normalizeRoomState keeps bounded JSON plugin state and drops executable sh
   assert.deepEqual(state.pluginState, { rpg: { gm: "terra", roster: [{ name: "Ada" }] } });
 });
 
+test("voice session flag normalizes and scan surfaces it for presentation filters", async () => {
+  const state = normalizeRoomState({ voiceSession: true });
+  assert.equal(state.voiceSession, true);
+
+  const root = await mkdtemp(join(tmpdir(), "gaia-voice-session-"));
+  await mkdir(join(root, ".gaia", "rooms", "chat-voice"), { recursive: true });
+  await writeFile(join(root, ".gaia", "rooms", "chat-voice", "transcript.jsonl"), "", "utf8");
+  await writeFile(join(root, ".gaia", "rooms", "chat-voice", "state.json"), JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, voiceSession: true }), "utf8");
+  const summaries = await scanRoomActivity(root);
+  assert.equal(summaries.find((room) => room.id === "chat-voice")?.voiceSession, true);
+});
+
 test("normalizeRoomState round-trips thinkingOverrides (mirrors activeRoles)", () => {
   const state = normalizeRoomState({
     activeRoles: {},

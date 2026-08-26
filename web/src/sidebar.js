@@ -126,7 +126,7 @@ const ROOMS_CHUNK = 25;
 
 function RoomTree() {
   /** @type {RoomSummary[]} */
-  const rooms = state.snapshot?.rooms ?? [{ id: "no room", path: "select a workspace", isCurrent: true }];
+  const rooms = (state.snapshot?.rooms ?? [{ id: "no room", path: "select a workspace", isCurrent: true }]).filter((room) => !room.voiceSession);
   const ids = new Set(rooms.map((room) => room.id));
   /** @type {Map<string|null, RoomSummary[]>} */
   const childrenOf = new Map();

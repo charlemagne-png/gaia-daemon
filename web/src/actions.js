@@ -123,9 +123,8 @@ export async function addWorkspace() {
 /**
  * @param {string} workspaceId
  * @param {string} roomId
- * @param {{ incognito?: boolean, parentRoomId?: string }} [opts] `incognito` and
- *   `parentRoomId` (user-opened subroom) only take effect when this call creates
- *   the room (no-ops when selecting one that already exists).
+ * @param {{ incognito?: boolean, parentRoomId?: string, voiceSession?: boolean }} [opts]
+ *   Creation-only room flags. Existing rooms ignore them.
  */
 export async function selectRoom(workspaceId, roomId, opts = {}) {
   try {
@@ -137,6 +136,7 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
       body: JSON.stringify({
         ...(opts.incognito ? { incognito: true } : {}),
         ...(opts.parentRoomId ? { parentRoomId: opts.parentRoomId } : {}),
+        ...(opts.voiceSession ? { voiceSession: true } : {}),
       }),
     });
     applySnapshotPayload(body);
@@ -361,7 +361,7 @@ function newAutoRoomId(prefix) {
  * Create a new room in the current workspace and switch to it — instantly, no
  * name dialog. The room is auto-named (its title is distilled from the first
  * message). ⌥-click / `incognito:true` makes it memory-off instead.
- * @param {{ incognito?: boolean, title?: string }} [opts]
+ * @param {{ incognito?: boolean, title?: string, voiceSession?: boolean }} [opts]
  * @returns {Promise<{ workspaceId: string, roomId: string } | null>}
  */
 export async function addRoom(opts = {}) {
@@ -370,7 +370,7 @@ export async function addRoom(opts = {}) {
   const incognito = opts.incognito === true;
   const roomId = newAutoRoomId(incognito ? "incognito-" : "chat-");
   try {
-    await selectRoom(snapshot.workspace.id, roomId, { incognito });
+    await selectRoom(snapshot.workspace.id, roomId, { incognito, ...(opts.voiceSession ? { voiceSession: true } : {}) });
     const title = String(opts.title ?? "").trim();
     if (title) {
       const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/title`, {

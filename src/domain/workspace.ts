@@ -40,7 +40,7 @@ async function writeIfMissing(path: string, content: string): Promise<void> {
   await writeText(path, content);
 }
 
-export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string }): Promise<void> {
+export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean }): Promise<void> {
   assertRoomId(roomId);
   if (opts?.parentRoomId) assertRoomId(opts.parentRoomId);
   await writeIfMissing(workspacePaths.transcript(cwd, roomId), "");
@@ -54,6 +54,7 @@ export async function ensureWorkspaceRoom(cwd: string, roomId: string, opts?: { 
   const initial = normalizeRoomState({
     ...(opts?.incognito ? { incognito: true } : {}),
     ...(opts?.parentRoomId ? { parentRoomId: opts.parentRoomId, subroom: true } : {}),
+    ...(opts?.voiceSession ? { voiceSession: true } : {}),
   });
   await writeIfMissing(workspacePaths.roomState(cwd, roomId), jsonText(initial));
   await ensureWorkspaceRoomRefCodes(cwd);

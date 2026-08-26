@@ -4378,6 +4378,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),
             ...(state.incognito ? { incognito: true } : {}),
+            ...(state.voiceSession ? { voiceSession: true } : {}),
             ...(state.berserk ? { berserk: true } : {}),
             ...(activity ? { lastActivity: activity } : {}),
           } as Snapshot["rooms"][number],

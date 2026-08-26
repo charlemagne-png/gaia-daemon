@@ -405,6 +405,9 @@ export interface RoomState {
    * ensureWorkspaceRoom only seeds it on a brand-new room. Off/absent = a normal
    * room that participates in memory. */
   incognito?: boolean;
+  /** GaiaVoice-created session room. Presentation flag only: transcript/state
+   * remain durable; clients may omit it from normal room navigation. */
+  voiceSession?: boolean;
 }
 
 /** A NEW agent was addressed in a room whose transcript would exceed the
@@ -1112,6 +1115,8 @@ export interface RoomSummary {
   /** Incognito room (see RoomState.incognito) — the tab/list marks it so an
    * off-the-record room is obvious wherever it's listed, not just when open. */
   incognito?: boolean;
+  /** GaiaVoice session room (see RoomState.voiceSession). */
+  voiceSession?: boolean;
   /** EFFECTIVE /berserk deathmode (own flag or any ancestor's — resolved by
    * scanRoomActivity's parent-chain pass) so every listed room in the tree
    * shows the war paint, not just the root. */

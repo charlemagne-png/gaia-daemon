@@ -815,8 +815,9 @@ export class GaiaWebServer {
       const roomId = stringField(body, "roomId") ?? stringField(body, "id") ?? stringField(body, "room");
       if (!roomId?.trim()) return json(response, 400, { error: "Missing room id" });
       const incognito = boolField(body, "incognito");
+      const voiceSession = boolField(body, "voiceSession");
       const parentRoomId = stringField(body, "parentRoomId")?.trim();
-      return this.respond(response, () => this.daemon.selectRoom(params![0], roomId.trim(), { incognito, ...(parentRoomId ? { parentRoomId } : {}) }));
+      return this.respond(response, () => this.daemon.selectRoom(params![0], roomId.trim(), { incognito, ...(voiceSession ? { voiceSession } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
     }
 
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/(?:select|activate)$/))) {
@@ -825,8 +826,9 @@ export class GaiaWebServer {
       // both no-ops on an already-existing room.
       const selectBody = await parseBody(request);
       const incognito = boolField(selectBody, "incognito");
+      const voiceSession = boolField(selectBody, "voiceSession");
       const parentRoomId = stringField(selectBody, "parentRoomId")?.trim();
-      return this.respond(response, () => this.daemon.selectRoom(params![0], params![1], { incognito, ...(parentRoomId ? { parentRoomId } : {}) }));
+      return this.respond(response, () => this.daemon.selectRoom(params![0], params![1], { incognito, ...(voiceSession ? { voiceSession } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
     }
 
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/default-agent$/))) {
