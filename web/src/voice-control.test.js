@@ -28,27 +28,38 @@ test("chunkVoiceReplyText chunks 1400 chars into <=449 pieces with truncation no
   expect(chunks.slice(0, -1).join(" ").length).toBeLessThanOrEqual(1210);
 });
 
-test("GaiaVoice toggle-on seam opens an in-app start dialog before mic access", () => {
-  expect(voiceSource).toContain("const target = await chooseVoiceStartTarget();");
-  expect(voiceSource.indexOf("const target = await chooseVoiceStartTarget();")).toBeLessThan(voiceSource.indexOf("navigator.mediaDevices.getUserMedia"));
-  expect(voiceSource).toContain('class: "modal-backdrop"');
+test("GaiaVoice toggle-on seam enters dispatcher session without start dialog", () => {
+  expect(voiceSource).toContain("const target = await resolveVoiceStartTarget();");
+  expect(voiceSource.indexOf("const target = await resolveVoiceStartTarget();")).toBeLessThan(voiceSource.indexOf("navigator.mediaDevices.getUserMedia"));
+  expect(voiceSource).toContain('state.snapshot.room.voiceDispatcherAvailable !== false');
+  expect(voiceSource).toContain('return Promise.resolve({ kind: "dispatcher" });');
+  expect(voiceSource).toContain('await addRoom({ title: voiceControlRoomTitle(), voiceSession: target.kind === "dispatcher" })');
+  expect(voiceSource).toContain('voiceSessionUsesDispatcher = target.kind === "dispatcher";');
+  expect(voiceSource).toContain('const outbound = voiceSessionUsesDispatcher ? rawText.trim() : `@gaia ${rawText.trim()}`;');
+});
+
+test("GaiaVoice missing-dispatcher fallback keeps the in-app start dialog before mic access", () => {
+  expect(voiceSource).toContain("return chooseVoiceStartTarget();");
+  expect(voiceSource.indexOf("const target = await resolveVoiceStartTarget();")).toBeLessThan(voiceSource.indexOf("navigator.mediaDevices.getUserMedia"));
+  expect(voiceSource).toContain('class: "modal prompt-modal voice-start-dialog"');
   expect(voiceSource).toContain('role: "dialog", "aria-modal": "true"');
   expect(voiceSource).toContain('text: "Start GaiaVoice in…"');
   expect(voiceSource).toContain('if (event.key === "Escape")');
   expect(voiceSource).not.toContain('if (event.key === "Enter")');
   expect(voiceSource).toContain('onclick: () => finish(null), text: "✕"');
+  expect(voiceSource).toContain('backdrop.querySelector(".voice-start-dialog")');
 });
 
-test("GaiaVoice start choice: this chat targets current room and creates no room", () => {
+test("GaiaVoice fallback start choice: this chat targets current room and creates no room", () => {
   expect(voiceSource).toContain('finish({ kind: "current", workspaceId: snapshot.workspace.id, roomId: snapshot.room.id })');
-  expect(voiceSource).toContain('const room = target.kind === "new" ? await addRoom({ title: voiceControlRoomTitle(), voiceSession: true }) : null;');
+  expect(voiceSource).toContain('const room = target.kind === "current" ? null : await addRoom({ title: voiceControlRoomTitle(), voiceSession: target.kind === "dispatcher" });');
   expect(voiceSource).toContain('voiceSessionTarget = target.kind === "current" ? { workspaceId: target.workspaceId, roomId: target.roomId } : room;');
 });
 
-test("GaiaVoice start choice: new chat preserves fresh titled room flow", () => {
+test("GaiaVoice fallback start choice: new chat preserves fresh titled room flow", () => {
   expect(voiceControlRoomTitle(new Date(2026, 7, 26, 8, 50))).toBe("gaiavoice — 08/26 08:50");
   expect(voiceSource).toContain('onclick: () => finish({ kind: "new" }), text: "New chat"');
-  expect(voiceSource).toContain('target.kind === "new" ? await addRoom({ title: voiceControlRoomTitle(), voiceSession: true }) : null');
+  expect(voiceSource).toContain('await addRoom({ title: voiceControlRoomTitle(), voiceSession: target.kind === "dispatcher" })');
   expect(actionsSource).toContain("await selectRoom(snapshot.workspace.id, roomId, { incognito, ...(opts.voiceSession ? { voiceSession: true } : {}) })");
   expect(actionsSource).toContain("/rooms/${encodeURIComponent(roomId)}/title");
   expect(actionsSource).toContain('body: JSON.stringify({ title, source: "auto" })');
@@ -57,10 +68,10 @@ test("GaiaVoice start choice: new chat preserves fresh titled room flow", () => 
   expect(voiceSource).toContain("if (state.voiceControl.enabled) voiceSessionTarget = { workspaceId, roomId }");
 });
 
-test("GaiaVoice start dismiss keeps session off with no room or mic", () => {
-  expect(voiceSource).toContain("const target = await chooseVoiceStartTarget();\n  if (!target || state.voiceControl.enabled) return;");
+test("GaiaVoice fallback start dismiss keeps session off with no room or mic", () => {
+  expect(voiceSource).toContain("const target = await resolveVoiceStartTarget();\n  if (!target || state.voiceControl.enabled) return;");
   expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("navigator.mediaDevices.getUserMedia"));
-  expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("await addRoom({ title: voiceControlRoomTitle(), voiceSession: true })"));
+  expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("await addRoom({ title: voiceControlRoomTitle()"));
   expect(voiceSource).toContain("state.voiceControl.enabled = true;");
   expect(voiceSource.indexOf("if (!target || state.voiceControl.enabled) return;")).toBeLessThan(voiceSource.indexOf("state.voiceControl.enabled = true;"));
 });

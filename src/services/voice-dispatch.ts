@@ -40,6 +40,11 @@ export function voiceDispatcherAgentId(config: WorkspaceConfig, voiceSettingsAge
   return config.voice?.dispatcherAgentId || voiceSettingsAgentId || DEFAULT_VOICE_DISPATCHER_AGENT_ID;
 }
 
+export function availableVoiceDispatcherAgentId(agents: Record<string, AgentDef>, config: WorkspaceConfig, voiceSettingsAgentId?: string): string | undefined {
+  const dispatcher = voiceDispatcherAgentId(config, voiceSettingsAgentId);
+  return agents[dispatcher] ? dispatcher : undefined;
+}
+
 export function findLeadingVoiceAddress(text: string, agents: Record<string, AgentDef>, config: WorkspaceConfig): VoiceAddressMatch | undefined {
   const textTokens = normalizeTokens(text);
   if (textTokens.length === 0) return undefined;

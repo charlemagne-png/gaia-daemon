@@ -96,11 +96,12 @@ let activeSpeechRequests = 0;
 let speaking = false;
 let speechSeq = 0;
 let readoutHolds = 0;
-/** @typedef {{ kind: "current", workspaceId: string, roomId: string } | { kind: "new" }} VoiceStartTarget */
+/** @typedef {{ kind: "dispatcher" } | { kind: "current", workspaceId: string, roomId: string } | { kind: "new" }} VoiceStartTarget */
 
 /** @type {{ workspaceId: string, roomId: string } | null} */
 let voiceSessionTarget = null;
 let voiceSessionStartedAtMs = 0;
+let voiceSessionUsesDispatcher = false;
 /** @type {Promise<VoiceStartTarget|null>|null} */
 let voiceStartChoicePromise = null;
 /** @type {Set<string>} */
@@ -138,7 +139,7 @@ export async function startVoiceControl() {
     return;
   }
 
-  const target = await chooseVoiceStartTarget();
+  const target = await resolveVoiceStartTarget();
   if (!target || state.voiceControl.enabled) return;
 
   /** @type {MediaStream} */
@@ -152,13 +153,14 @@ export async function startVoiceControl() {
     return;
   }
 
-  const room = target.kind === "new" ? await addRoom({ title: voiceControlRoomTitle(), voiceSession: true }) : null;
-  if (target.kind === "new" && !room) {
+  const room = target.kind === "current" ? null : await addRoom({ title: voiceControlRoomTitle(), voiceSession: target.kind === "dispatcher" });
+  if (target.kind !== "current" && !room) {
     for (const track of stream.getTracks()) track.stop();
     return;
   }
   voiceSessionTarget = target.kind === "current" ? { workspaceId: target.workspaceId, roomId: target.roomId } : room;
   voiceSessionStartedAtMs = Date.now();
+  voiceSessionUsesDispatcher = target.kind === "dispatcher";
   spokenVoiceEventKeys.clear();
   voiceReadoutStates.clear();
   bargeWatch = createBargeWatchState();
@@ -185,6 +187,13 @@ export async function startVoiceControl() {
   state.voiceControl.pulse = 0;
   updateVoiceControlPhase();
   startAnalyser(current);
+}
+
+/** @returns {Promise<VoiceStartTarget|null>} */
+function resolveVoiceStartTarget() {
+  if (!state.snapshot) return Promise.resolve(null);
+  if (state.snapshot.room.voiceDispatcherAvailable !== false) return Promise.resolve({ kind: "dispatcher" });
+  return chooseVoiceStartTarget();
 }
 
 /** @returns {Promise<VoiceStartTarget|null>} */
@@ -227,7 +236,7 @@ function chooseVoiceStartTarget() {
       },
       h(
         "section",
-        { class: "modal prompt-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "voice-start-title", tabindex: "-1" },
+        { class: "modal prompt-modal voice-start-dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "voice-start-title", tabindex: "-1" },
         h("div", { class: "panel-head" },
           h("h2", { id: "voice-start-title", text: "Start GaiaVoice in…" }),
           h("button", { class: "prompt-btn", type: "button", "aria-label": "Dismiss", onclick: () => finish(null), text: "✕" }),
@@ -242,7 +251,7 @@ function chooseVoiceStartTarget() {
       ),
     );
     document.body.append(backdrop);
-    /** @type {HTMLElement|null} */ (backdrop.querySelector(".prompt-modal"))?.focus();
+    /** @type {HTMLElement|null} */ (backdrop.querySelector(".voice-start-dialog"))?.focus();
   });
   return voiceStartChoicePromise;
 }
@@ -255,6 +264,7 @@ export function stopVoiceControl() {
   pendingConfirm = null;
   voiceSessionTarget = null;
   voiceSessionStartedAtMs = 0;
+  voiceSessionUsesDispatcher = false;
   void cancelVoiceSpeechBackend();
   cancelSpeech();
   spokenVoiceEventKeys.clear();
@@ -808,11 +818,13 @@ async function routeVoiceControlText(rawText) {
       return;
     }
   }
-  vcLog("action", "→ @gaia");
-  // Gaia is the agent under the voice chat: plain speech is addressed to her
-  // in the session room; her reply lands in the transcript as usual.
+  vcLog("action", voiceSessionUsesDispatcher ? "→ voice dispatcher" : "→ @gaia");
+  // Dispatcher sessions send plain speech; the server's voice-dispatch seam
+  // resolves Hermes / aliases / stickiness. Missing-dispatcher fallback keeps
+  // the pre-Hermes @gaia-addressed behavior.
   await ensureVoiceSessionRoom();
-  await sendMessage(`@gaia ${rawText.trim()}`, [], { voice: true, onTask: rememberVoiceTask });
+  const outbound = voiceSessionUsesDispatcher ? rawText.trim() : `@gaia ${rawText.trim()}`;
+  await sendMessage(outbound, [], { voice: true, onTask: rememberVoiceTask });
 }
 
 /** @param {string} ref */

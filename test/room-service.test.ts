@@ -346,6 +346,15 @@ test("voice dispatch falls back unchanged when Hermes is missing", async () => {
 
   assert.deepEqual(task.targets, ["gaia"]);
   assert.equal(runtimes.get("gaia")?.sends, 1);
+  assert.equal((await service.getSnapshot()).room.voiceDispatcherAvailable, false);
+});
+
+test("snapshot exposes voice dispatcher availability from the dispatch fallback seam", async () => {
+  const present = await makeService({ agents: ["gaia", "hermes"] });
+  assert.equal((await present.service.getSnapshot()).room.voiceDispatcherAvailable, true);
+
+  const missing = await makeService({ agents: ["gaia", "terry"] });
+  assert.equal((await missing.service.getSnapshot()).room.voiceDispatcherAvailable, false);
 });
 
 test("background-task events persist, surface in snapshots, and cap at 20", async () => {

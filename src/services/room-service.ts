@@ -75,7 +75,7 @@ import { MonadEngine } from "./monad.js";
 import { activateSetup, deactivateMonad, discoverSetups } from "./setups.js";
 import { sdkThinkingLevels } from "./hints.js";
 import { readVoiceSettings } from "./voice.js";
-import { findLeadingVoiceAddress, findVoiceTargetMention, setStickyVoiceTarget, stickyVoiceTarget, voiceDispatcherAgentId } from "./voice-dispatch.js";
+import { availableVoiceDispatcherAgentId, findLeadingVoiceAddress, findVoiceTargetMention, setStickyVoiceTarget, stickyVoiceTarget, voiceDispatcherAgentId } from "./voice-dispatch.js";
 import { createAgentRuntime } from "../harness/host.js";
 import { configuredModelLabel } from "../harness/model-label.js";
 import { resolveSandboxPolicy } from "../harness/sandbox/spec.js";
@@ -1096,6 +1096,11 @@ export class RoomService {
     return voiceDispatcherAgentId(this.workspace.config, settings?.dispatcherAgentId);
   }
 
+  private async availableVoiceDispatcherId(): Promise<string | undefined> {
+    const settings = await readVoiceSettings().catch(() => undefined);
+    return availableVoiceDispatcherAgentId(this.workspace.agents, this.workspace.config, settings?.dispatcherAgentId);
+  }
+
   /** In-front GaiaVoice routing: addressed speech jumps straight to that agent;
    * otherwise Hermes (or configured dispatcher) handles the utterance when the
    * dispatcher exists. Missing dispatcher = unchanged default routing. */
@@ -1105,8 +1110,8 @@ export class RoomService {
     const state = await this.room.state();
     const sticky = stickyVoiceTarget(state, this.workspace.agents);
     if (sticky) return { target: sticky, sticky: false };
-    const dispatcher = await this.voiceDispatcherId();
-    return this.workspace.agents[dispatcher] ? { target: dispatcher, sticky: false } : undefined;
+    const dispatcher = await this.availableVoiceDispatcherId();
+    return dispatcher ? { target: dispatcher, sticky: false } : undefined;
   }
 
   private async rememberVoiceStickyTarget(target: string): Promise<void> {
@@ -3776,6 +3781,7 @@ export class RoomService {
       .map((id) => this.workspace.agents[id])
       .flatMap((agent) => (agent ? [usageAccountFor(agent, this.workspace)] : []))
       .filter((account): account is string => Boolean(account));
+    const voiceDispatcherAvailable = Boolean(await this.availableVoiceDispatcherId());
     return {
       workspace: {
         id: this.workspaceId,
@@ -3799,6 +3805,7 @@ export class RoomService {
         ...(this.incognito ? { incognito: true } : {}),
         ...(this.sanitizeStatus ? { sanitize: this.sanitizeStatus } : {}),
         ...(this.contextGate ? { contextGate: this.contextGate } : {}),
+        voiceDispatcherAvailable,
         ...(this.liveTurn ? { liveTurn: this.liveTurn } : {}),
         ...(() => {
           const ambient = readAmbientWatchdog(this.roomId);

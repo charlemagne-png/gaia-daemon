@@ -1251,6 +1251,9 @@ export interface Snapshot {
     /** Incognito room: no memory capture, no auto-recall, not indexed for recall,
      * memory/recall tools stripped. Immutable; drives the client's indicator. */
     incognito?: boolean;
+    /** GaiaVoice dispatcher is resolvable in this workspace; false preserves the
+     * pre-dispatcher start-target fallback. */
+    voiceDispatcherAvailable?: boolean;
     /** Ambient watchdog (e.g. /ultrawhip) is active — a generic, plugin-driven
      * toggle read fresh every tool call (see room-service.ts's
      * readAmbientWatchdog), global to whichever turn is running, in any room.
