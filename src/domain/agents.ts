@@ -16,9 +16,11 @@ import { MemoryStore } from "./memory.js";
 interface RawAgentConfig {
   id?: string;
   displayName?: string;
+  name?: unknown;
   description?: unknown;
   avatarUrl?: unknown;
   icon?: string;
+  aliases?: unknown;
   workspace?: unknown;
   homeWorkspace?: unknown;
   voice?: unknown;
@@ -379,7 +381,12 @@ export async function loadAgentDefinitions(globalAgentsDir: string, projectAgent
 
     const raw = mergeAgentConfig(await readAgentConfig(configPath), await readAgentConfig(projectConfigPath));
     const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : entry.name;
-    const displayName = typeof raw.displayName === "string" && raw.displayName.trim() ? raw.displayName.trim() : id;
+    const displayName =
+      typeof raw.displayName === "string" && raw.displayName.trim()
+        ? raw.displayName.trim()
+        : typeof raw.name === "string" && raw.name.trim()
+          ? raw.name.trim()
+          : id;
     if (raw.nativeCommands === true) {
       console.warn(
         `[agents] @${id}: "nativeCommands" is deprecated and ignored. Enable a native command by adding its name to "skills" (e.g. "deep-research").`,
@@ -394,6 +401,7 @@ export async function loadAgentDefinitions(globalAgentsDir: string, projectAgent
       description: typeof raw.description === "string" && raw.description.trim() ? raw.description.trim() : undefined,
       avatarUrl: typeof raw.avatarUrl === "string" && raw.avatarUrl.trim() ? raw.avatarUrl.trim() : undefined,
       icon: typeof raw.icon === "string" && raw.icon.trim() ? raw.icon : "•",
+      ...(raw.aliases !== undefined ? { aliases: stringList(raw.aliases, []) } : {}),
       workspace: typeof raw.workspace === "string" && raw.workspace.trim() ? raw.workspace.trim() : undefined,
       homeWorkspace: typeof raw.homeWorkspace === "string" && raw.homeWorkspace.trim() ? raw.homeWorkspace.trim() : undefined,
       voice: typeof raw.voice === "string" && raw.voice.trim() ? raw.voice.trim() : undefined,

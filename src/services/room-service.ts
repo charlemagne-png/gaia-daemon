@@ -74,6 +74,8 @@ import { HOOK_TEXT_CAP, runHooks, type HookEvent } from "./hooks.js";
 import { MonadEngine } from "./monad.js";
 import { activateSetup, deactivateMonad, discoverSetups } from "./setups.js";
 import { sdkThinkingLevels } from "./hints.js";
+import { readVoiceSettings } from "./voice.js";
+import { findLeadingVoiceAddress, findVoiceTargetMention, setStickyVoiceTarget, stickyVoiceTarget, voiceDispatcherAgentId } from "./voice-dispatch.js";
 import { createAgentRuntime } from "../harness/host.js";
 import { configuredModelLabel } from "../harness/model-label.js";
 import { resolveSandboxPolicy } from "../harness/sandbox/spec.js";
@@ -773,13 +775,21 @@ export class RoomService {
         command = { type: "message", text };
       }
     }
+    if (command.type === "message" && options.voice && !options.nativeCommand) {
+      const dispatch = await this.voiceDispatchTarget(text);
+      if (dispatch) {
+        options = { ...options, targets: [dispatch.target] };
+        if (dispatch.sticky) await this.rememberVoiceStickyTarget(dispatch.target);
+      }
+    }
+
     // Validate routing up-front so unknown-agent errors surface immediately,
     // whether the turn runs now or is queued behind a busy one.
     let targets: string[] = [];
     if (command.type === "message") {
       targets = options.nativeCommand
         ? (options.targets ?? [])
-        : (await this.isMonadMessage(text, options))
+        : !options.voice && (await this.isMonadMessage(text, options))
           ? await this.monadAuthor()
           : (options.targets ?? (await this.routeTargets(text)));
       for (const target of targets) {
@@ -1079,6 +1089,35 @@ export class RoomService {
       bindings: await listWorkspacePetBindings(this.workspaceId, this.workspace.rootDir),
     });
     await this.emitSnapshot();
+  }
+
+  private async voiceDispatcherId(): Promise<string> {
+    const settings = await readVoiceSettings().catch(() => undefined);
+    return voiceDispatcherAgentId(this.workspace.config, settings?.dispatcherAgentId);
+  }
+
+  /** In-front GaiaVoice routing: addressed speech jumps straight to that agent;
+   * otherwise Hermes (or configured dispatcher) handles the utterance when the
+   * dispatcher exists. Missing dispatcher = unchanged default routing. */
+  private async voiceDispatchTarget(text: string): Promise<{ target: string; sticky: boolean } | undefined> {
+    const addressed = findLeadingVoiceAddress(text, this.workspace.agents, this.workspace.config);
+    if (addressed) return { target: addressed.targetId, sticky: true };
+    const state = await this.room.state();
+    const sticky = stickyVoiceTarget(state, this.workspace.agents);
+    if (sticky) return { target: sticky, sticky: false };
+    const dispatcher = await this.voiceDispatcherId();
+    return this.workspace.agents[dispatcher] ? { target: dispatcher, sticky: false } : undefined;
+  }
+
+  private async rememberVoiceStickyTarget(target: string): Promise<void> {
+    if (!this.workspace.agents[target]) return;
+    await this.room.updateState((state) => setStickyVoiceTarget(state, target));
+  }
+
+  private async rememberVoiceDispatcherReply(dispatcher: string, reply: string): Promise<void> {
+    if (!/\b(sent|send|forward|forwarded|route|routed|routing|handed|pass|passed|passing)\b/i.test(reply)) return;
+    const target = findVoiceTargetMention(reply, this.workspace.agents, this.workspace.config, dispatcher)?.targetId;
+    if (target) await this.rememberVoiceStickyTarget(target);
   }
 
   /** Remember the agent a turn addressed as this room's active agent (persisted,
@@ -1419,7 +1458,7 @@ export class RoomService {
   private async runAgentTask(task: Task, text: string, options: SendMessageOptions): Promise<void> {
     // A native command is already pinned to the active agent — it never fans out
     // through the monad.
-    if (!options.nativeCommand && (await this.isMonadMessage(text, options))) {
+    if (!options.nativeCommand && !options.voice && (await this.isMonadMessage(text, options))) {
       await this.runMonadTask(task, text, options);
       return;
     }
@@ -1824,6 +1863,7 @@ export class RoomService {
       }
 
       if (producedOutput) await this.captureEpisode(target, text, partialReply, cancelled ? "cancelled" : "complete", turn.details, channel);
+      if (!cancelled && !failed && options.voice && target === await this.voiceDispatcherId()) await this.rememberVoiceDispatcherReply(target, partialReply);
       this.fireHooks("postTurn", {
         agentId: target,
         reply: partialReply.slice(0, HOOK_TEXT_CAP),

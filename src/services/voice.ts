@@ -99,6 +99,8 @@ export interface VoiceSettings {
   sttReplicateModel: string;
   /** Model slug to retry when the primary model is unavailable or rejects input. */
   sttReplicateFallbackModel: string;
+  /** In-front dispatcher agent for continuous voice-control utterances. */
+  dispatcherAgentId: string;
   /** STT service for live calls: bundled kyutai or the Replicate bridge. */
   callSttEngine: string;
 }
@@ -141,6 +143,7 @@ export const VOICE_SETTINGS_DEFAULTS: VoiceSettings = {
   // clip ranged 8s-60s+ on incredibly-fast-whisper vs a steady ~9s here).
   sttReplicateModel: "openai/gpt-4o-mini-transcribe",
   sttReplicateFallbackModel: "openai/whisper",
+  dispatcherAgentId: "hermes",
   callSttEngine: "kyutai",
 };
 
@@ -198,6 +201,7 @@ export async function readVoiceSettings(): Promise<VoiceSettings> {
   if (typeof raw.sttReplicateApiKey === "string" && raw.sttReplicateApiKey.trim()) settings.sttReplicateApiKey = raw.sttReplicateApiKey.trim();
   if (typeof raw.sttReplicateModel === "string" && raw.sttReplicateModel.trim()) settings.sttReplicateModel = raw.sttReplicateModel.trim();
   if (typeof raw.sttReplicateFallbackModel === "string" && raw.sttReplicateFallbackModel.trim()) settings.sttReplicateFallbackModel = raw.sttReplicateFallbackModel.trim();
+  if (typeof raw.dispatcherAgentId === "string" && raw.dispatcherAgentId.trim()) settings.dispatcherAgentId = raw.dispatcherAgentId.trim();
   if (typeof raw.callSttEngine === "string" && raw.callSttEngine.trim()) settings.callSttEngine = raw.callSttEngine.trim();
   // No explicit override → resolve the bundled checkout now, so the path tracks
   // wherever the daemon currently runs from instead of a value frozen at seed time.

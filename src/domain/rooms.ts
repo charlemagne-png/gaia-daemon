@@ -491,6 +491,13 @@ export async function resolveWorkspaceRoomRef(rootDir: string, ref: string): Pro
   return undefined;
 }
 
+function voiceDispatchFrom(value: unknown): RoomState["voiceDispatch"] {
+  if (!isRecord(value)) return undefined;
+  return typeof value.lastTarget === "string" && Boolean(value.lastTarget.trim()) && typeof value.lastTargetAt === "string" && Boolean(value.lastTargetAt.trim())
+    ? { lastTarget: value.lastTarget.trim(), lastTargetAt: value.lastTargetAt.trim() }
+    : undefined;
+}
+
 export function normalizeRoomState(value: unknown): RoomState {
   if (!isRecord(value)) return { activeRoles: {}, agentCursors: {}, thinkingOverrides: {} };
   const runtimeDetails = isRecord(value.runtimeDetails)
@@ -510,6 +517,7 @@ export function normalizeRoomState(value: unknown): RoomState {
   const contextFloors = cursorRecord(value.contextFloors);
   const petBindings = normalizePetBindings(value.petBindings);
   const pluginState = pluginStateFrom(value.pluginState);
+  const voiceDispatch = voiceDispatchFrom(value.voiceDispatch);
   return {
     activeRoles: stringRecord(value.activeRoles),
     ...(typeof value.refCode === "string" && validRoomRefCode(value.refCode) ? { refCode: value.refCode.toUpperCase() } : {}),
@@ -544,6 +552,7 @@ export function normalizeRoomState(value: unknown): RoomState {
       const notes = notesFrom(value.notes);
       return notes ? { notes } : {};
     })(),
+    ...(voiceDispatch ? { voiceDispatch } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     ...(backgroundTasks ? { backgroundTasks } : {}),
     ...(contextGate ? { contextGate } : {}),

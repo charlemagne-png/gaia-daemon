@@ -274,6 +274,13 @@ export interface RoomNote {
   createdAt: string;
 }
 
+export interface VoiceDispatchState {
+  /** Last non-dispatcher agent voice routing settled on. */
+  lastTarget: string;
+  /** ISO timestamp of that routing decision; compared to GAIA_VOICE_STICKY_SECS. */
+  lastTargetAt: string;
+}
+
 export interface RoomState {
   activeRoles: Record<string, string>;
   /** Stable human-speakable workspace-scoped room reference (A01…Z99,
@@ -363,6 +370,8 @@ export interface RoomState {
   queue?: QueuedMessage[];
   /** Sticky notes (/note) — prompt-later ideas shown in the tasks panel. */
   notes?: RoomNote[];
+  /** GaiaVoice dispatcher stickiness: last routed target + timestamp. */
+  voiceDispatch?: VoiceDispatchState;
   /** Latest harness-reported context accounting per agent, keyed by agent id.
    * Persisted so the composer's `ctx` chip survives a restart instead of
    * blanking until the next turn re-reports. Harness-agnostic — every runtime
@@ -606,6 +615,8 @@ export interface AgentDef {
   description?: string;
   avatarUrl?: string;
   icon: string;
+  /** Human-speakable aliases for voice tier-0 routing; pure data from agent.json. */
+  aliases?: string[];
   workspace?: string;
   /** Workspace this agent must run in. Name match (case-insensitive) or id. */
   homeWorkspace?: string;
@@ -701,11 +712,20 @@ export interface AgentDef {
 // ---------------------------------------------------------------------------
 // Workspace (.gaia/config.json + resolved layout)
 
+export interface VoiceDispatchConfig {
+  /** In-front dispatcher for non-addressed voice utterances. Default: hermes. */
+  dispatcherAgentId?: string;
+  /** Spoken alias map, e.g. { "Alice": "artus" }. */
+  agentAliases?: Record<string, string>;
+}
+
 export interface WorkspaceConfig {
   defaultAgent: string;
   room: string;
   transcriptWindow: number;
   memory: MemoryConfig;
+  /** Voice dispatch overrides from .gaia/config.json. */
+  voice?: VoiceDispatchConfig;
   harness?: string;
   maxSummonsPerRoom?: number;
   sandbox?: SandboxConfig;

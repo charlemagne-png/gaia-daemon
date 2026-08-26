@@ -291,6 +291,63 @@ test("voice-origin turns receive a workspace room map; typed turns do not", asyn
   assert.match(inputs[1]?.voiceRoomMap ?? "", /user: @gaia spoken route/);
 });
 
+test("voice tier-0 alias routes straight to the named agent and skips Hermes", async () => {
+  const { service, workspace, root, runtimes } = await makeService({ agents: ["gaia", "artus", "hermes"] });
+  workspace.agents.artus.aliases = ["Alice"];
+
+  const task = await service.sendMessage("Alice make this blue", { origin: "human", voice: true });
+  await service.waitForIdle();
+
+  assert.deepEqual(task.targets, ["artus"]);
+  assert.equal(runtimes.get("artus")?.sends, 1);
+  assert.equal(runtimes.get("hermes")?.sends ?? 0, 0);
+  const room = await RoomHandle.open(root, "default");
+  const state = await room.state();
+  assert.deepEqual(state.voiceDispatch?.lastTarget, "artus");
+  const { events: transcript } = await room.eventsFrom(0);
+  assert.equal(transcript[0]?.author, "user");
+  assert.deepEqual(transcript[0]?.targets, ["artus"]);
+  assert.equal(transcript[0]?.voice, true);
+});
+
+test("voice dispatcher stickiness routes follow-up turns until the window expires", async () => {
+  const previous = process.env.GAIA_VOICE_STICKY_SECS;
+  process.env.GAIA_VOICE_STICKY_SECS = "120";
+  try {
+    const { service, root, runtimes } = await makeService({
+      agents: ["gaia", "dieter", "hermes"],
+      runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: agent.id === "hermes" ? "Sent to Dieter." : `reply from ${agent.id}` }]),
+    });
+
+    await service.sendMessage("can someone polish this?", { origin: "human", voice: true });
+    await service.waitForIdle();
+    assert.equal(runtimes.get("hermes")?.sends, 1);
+    assert.equal((await (await RoomHandle.open(root, "default")).state()).voiceDispatch?.lastTarget, "dieter");
+
+    await service.sendMessage("yes, do it", { origin: "human", voice: true });
+    await service.waitForIdle();
+    assert.equal(runtimes.get("dieter")?.sends, 1);
+
+    process.env.GAIA_VOICE_STICKY_SECS = "0";
+    await service.sendMessage("another pass", { origin: "human", voice: true });
+    await service.waitForIdle();
+    assert.equal(runtimes.get("hermes")?.sends, 2);
+  } finally {
+    if (previous === undefined) delete process.env.GAIA_VOICE_STICKY_SECS;
+    else process.env.GAIA_VOICE_STICKY_SECS = previous;
+  }
+});
+
+test("voice dispatch falls back unchanged when Hermes is missing", async () => {
+  const { service, runtimes } = await makeService({ agents: ["gaia", "terry"] });
+
+  const task = await service.sendMessage("plain spoken hello", { origin: "human", voice: true });
+  await service.waitForIdle();
+
+  assert.deepEqual(task.targets, ["gaia"]);
+  assert.equal(runtimes.get("gaia")?.sends, 1);
+});
+
 test("background-task events persist, surface in snapshots, and cap at 20", async () => {
   const { service, root } = await makeService({
     script: () => [

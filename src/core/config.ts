@@ -1,7 +1,7 @@
 // Every value a fresh install falls back to, in one place, plus the parser
 // for .gaia/config.json. Anything env-overridable is a function.
 
-import type { AgentTtsConfig, CollabConfig, HookCommand, HooksConfig, McpServerConfig, MemoryConfig, MemoryConfigPatch, SandboxConfig, WorkspaceConfig } from "./types.js";
+import type { AgentTtsConfig, CollabConfig, HookCommand, HooksConfig, McpServerConfig, MemoryConfig, MemoryConfigPatch, SandboxConfig, VoiceDispatchConfig, WorkspaceConfig } from "./types.js";
 import { env } from "./env.js";
 
 export const DEFAULTS = {
@@ -118,6 +118,21 @@ export function parseCollabConfig(raw: unknown): CollabConfig | undefined {
   if (!isolation) return undefined;
   const branchPrefix = typeof raw.branchPrefix === "string" && raw.branchPrefix.trim() ? raw.branchPrefix.trim() : COLLAB_BRANCH_PREFIX;
   return { isolation, branchPrefix };
+}
+
+export function parseVoiceDispatchConfig(raw: unknown): VoiceDispatchConfig | undefined {
+  if (!isRecord(raw)) return undefined;
+  const config: VoiceDispatchConfig = {};
+  if (typeof raw.dispatcherAgentId === "string" && raw.dispatcherAgentId.trim()) config.dispatcherAgentId = raw.dispatcherAgentId.trim();
+  if (isRecord(raw.agentAliases)) {
+    const aliases = Object.fromEntries(
+      Object.entries(raw.agentAliases)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[0].trim()) && Boolean(entry[1].trim()))
+        .map(([alias, target]) => [alias.trim(), target.trim()]),
+    );
+    if (Object.keys(aliases).length > 0) config.agentAliases = aliases;
+  }
+  return Object.keys(config).length > 0 ? config : undefined;
 }
 
 /** Parse an agent.json `tts` section: `{ engine, voice }` (both optional) or
@@ -260,6 +275,8 @@ export function parseWorkspaceConfig(raw: unknown, validHarness: (id: string) =>
   if (sandbox) config.sandbox = sandbox;
   const collab = parseCollabConfig(obj.collab);
   if (collab) config.collab = collab;
+  const voice = parseVoiceDispatchConfig(obj.voice);
+  if (voice) config.voice = voice;
   const mcpServers = parseMcpServers(obj.mcpServers);
   if (mcpServers) config.mcpServers = mcpServers;
   const hooks = parseHooksConfig(obj.hooks);

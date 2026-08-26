@@ -28,6 +28,12 @@ test("parseWorkspaceConfig: contextGate threshold parses, junk drops, default is
   assert.equal(parseWorkspaceConfig({}, () => true).contextGate, undefined);
 });
 
+test("parseWorkspaceConfig: voice dispatch config parses and junk drops", () => {
+  const ok = parseWorkspaceConfig({ voice: { dispatcherAgentId: " iris ", agentAliases: { " Alice ": " artus ", bad: 7, empty: "" } } }, () => true);
+  assert.deepEqual(ok.voice, { dispatcherAgentId: "iris", agentAliases: { Alice: "artus" } });
+  assert.equal(parseWorkspaceConfig({ voice: { agentAliases: [] } }, () => true).voice, undefined);
+});
+
 test("claudeContextWindow: haiku is 200k, the rest 1M, explicit pins honored", () => {
   assert.equal(claudeContextWindow("opus"), 1_000_000);
   assert.equal(claudeContextWindow("sonnet"), 1_000_000);
