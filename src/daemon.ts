@@ -1498,7 +1498,7 @@ export class Daemon {
   /** Speak a short voice-control prompt/ack on the local Mac speaker. */
   async speakVoiceControl(text: string, opts: { signal?: AbortSignal } = {}): Promise<void> {
     const settings = await readVoiceSettings();
-    await speakApple(text, settings.ttsVoice, opts.signal);
+    await speakApple(text, settings.ttsVoice, opts.signal, settings.ttsRate || undefined);
   }
 
   cancelVoiceControlSpeech(): void {
