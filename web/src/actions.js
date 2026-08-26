@@ -149,6 +149,29 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
 }
 
 /** @param {string} agentId */
+/** @param {string} agentId */
+export async function setActiveAgent(agentId) {
+  const snapshot = state.snapshot;
+  if (!snapshot || snapshot.room.activeAgent === agentId) return;
+  try {
+    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/active-agent`, {
+      method: "POST",
+      body: JSON.stringify({ agentId }),
+    });
+    if (body.redirect) {
+      await selectRoom(body.redirect.workspaceId, body.redirect.roomId);
+      return;
+    }
+    applySnapshotPayload(body);
+    connectEvents();
+    state.error = "";
+    markDirty();
+  } catch (error) {
+    setError(error);
+  }
+}
+
+/** @param {string} agentId */
 export async function setDefaultAgent(agentId) {
   const snapshot = state.snapshot;
   if (!snapshot || snapshot.workspace.defaultAgent === agentId) return;

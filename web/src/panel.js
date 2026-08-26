@@ -1,6 +1,6 @@
 // The right-hand room panel: agents (role select, main-agent star, voice call
 // button) and recent tasks.
-import { accountsCatalog, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
+import { accountsCatalog, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, setActiveAgent, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
 import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
 import { $, h } from "./dom.js";
 import { LinkedText, PathText } from "./links.js";
@@ -259,6 +259,13 @@ function renderPanel() {
                 })
               : null,
           ),
+          h("button", {
+            class: `main-button ${agent.id === activeAgent ? "active" : ""}`,
+            title: agent.id === activeAgent ? `@${agent.id} is this room's active agent` : `talk to @${agent.id} in this room`,
+            disabled: agent.id === activeAgent,
+            onclick: () => void setActiveAgent(agent.id),
+            text: agent.id === activeAgent ? "●" : "○",
+          }),
           h("button", {
             class: `main-button ${agent.isDefault ? "active" : ""}`,
             title: agent.isDefault

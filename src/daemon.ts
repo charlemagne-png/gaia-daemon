@@ -20,13 +20,13 @@ import { findModelWithAlias } from "./harness/model-aliases.js";
 import { reapOrphans } from "./harness/reaper.js";
 import type { MemoryAction, MemoryMutationResult } from "./domain/memory.js";
 import { MemoryStore } from "./domain/memory.js";
-import { normalizeRoomState, resolveWorkspaceRoomRef, RoomHandle } from "./domain/rooms.js";
+import { deriveRoomTitle, normalizeRoomState, resolveWorkspaceRoomRef, RoomHandle } from "./domain/rooms.js";
 import { listWorkspacePetBindings } from "./domain/pets.js";
 import { DEFAULT_ROOM, ensureWorkspaceRoom, initWorkspace, isValidRoomId, liveMaxSummonsPerRoom, loadWorkspace, setWorkspaceDefaultAgent, setWorkspaceRoom, trashWorkspaceRoom, workspacePath } from "./domain/workspace.js";
 import { setAgentDefaultRole, trashGlobalAgent } from "./domain/agents.js";
 import { listAgentRoles } from "./domain/roles.js";
 import { ensureAccountsFile } from "./domain/accounts.js";
-import { RoomService, scanRoomActivity } from "./services/room-service.js";
+import { RoomService, scanRoomActivity, type HomeWorkspaceRedirectRequest, type HomeWorkspaceRedirectResult } from "./services/room-service.js";
 import { MemoryService } from "./services/memory-service.js";
 import { UsageService } from "./services/usage-service.js";
 import { EmbedSidecar } from "./services/embed-sidecar.js";
@@ -468,6 +468,7 @@ export class Daemon {
       // /berserk's root-room write rides the ROOT room's resident service
       // (single-writer rule) — same serviceFor the summon coordinator uses.
       roomPeer: (roomId) => this.serviceFor(workspaceId, roomId),
+      homeWorkspaceRedirect: (request) => this.redirectHomeWorkspace(request),
       // Same reload the settings-file save route uses: /model + /thinking
       // rewrite agent.json, and only a service rebuild reaches the runner
       // subprocesses (they snapshot the config at spawn).
@@ -491,6 +492,40 @@ export class Daemon {
     this.handedOutAt.set(key, Date.now());
     this.evictIdleServices();
     return service;
+  }
+
+  private async resolveHomeWorkspace(homeWorkspace: string | undefined): Promise<WorkspaceRecord | undefined> {
+    const key = homeWorkspace?.trim();
+    if (!key) return undefined;
+    const records = (await this.registry.list()).filter((record) => record.isInitialized);
+    const lowered = key.toLowerCase();
+    return records.find((record) => record.name.toLowerCase() === lowered) ?? records.find((record) => record.id === key);
+  }
+
+  /** Cross-workspace home pin: RoomService asks; daemon owns registry lookup,
+   * room creation, and target-service forwarding, preserving single writers. */
+  private async redirectHomeWorkspace(request: HomeWorkspaceRedirectRequest): Promise<HomeWorkspaceRedirectResult | undefined> {
+    const home = await this.resolveHomeWorkspace(request.agent.homeWorkspace);
+    if (!home || home.id === request.fromWorkspaceId) return undefined;
+
+    let roomId = (await scanRoomActivity(home.path)).find((room) => room.agent === request.agent.id)?.id;
+    if (!roomId) {
+      roomId = `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      await ensureWorkspaceRoom(home.path, roomId);
+      const room = await RoomHandle.open(home.path, roomId);
+      const title = deriveRoomTitle(request.text ?? "") || `${home.name} conversation`;
+      await room.updateState((state) => {
+        state.activeAgent = request.agent.id;
+        state.title = title;
+        state.titleSource = "auto";
+      });
+    }
+
+    const service = await this.serviceFor(home.id, roomId);
+    if (request.forwardMessage && request.text !== undefined) await service.sendMessage(request.text, { origin: "human" });
+    const snapshot = await service.getSnapshot();
+    this.broadcast({ type: "rooms", workspaceId: home.id, rooms: await service.listRooms() });
+    return { workspaceId: home.id, roomId: service.roomId, workspaceName: home.name, ...(snapshot.room.refCode ? { roomRef: snapshot.room.refCode } : {}) };
   }
 
   private async resolveCurrentRoom(workspaceId: string): Promise<string> {
@@ -827,6 +862,14 @@ export class Daemon {
     const snapshot = await service.getSnapshot();
     this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
     return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), message };
+  }
+
+  async setActiveAgent(workspaceId: string, roomId: string, agentId: string): Promise<SelectionPayload & { redirect?: HomeWorkspaceRedirectResult }> {
+    const service = await this.serviceFor(workspaceId, roomId);
+    const redirect = await service.setActiveAgent(agentId, { origin: "human" });
+    const snapshot = await service.getSnapshot();
+    if (!redirect) this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
+    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), ...(redirect ? { redirect } : {}) };
   }
 
   /** Set an agent's GLOBAL default role (agent.json "role"), applied in every
