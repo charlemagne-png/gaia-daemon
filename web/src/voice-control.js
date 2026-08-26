@@ -9,14 +9,18 @@ const SILENCE_MS = 800;
 // ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
 // (proven live 08-26: orb "listening", zero transcribe calls). Speech =
 // level clearly above a tracked noise floor, with a small absolute minimum.
-// Retuned 08-26 against Charles's measured mic: speech PEAKS at 0.0146 RMS,
-// ambient ~0.005 — the previous ratio×2.5 threshold (~0.012) let speech graze
-// it for a frame or two and every segment died at the accept gates. Floor is
-// CAPPED so the threshold can never climb above quiet speech.
-const MIN_SPEECH_LEVEL = 0.005;
-const NOISE_FLOOR_RATIO = 1.7;
-const NOISE_FLOOR_EMA = 0.05;
-const NOISE_FLOOR_MAX = 0.007;
+// CALIBRATED gate, 08-26 v3. Two prior tunes failed on UNIT confusion:
+// rmsLevel scales raw RMS ×4.8, so thresholds picked from raw-probe numbers
+// sat BELOW scaled ambient (~0.024) — the gate read "speaking" forever, one
+// endless segment, nothing ever transcribed. No absolute numbers anywhere
+// now: the session measures ITS OWN ambient for the first ~0.6s, then speech
+// / silence thresholds are ratios of that floor with hysteresis.
+const CALIBRATION_FRAMES = 35;
+const SPEAK_RATIO = 1.9;      // enter speech: clearly above ambient
+const RELEASE_RATIO = 1.35;   // exit speech: back near ambient (hysteresis)
+const SPEAK_MARGIN = 0.006;   // absolute margin in SCALED units, floors the ratios on dead-quiet rooms
+const NOISE_FLOOR_EMA = 0.04;
+const MAX_UTTERANCE_MS = 10_000; // hard cap — a segment can never run away again
 const MIN_UTTERANCE_MS = 260;
 const MIN_VOICE_FRAMES = 3;
 const MIN_CHUNK_BYTES = 900;
@@ -44,6 +48,7 @@ const TRANSCRIBE_TIMEOUT_MS = 180_000;
  * @property {boolean} segmentStopping
  * @property {boolean} stopping
  * @property {number} noiseFloor
+ * @property {number} calibrationFrames
  */
 
 /** @type {VoiceControlSession|null} */
@@ -107,7 +112,8 @@ export async function startVoiceControl() {
     segment: null,
     segmentStopping: false,
     stopping: false,
-    noiseFloor: 0.004,
+    noiseFloor: 0,
+    calibrationFrames: 0,
   });
   session = current;
   state.voiceControl.enabled = true;
@@ -170,11 +176,21 @@ function tickAnalyser(current) {
   state.voiceControl.level = level;
 
   const now = Date.now();
-  const threshold = Math.max(current.noiseFloor * NOISE_FLOOR_RATIO, MIN_SPEECH_LEVEL);
-  const hearsSpeech = level >= threshold;
-  if (!hearsSpeech) {
-    // Only quiet frames feed the floor, so speech never raises its own bar.
-    current.noiseFloor = Math.min(NOISE_FLOOR_MAX, Math.max(0.001, current.noiseFloor * (1 - NOISE_FLOOR_EMA) + level * NOISE_FLOOR_EMA));
+  // Calibration: the first frames define this room's ambient floor. No
+  // segments may start until the floor is real.
+  if (current.calibrationFrames < CALIBRATION_FRAMES) {
+    current.calibrationFrames += 1;
+    current.noiseFloor = current.noiseFloor === 0 ? level : current.noiseFloor * 0.85 + level * 0.15;
+    current.rafId = requestAnimationFrame(() => tickAnalyser(current));
+    return;
+  }
+  const speakAt = Math.max(current.noiseFloor * SPEAK_RATIO, current.noiseFloor + SPEAK_MARGIN);
+  const releaseAt = Math.max(current.noiseFloor * RELEASE_RATIO, current.noiseFloor + SPEAK_MARGIN * 0.5);
+  const hearsSpeech = current.segment ? level >= releaseAt : level >= speakAt;
+  if (!hearsSpeech && !current.segment) {
+    // Only quiet frames outside segments feed the floor, so speech never
+    // raises its own bar.
+    current.noiseFloor = Math.max(0.001, current.noiseFloor * (1 - NOISE_FLOOR_EMA) + level * NOISE_FLOOR_EMA);
   }
   if (hearsSpeech) {
     if (!current.segment && !current.segmentStopping) startSegment(current, now);
@@ -184,6 +200,9 @@ function tickAnalyser(current) {
       current.segment.voiceFrames += 1;
     }
   } else if (current.segment && now - current.segment.lastSpeechAtMs >= SILENCE_MS) {
+    finishSegment(current, false);
+  }
+  if (current.segment && now - current.segment.startedAtMs >= MAX_UTTERANCE_MS) {
     finishSegment(current, false);
   }
 
@@ -267,7 +286,6 @@ async function completeSegment(segment) {
     !blob ||
     blob.size < MIN_CHUNK_BYTES ||
     durationMs < MIN_UTTERANCE_MS ||
-    segment.peak < MIN_SPEECH_LEVEL ||
     segment.voiceFrames < MIN_VOICE_FRAMES
   ) {
     return;
