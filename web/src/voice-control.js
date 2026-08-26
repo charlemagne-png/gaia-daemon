@@ -4,8 +4,29 @@ import { addRoom, cancelActiveTask, closeRoomTab, selectRoom, sendMessage } from
 import { h } from "./dom.js";
 import { markDirty, setError } from "./render.js";
 import { state } from "./state.js";
-import { chunkVoiceReplyText, voiceControlRoomTitle } from "./voice-control-readout.js";
-export { chunkVoiceReplyText, sanitizeVoiceReplyText, voiceControlRoomTitle } from "./voice-control-readout.js";
+import {
+  appendVoiceReadoutDelta,
+  createBargeWatchState,
+  createVoiceStreamReadoutState,
+  finalizeVoiceReadoutStream,
+  observeBargeLevel,
+  shouldReadVoiceRoomEvent,
+  stopVoiceReadoutStream,
+  voiceControlRoomTitle,
+  voiceReadoutEventKey,
+} from "./voice-control-readout.js";
+export {
+  appendVoiceReadoutDelta,
+  chunkVoiceReplyText,
+  createBargeWatchState,
+  createVoiceStreamReadoutState,
+  finalizeVoiceReadoutStream,
+  observeBargeLevel,
+  sanitizeVoiceReplyText,
+  shouldReadVoiceRoomEvent,
+  voiceControlRoomTitle,
+  voiceReadoutEventKey,
+} from "./voice-control-readout.js";
 
 const SILENCE_MS = 800;
 // ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
@@ -72,8 +93,13 @@ let speechSeq = 0;
 let readoutHolds = 0;
 /** @type {{ workspaceId: string, roomId: string } | null} */
 let voiceSessionTarget = null;
-/** @type {Map<string, { workspaceId: string, roomId: string, eventId?: string }>} */
-const pendingVoiceReplies = new Map();
+let voiceSessionStartedAtMs = 0;
+/** @type {Set<string>} */
+const spokenVoiceEventKeys = new Set();
+/** @type {Map<string, ReturnType<typeof createVoiceStreamReadoutState>>} */
+const voiceReadoutStates = new Map();
+let bargeWatch = createBargeWatchState();
+let bargeInFlight = false;
 
 /** @returns {boolean} */
 export function voiceControlEnabled() {
@@ -120,6 +146,10 @@ export async function startVoiceControl() {
     return;
   }
   voiceSessionTarget = room;
+  voiceSessionStartedAtMs = Date.now();
+  spokenVoiceEventKeys.clear();
+  voiceReadoutStates.clear();
+  bargeWatch = createBargeWatchState();
 
   const current = /** @type {VoiceControlSession} */ ({
     stream,
@@ -152,8 +182,11 @@ export function stopVoiceControl() {
   state.voiceControl.level = 0;
   pendingConfirm = null;
   voiceSessionTarget = null;
-  pendingVoiceReplies.clear();
+  voiceSessionStartedAtMs = 0;
+  void cancelVoiceSpeechBackend();
   cancelSpeech();
+  spokenVoiceEventKeys.clear();
+  voiceReadoutStates.clear();
   if (current) {
     current.stopping = true;
     if (current.rafId) cancelAnimationFrame(current.rafId);
@@ -188,16 +221,19 @@ function startAnalyser(current) {
 /** @param {VoiceControlSession} current */
 function tickAnalyser(current) {
   if (session !== current || current.stopping || !current.analyser || !current.analyserData) return;
-  if (speaking) {
-    state.voiceControl.level = 0;
-    current.rafId = requestAnimationFrame(() => tickAnalyser(current));
-    return;
-  }
   current.analyser.getByteTimeDomainData(current.analyserData);
   const level = rmsLevel(current.analyserData);
   state.voiceControl.level = level;
 
   const now = Date.now();
+  const speakAt = Math.max(current.noiseFloor * SPEAK_RATIO, current.noiseFloor + SPEAK_MARGIN);
+  if (speaking) {
+    const barge = observeBargeLevel(bargeWatch, level, speakAt, now);
+    if (barge.barging) void bargeIn(current, now);
+    current.rafId = requestAnimationFrame(() => tickAnalyser(current));
+    return;
+  }
+  bargeWatch = createBargeWatchState();
   // Ambient self-heal: the true floor is the minimum level of any recent
   // window — even mid-segment. If the mic's auto-gain ramped AFTER initial
   // calibration, the floor sits below real ambient, the gate never releases,
@@ -220,7 +256,6 @@ function tickAnalyser(current) {
     current.rafId = requestAnimationFrame(() => tickAnalyser(current));
     return;
   }
-  const speakAt = Math.max(current.noiseFloor * SPEAK_RATIO, current.noiseFloor + SPEAK_MARGIN);
   const releaseAt = Math.max(current.noiseFloor * RELEASE_RATIO, current.noiseFloor + SPEAK_MARGIN * 0.5);
   const hearsSpeech = current.segment ? level >= releaseAt : level >= speakAt;
   if (!hearsSpeech && !current.segment) {
@@ -414,9 +449,43 @@ function cancelSpeech() {
   speechControllers.clear();
   activeSpeechRequests = 0;
   readoutHolds = 0;
+  markQueuedReadoutsStopped();
   refreshSpeaking();
   speechTail = Promise.resolve();
   updateVoiceControlPhase();
+}
+
+async function cancelVoiceSpeechBackend() {
+  try {
+    await fetch("/api/voice/speak/cancel", { method: "POST", body: "{}" });
+  } catch {
+    // Local abort still protects the mic; backend cancel is best-effort.
+  }
+}
+
+function markQueuedReadoutsStopped() {
+  for (const [key, readout] of voiceReadoutStates) {
+    stopVoiceReadoutStream(readout);
+    spokenVoiceEventKeys.add(key);
+  }
+}
+
+/** @param {VoiceControlSession} current @param {number} now */
+async function bargeIn(current, now) {
+  if (bargeInFlight || !state.voiceControl.enabled) return;
+  bargeInFlight = true;
+  vcLog("action", "barge-in — stopped readout", true);
+  void cancelVoiceSpeechBackend();
+  cancelSpeech();
+  const startCapture = () => {
+    if (session !== current || current.stopping || current.segment) return;
+    current.segmentStopping = false;
+    startSegment(current, Date.now());
+  };
+  startCapture();
+  if (!current.segment) window.setTimeout(startCapture, Math.max(0, now + 50 - Date.now()));
+  bargeWatch = createBargeWatchState();
+  bargeInFlight = false;
 }
 
 /** @param {string} text @returns {Promise<void>} */
@@ -455,8 +524,7 @@ async function speak(text) {
 }
 
 /** @param {string} text @returns {Promise<void>} */
-async function speakVoiceReply(text) {
-  const chunks = chunkVoiceReplyText(text);
+async function speakVoiceReplyChunks(chunks) {
   if (!chunks.length || !state.voiceControl.enabled) return;
   const seq = speechSeq;
   readoutHolds += 1;
@@ -474,42 +542,51 @@ async function speakVoiceReply(text) {
   }
 }
 
-/** @param {import("./types.js").Task} task */
-function rememberVoiceTask(task) {
-  const snapshot = state.snapshot;
-  if (!snapshot || !task?.id) return;
-  pendingVoiceReplies.set(task.id, { workspaceId: snapshot.workspace.id, roomId: snapshot.room.id });
+/** @param {import("./types.js").Task} _task */
+function rememberVoiceTask(_task) {
+  // Readout is now session-room scoped, not voice-task scoped.
 }
 
-/** @param {{ workspaceId: string, roomId: string, taskId: string, eventId: string }} scope */
-export function noteVoiceLiveTurn(scope) {
-  const pending = pendingVoiceReplies.get(scope.taskId);
-  if (!pending || pending.workspaceId !== scope.workspaceId || pending.roomId !== scope.roomId) return;
-  pending.eventId = scope.eventId;
+/** @param {{ workspaceId: string, roomId: string, taskId: string, eventId: string }} _scope */
+export function noteVoiceLiveTurn(_scope) {
+  // Live-turn ids are no longer enough: readout follows text deltas directly.
+}
+
+/** @param {{ workspaceId: string, roomId: string, eventId: string, agentId: string, delta: string }} payload */
+export function noteVoiceTextDelta(payload) {
+  if (!state.voiceControl.enabled || !voiceSessionTarget) return;
+  if (payload.workspaceId !== voiceSessionTarget.workspaceId || payload.roomId !== voiceSessionTarget.roomId) return;
+  if (!payload.eventId || payload.agentId === "user" || payload.agentId === "system") return;
+  const key = voiceReadoutEventKey(payload.workspaceId, payload.roomId, payload.eventId);
+  if (spokenVoiceEventKeys.has(key)) return;
+  const readout = voiceReadoutStates.get(key) ?? createVoiceStreamReadoutState();
+  voiceReadoutStates.set(key, readout);
+  const chunks = appendVoiceReadoutDelta(readout, payload.delta);
+  if (chunks.length) void speakVoiceReplyChunks(chunks);
 }
 
 /** @param {{ workspaceId: string, roomId: string, event: import("./types.js").RoomEvent }} payload */
 export function noteVoiceRoomEvent(payload) {
-  for (const [taskId, pending] of pendingVoiceReplies) {
-    if (pending.workspaceId !== payload.workspaceId || pending.roomId !== payload.roomId || pending.eventId !== payload.event.id) continue;
-    pendingVoiceReplies.delete(taskId);
-    if (payload.event.author !== "user" && payload.event.author !== "system") void speakVoiceReply(payload.event.text);
-    return;
-  }
+  if (!shouldReadVoiceRoomEvent(payload, voiceSessionTarget, voiceSessionStartedAtMs, spokenVoiceEventKeys)) return;
+  const key = voiceReadoutEventKey(payload.workspaceId, payload.roomId, payload.event.id);
+  const readout = voiceReadoutStates.get(key) ?? createVoiceStreamReadoutState();
+  voiceReadoutStates.set(key, readout);
+  if (!readout.pending && readout.spokenChars === 0) appendVoiceReadoutDelta(readout, payload.event.text);
+  const chunks = finalizeVoiceReadoutStream(readout);
+  spokenVoiceEventKeys.add(key);
+  if (chunks.length) void speakVoiceReplyChunks(chunks);
 }
 
 /** @param {import("./types.js").Snapshot} snapshot */
 export function noteVoiceSnapshot(snapshot) {
   const workspaceId = snapshot.workspace.id;
   const roomId = snapshot.room.id;
-  if (snapshot.room.liveTurn) {
-    noteVoiceLiveTurn({ workspaceId, roomId, taskId: snapshot.room.liveTurn.taskId, eventId: snapshot.room.liveTurn.eventId });
-  }
   for (const event of snapshot.room.events) noteVoiceRoomEvent({ workspaceId, roomId, event });
 }
 
 if (typeof window !== "undefined") {
   window.addEventListener("gaia:live-turn", (event) => noteVoiceLiveTurn(/** @type {CustomEvent} */ (event).detail));
+  window.addEventListener("gaia:text-delta", (event) => noteVoiceTextDelta(/** @type {CustomEvent} */ (event).detail));
   window.addEventListener("gaia:room-event", (event) => noteVoiceRoomEvent(/** @type {CustomEvent} */ (event).detail));
   window.addEventListener("gaia:snapshot", (event) => noteVoiceSnapshot(/** @type {CustomEvent} */ (event).detail.snapshot));
 }
@@ -579,6 +656,7 @@ async function routeVoiceControlText(rawText) {
   if (!text) return;
   vcLog("heard", text);
   if (READOUT_STOP_RE.test(text) && readoutHolds > 0) {
+    void cancelVoiceSpeechBackend();
     cancelSpeech();
     vcLog("action", "stopped readout", true);
     return;

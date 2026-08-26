@@ -1176,6 +1176,11 @@ export class GaiaWebServer {
       return;
     }
 
+    if (method === "POST" && match(/^\/api\/voice\/speak\/cancel$/)) {
+      this.daemon.cancelVoiceControlSpeech();
+      return json(response, 200, { ok: true });
+    }
+
     // Voice-control TTS (voice OUTPUT): speaks a short ack/question on the Mac
     // itself via local macOS say. No audio bytes return to the browser; the
     // response lands only after speech finishes so the client can pause VAD.

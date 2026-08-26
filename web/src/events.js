@@ -271,6 +271,14 @@ export function connectEvents(resyncOnReady = false) {
     if (!stream) return;
     stream.text += payload.delta;
     appendSpanBlock(stream.details, "text", payload.delta);
+    dispatchClientEvent("gaia:text-delta", {
+      workspaceId: state.snapshot.workspace.id,
+      roomId: payload.roomId,
+      eventId: payload.eventId,
+      taskId: payload.taskId,
+      agentId: payload.agentId,
+      delta: payload.delta,
+    });
     stream.version += 1;
     markDirty("transcript");
   });

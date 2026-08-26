@@ -2,12 +2,17 @@
 // No browser audio bytes: the daemon speaks on the Mac speaker, and the web
 // client waits for this route so VAD can pause while the Mac is talking.
 
-import { spawn } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 const MAX_TEXT_CHARS = 500;
 const MAX_VOICE_CHARS = 120;
 
+type SaySpawn = typeof nodeSpawn;
+
 let speakTail: Promise<void> = Promise.resolve();
+let speakGeneration = 0;
+let currentSayChild: ChildProcessWithoutNullStreams | null = null;
+let spawnSay: SaySpawn = nodeSpawn;
 
 export function sanitizeSayText(text: string): string {
   return String(text)
@@ -41,16 +46,35 @@ export function speak(text: string, voice?: string, signal?: AbortSignal): Promi
   const utterance = sanitizeSayText(text);
   const sayVoice = sanitizeSayVoice(voice);
   if (!utterance) return Promise.reject(new Error("No text to speak"));
-  const run = speakTail.catch(() => undefined).then(() => runSay(utterance, sayVoice, signal));
+  const generation = speakGeneration;
+  const run = speakTail.catch(() => undefined).then(() => {
+    if (generation !== speakGeneration) return Promise.reject(abortError());
+    return runSay(utterance, sayVoice, signal, generation);
+  });
   speakTail = run.catch(() => undefined);
   return run;
 }
 
-function runSay(text: string, voice: string | undefined, signal: AbortSignal | undefined): Promise<void> {
-  if (signal?.aborted) return Promise.reject(abortError());
+export function cancelSpeechQueue(): void {
+  speakGeneration += 1;
+  const child = currentSayChild;
+  if (child && !child.killed) child.kill("SIGTERM");
+  speakTail = Promise.resolve();
+}
+
+/** Test-only seam: replace `/usr/bin/say` spawn without touching callers. */
+export function setSaySpawnForTest(spawnImpl: SaySpawn): () => void {
+  const previous = spawnSay;
+  spawnSay = spawnImpl;
+  return () => { spawnSay = previous; };
+}
+
+function runSay(text: string, voice: string | undefined, signal: AbortSignal | undefined, generation: number): Promise<void> {
+  if (signal?.aborted || generation !== speakGeneration) return Promise.reject(abortError());
   return new Promise((resolve, reject) => {
     const args = voice ? ["-v", voice, text] : [text];
-    const child = spawn("/usr/bin/say", args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawnSay("/usr/bin/say", args, { stdio: ["ignore", "ignore", "pipe"] });
+    currentSayChild = child;
     const err: Buffer[] = [];
     let aborted = false;
     const onAbort = () => {
@@ -61,11 +85,13 @@ function runSay(text: string, voice: string | undefined, signal: AbortSignal | u
     child.stderr?.on("data", (chunk) => err.push(chunk));
     child.on("error", (error) => {
       signal?.removeEventListener("abort", onAbort);
+      if (currentSayChild === child) currentSayChild = null;
       reject(error);
     });
     child.on("close", (code, closeSignal) => {
       signal?.removeEventListener("abort", onAbort);
-      if (aborted || signal?.aborted) return reject(abortError());
+      if (currentSayChild === child) currentSayChild = null;
+      if (aborted || signal?.aborted || generation !== speakGeneration) return reject(abortError());
       if (code === 0) return resolve();
       const detail = Buffer.concat(err).toString("utf8").trim().slice(0, 400);
       reject(new Error(`say failed (${code ?? closeSignal ?? "unknown"})${detail ? `: ${detail}` : ""}`));
