@@ -120,6 +120,9 @@ test("streaming readout seams consume text deltas and finalize on room-event", (
   expect(eventsSource).toContain('dispatchClientEvent("gaia:text-delta"');
   expect(voiceSource).toContain('window.addEventListener("gaia:text-delta"');
   expect(voiceSource).toContain("finalizeVoiceReadoutStream(readout)");
+  expect(voiceSource).toContain("const VOICE_REPLY_READOUT = false;");
+  expect(voiceSource).toContain("if (VOICE_REPLY_READOUT && chunks.length) void speakVoiceReplyChunks(chunks);");
+  expect(voiceSource).toContain("const SILENCE_MS = 1800;");
   expect(voiceSource).toContain("vcAppendReply(key, payload.agentId, payload.delta)");
   expect(voiceSource).toContain("vcSetReply(key, payload.event.author, payload.event.text)");
   expect(voiceSource).toContain("if (state.voiceControl.enabled && voiceSessionFollowsCurrent) voiceSessionTarget");

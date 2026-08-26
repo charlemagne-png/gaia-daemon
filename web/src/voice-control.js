@@ -30,7 +30,8 @@ export {
   voiceReadoutEventKey,
 } from "./voice-control-readout.js";
 
-const SILENCE_MS = 800;
+const SILENCE_MS = 1800;
+const VOICE_REPLY_READOUT = false;
 // ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
 // (proven live 08-26: orb "listening", zero transcribe calls). Speech =
 // level clearly above a tracked noise floor, with a small absolute minimum.
@@ -654,7 +655,7 @@ export function noteVoiceTextDelta(payload) {
   const readout = voiceReadoutStates.get(key) ?? createVoiceStreamReadoutState();
   voiceReadoutStates.set(key, readout);
   const chunks = appendVoiceReadoutDelta(readout, payload.delta);
-  if (chunks.length) void speakVoiceReplyChunks(chunks);
+  if (VOICE_REPLY_READOUT && chunks.length) void speakVoiceReplyChunks(chunks);
 }
 
 /** @param {{ workspaceId: string, roomId: string, event: import("./types.js").RoomEvent }} payload */
@@ -667,7 +668,7 @@ export function noteVoiceRoomEvent(payload) {
   if (!readout.pending && readout.spokenChars === 0) appendVoiceReadoutDelta(readout, payload.event.text);
   const chunks = finalizeVoiceReadoutStream(readout);
   spokenVoiceEventKeys.add(key);
-  if (chunks.length) void speakVoiceReplyChunks(chunks);
+  if (VOICE_REPLY_READOUT && chunks.length) void speakVoiceReplyChunks(chunks);
 }
 
 /** @param {import("./types.js").Snapshot} snapshot */
