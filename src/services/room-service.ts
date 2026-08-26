@@ -839,12 +839,10 @@ export class RoomService {
     // steers exactly like plain text. Uniform: gated on the runtime's
     // supportsSteer, never a harness id.
     //
-    // Voice utterances steer too — conversation demands it. Speaking while the
-    // dispatched agent is mid-turn injects into that turn immediately instead
-    // of queueing behind it (queued voice = dead conversational latency). An
-    // utterance addressed to a DIFFERENT agent (voice dispatch already resolved
-    // targets above) fails aimedAtRunner and falls through to the queue as
-    // before — we never inject one agent's words into another's turn.
+    // Voice utterances steer too — conversation demands it. Speaking while any
+    // agent is mid-turn injects into that turn immediately instead of queueing
+    // behind it (queued voice = dead conversational latency). If Charles wants
+    // queue, he says queue explicitly.
     let recordedSteerEventId: string | undefined;
     if (
       command.type === "message" &&
@@ -855,7 +853,7 @@ export class RoomService {
     ) {
       const runner = this.activeAgentTurn.targets[0];
       const runtime = this.runtimes[runner];
-      const aimedAtRunner = targets.length > 0 && targets.every((id) => id === runner);
+      const aimedAtRunner = options.voice || (targets.length > 0 && targets.every((id) => id === runner));
       if (aimedAtRunner && runtime?.capabilities.supportsSteer) {
         const steered = await this.steerRunningTurn(runner, text, task, options.attachments, options.voice === true);
         if (steered === true) return task;
@@ -1124,9 +1122,13 @@ export class RoomService {
 
     const queue = /\bqueue\b/i.test(text);
     const peer = await this.options.roomPeer(candidate.id);
+    // NO channel:"voice" on the forward: init drops queued voice-channel
+    // survivors as dead call synthetics, which would silently destroy an
+    // explicit "queue …" forward across a daemon restart. The forward is a
+    // normal durable message aimed at the room's organism; steer-by-default
+    // barges it into that agent's running turn.
     const forwarded = await peer.sendMessage(text, {
       targets: [candidate.agentId],
-      channel: "voice",
       ...(options.attachments?.length ? { attachments: options.attachments } : {}),
       ...(queue ? { queue: true } : {}),
     });
@@ -2401,6 +2403,7 @@ export class RoomService {
    * steer task completes — the running turn's continued output IS the reply,
    * so there's no turn of its own. */
   private async steerRunningTurn(target: string, text: string, task: Task, attachments?: MessageAttachment[], voice = false): Promise<true | string> {
+    task.targets = [target];
     const event = await this.room.addUserMessage(text, [target], undefined, attachments, undefined, voice);
     this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
     // Attachments travel two ways, uniformly: the same breadcrumb lines the turn
@@ -4484,6 +4487,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
           (info) => info.mtimeMs,
           () => 0,
         );
+        const voiceSession = state.voiceSession || /^gaiavoice\s+—\s+\d{2}\/\d{2}\s+\d{2}:\d{2}$/i.test(state.title ?? "");
         return {
           activity,
           summary: {
@@ -4499,7 +4503,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),
             ...(state.incognito ? { incognito: true } : {}),
-            ...(state.voiceSession ? { voiceSession: true } : {}),
+            ...(voiceSession ? { voiceSession: true } : {}),
             ...(state.berserk ? { berserk: true } : {}),
             ...(activity ? { lastActivity: activity } : {}),
           } as Snapshot["rooms"][number],

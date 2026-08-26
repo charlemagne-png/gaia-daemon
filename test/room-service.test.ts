@@ -388,7 +388,9 @@ test("voice forward sends to a visible room and writes a system note", async () 
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.text, "put this with launch");
   assert.deepEqual(calls[0]?.options.targets, ["gaia"]);
-  assert.equal(calls[0]?.options.channel, "voice");
+  // NO channel:"voice" on the forward — init drops queued voice-channel
+  // survivors on restart, which would destroy an explicit "queue …" forward.
+  assert.equal(calls[0]?.options.channel, undefined);
   assert.equal(calls[0]?.options.queue, undefined);
   const { events: voiceEvents } = await RoomHandle.open(root, "voice-room").then((room) => room.eventsFrom(0));
   assert.equal(voiceEvents.at(-1)?.author, "system");
@@ -1749,7 +1751,15 @@ test("steer-by-default: a plain message to the busy agent injects; @other and qu
   assert.equal(steered.status, "complete", "steer settles while the turn still runs");
   assert.deepEqual(steerCalls, ["also check the logs"]);
 
-  // An explicit @other isn't for the running agent → durable queue.
+  // Voice-control follow-ups steer too — never wait in the hidden GaiaVoice
+  // session queue, even if the utterance would route to another agent.
+  const voiceSteered = await service.sendMessage("voice follow-up", { voice: true });
+  assert.equal(voiceSteered.status, "complete", "voice follow-up steers while the turn still runs");
+  const voiceCrossTarget = await service.sendMessage("@terry voice take", { voice: true });
+  assert.equal(voiceCrossTarget.status, "complete", "voice cross-target follow-up still steers the live turn");
+  assert.deepEqual(steerCalls, ["also check the logs", "voice follow-up", "@terry voice take"]);
+
+  // An explicit typed @other isn't for the running agent → durable queue.
   const toOther = await service.sendMessage("@terry take a look");
   assert.equal(toOther.status, "queued");
 
@@ -1772,6 +1782,14 @@ test("steer-by-default: a plain message to the busy agent injects; @other and qu
   assert.ok(
     transcript.some((event) => event.text === "also check the logs" && event.author === "user"),
     "steered message recorded for history",
+  );
+  assert.ok(
+    transcript.some((event) => event.text === "voice follow-up" && event.author === "user" && event.voice === true),
+    "voice steered message recorded for history",
+  );
+  assert.ok(
+    transcript.some((event) => event.text === "@terry voice take" && event.author === "user" && event.voice === true && event.targets?.[0] === "gaia"),
+    "voice cross-target steer records against the live runner, not the queue target",
   );
 });
 

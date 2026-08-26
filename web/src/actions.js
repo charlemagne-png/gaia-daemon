@@ -149,6 +149,42 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
   }
 }
 
+/**
+ * Create a room without selecting/opening it. Used by GaiaVoice's hidden
+ * session room: transcript persists, main chat UI stays where Charles left it.
+ * @param {{ incognito?: boolean, title?: string, voiceSession?: boolean }} [opts]
+ * @returns {Promise<{ workspaceId: string, roomId: string } | null>}
+ */
+export async function createRoom(opts = {}) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return null;
+  const incognito = opts.incognito === true;
+  const roomId = newAutoRoomId(incognito ? "incognito-" : "chat-");
+  try {
+    const created = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/create`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...(incognito ? { incognito: true } : {}),
+        ...(opts.voiceSession ? { voiceSession: true } : {}),
+      }),
+    });
+    applyRoomsPayload(snapshot.workspace.id, created.rooms);
+    const title = String(opts.title ?? "").trim();
+    if (title) {
+      const titled = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/title`, {
+        method: "POST",
+        body: JSON.stringify({ title, source: "auto" }),
+      });
+      applyRoomsPayload(snapshot.workspace.id, titled.rooms);
+    }
+    markDirty("sidebar", "tabs", "status");
+    return { workspaceId: snapshot.workspace.id, roomId };
+  } catch (error) {
+    setError(error);
+    return null;
+  }
+}
+
 /** @param {string} agentId */
 /** @param {string} agentId */
 export async function setActiveAgent(agentId) {

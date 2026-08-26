@@ -1,8 +1,9 @@
 // GaiaVoice: one mic stream, VAD-sliced utterance clips, local
 // transcription endpoint, then room-command routing or normal message send.
-import { addRoom, cancelActiveTask, closeRoomTab, selectRoom, sendMessage } from "./actions.js";
+import { addRoom, cancelActiveTask, closeRoomTab, createRoom, selectRoom, sendMessage } from "./actions.js";
 import { api } from "./api.js";
 import { h } from "./dom.js";
+import { openEventChannel } from "./eventchannel.js";
 import { markDirty, setError } from "./render.js";
 import { state } from "./state.js";
 import {
@@ -29,7 +30,8 @@ export {
   voiceReadoutEventKey,
 } from "./voice-control-readout.js";
 
-const SILENCE_MS = 800;
+const SILENCE_MS = 1800;
+const VOICE_REPLY_READOUT = false;
 // ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
 // (proven live 08-26: orb "listening", zero transcribe calls). Speech =
 // level clearly above a tracked noise floor, with a small absolute minimum.
@@ -103,6 +105,7 @@ let readoutHolds = 0;
 let voiceSessionTarget = null;
 let voiceSessionStartedAtMs = 0;
 let voiceSessionUsesDispatcher = false;
+let voiceSessionFollowsCurrent = false;
 /** @type {Promise<VoiceStartTarget|null>|null} */
 let voiceStartChoicePromise = null;
 /** @type {Set<string>} */
@@ -111,6 +114,8 @@ const spokenVoiceEventKeys = new Set();
 const voiceReadoutStates = new Map();
 let bargeWatch = createBargeWatchState();
 let bargeInFlight = false;
+/** @type {import("./eventchannel.js").EventChannel|null} */
+let voiceSessionEventSource = null;
 
 /** @returns {boolean} */
 export function voiceControlEnabled() {
@@ -154,7 +159,7 @@ export async function startVoiceControl() {
     return;
   }
 
-  const room = target.kind === "current" ? null : target.kind === "dispatcher" ? await resolveCurrentVoiceRoom() : await addRoom({ title: voiceControlRoomTitle(), voiceSession: false });
+  const room = target.kind === "current" ? null : target.kind === "dispatcher" ? await resolveCurrentVoiceRoom() : await createRoom({ title: voiceControlRoomTitle(), voiceSession: true });
   if (target.kind !== "current" && !room) {
     for (const track of stream.getTracks()) track.stop();
     return;
@@ -162,6 +167,7 @@ export async function startVoiceControl() {
   voiceSessionTarget = target.kind === "current" ? { workspaceId: target.workspaceId, roomId: target.roomId } : room;
   voiceSessionStartedAtMs = Date.now();
   voiceSessionUsesDispatcher = target.kind === "dispatcher";
+  voiceSessionFollowsCurrent = target.kind === "current";
   spokenVoiceEventKeys.clear();
   voiceReadoutStates.clear();
   bargeWatch = createBargeWatchState();
@@ -187,6 +193,7 @@ export async function startVoiceControl() {
   state.voiceControl.level = 0;
   state.voiceControl.pulse = 0;
   updateVoiceControlPhase();
+  connectVoiceSessionEvents();
   startAnalyser(current);
 }
 
@@ -265,7 +272,9 @@ export function stopVoiceControl() {
   pendingConfirm = null;
   voiceSessionTarget = null;
   voiceSessionStartedAtMs = 0;
+  voiceSessionFollowsCurrent = false;
   voiceSessionUsesDispatcher = false;
+  closeVoiceSessionEvents();
   void cancelVoiceSpeechBackend();
   cancelSpeech();
   spokenVoiceEventKeys.clear();
@@ -646,7 +655,7 @@ export function noteVoiceTextDelta(payload) {
   const readout = voiceReadoutStates.get(key) ?? createVoiceStreamReadoutState();
   voiceReadoutStates.set(key, readout);
   const chunks = appendVoiceReadoutDelta(readout, payload.delta);
-  if (chunks.length) void speakVoiceReplyChunks(chunks);
+  if (VOICE_REPLY_READOUT && chunks.length) void speakVoiceReplyChunks(chunks);
 }
 
 /** @param {{ workspaceId: string, roomId: string, event: import("./types.js").RoomEvent }} payload */
@@ -659,15 +668,44 @@ export function noteVoiceRoomEvent(payload) {
   if (!readout.pending && readout.spokenChars === 0) appendVoiceReadoutDelta(readout, payload.event.text);
   const chunks = finalizeVoiceReadoutStream(readout);
   spokenVoiceEventKeys.add(key);
-  if (chunks.length) void speakVoiceReplyChunks(chunks);
+  if (VOICE_REPLY_READOUT && chunks.length) void speakVoiceReplyChunks(chunks);
 }
 
 /** @param {import("./types.js").Snapshot} snapshot */
 export function noteVoiceSnapshot(snapshot) {
   const workspaceId = snapshot.workspace.id;
   const roomId = snapshot.room.id;
-  if (state.voiceControl.enabled) voiceSessionTarget = { workspaceId, roomId };
+  if (state.voiceControl.enabled && voiceSessionFollowsCurrent) voiceSessionTarget = { workspaceId, roomId };
   for (const event of snapshot.room.events) noteVoiceRoomEvent({ workspaceId, roomId, event });
+}
+
+function closeVoiceSessionEvents() {
+  voiceSessionEventSource?.close();
+  voiceSessionEventSource = null;
+}
+
+function connectVoiceSessionEvents() {
+  closeVoiceSessionEvents();
+  if (!voiceSessionTarget || voiceSessionFollowsCurrent) return;
+  const params = new URLSearchParams({ workspaceId: voiceSessionTarget.workspaceId, roomId: voiceSessionTarget.roomId });
+  const source = openEventChannel(`/api/events?${params}`);
+  voiceSessionEventSource = source;
+  source.addEventListener("text-delta", (event) => {
+    if (!voiceSessionTarget) return;
+    const payload = JSON.parse(event.data);
+    noteVoiceTextDelta({
+      workspaceId: voiceSessionTarget.workspaceId,
+      roomId: String(payload.roomId ?? voiceSessionTarget.roomId),
+      eventId: String(payload.eventId ?? ""),
+      agentId: String(payload.agentId ?? ""),
+      delta: String(payload.delta ?? ""),
+    });
+  });
+  source.addEventListener("room-event", (event) => {
+    if (!voiceSessionTarget) return;
+    const payload = JSON.parse(event.data);
+    noteVoiceRoomEvent({ workspaceId: voiceSessionTarget.workspaceId, roomId: String(payload.roomId ?? voiceSessionTarget.roomId), event: payload.event });
+  });
 }
 
 if (typeof window !== "undefined") {
@@ -773,14 +811,28 @@ async function resolveCurrentVoiceRoom() {
   return roomId ? { workspaceId: String(body?.workspaceId ?? workspaceId), roomId } : null;
 }
 
-async function ensureVoiceSessionRoom() {
-  if (!voiceSessionTarget) return;
-  if (voiceSessionUsesDispatcher) {
-    const current = await resolveCurrentVoiceRoom();
-    if (current) voiceSessionTarget = current;
+/** Background send into the invisible voice room — never selects/transports
+ * the view. The server's voice seam may rotate the room mid-send (>20% ctx);
+ * the response's roomId is the truth, so the session target and its event
+ * channel follow it. @param {string} text @returns {Promise<boolean>} */
+async function sendVoiceSessionMessage(text) {
+  if (!voiceSessionTarget || !text.trim()) return false;
+  try {
+    const body = await api(`/api/workspaces/${encodeURIComponent(voiceSessionTarget.workspaceId)}/rooms/${encodeURIComponent(voiceSessionTarget.roomId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text, voice: true }),
+    });
+    if (body.task) rememberVoiceTask(body.task);
+    const rotatedRoomId = String(body?.roomId ?? "");
+    if (rotatedRoomId && rotatedRoomId !== voiceSessionTarget.roomId) {
+      voiceSessionTarget = { workspaceId: voiceSessionTarget.workspaceId, roomId: rotatedRoomId };
+      connectVoiceSessionEvents();
+    }
+    return true;
+  } catch (error) {
+    setError(error);
+    return false;
   }
-  if (state.snapshot?.room.id === voiceSessionTarget.roomId) return;
-  await selectRoom(voiceSessionTarget.workspaceId, voiceSessionTarget.roomId);
 }
 
 /** @param {string} rawText */
@@ -836,10 +888,9 @@ async function routeVoiceControlText(rawText) {
   // Dispatcher sessions send plain speech; the server's voice-dispatch seam
   // resolves Hermes / aliases / stickiness. Missing-dispatcher fallback keeps
   // the pre-Hermes @gaia-addressed behavior.
-  await ensureVoiceSessionRoom();
   const outbound = voiceSessionUsesDispatcher ? rawText.trim() : `@gaia ${rawText.trim()}`;
-  await sendMessage(outbound, [], { voice: true, onTask: rememberVoiceTask });
-  await ensureVoiceSessionRoom();
+  if (voiceSessionFollowsCurrent) await sendMessage(outbound, [], { voice: true, onTask: rememberVoiceTask });
+  else await sendVoiceSessionMessage(outbound);
 }
 
 /** @param {string} ref */
@@ -865,6 +916,9 @@ async function routeRoomRef(ref) {
     }
     await selectRoom(targetWorkspaceId, roomId);
     voiceSessionTarget = { workspaceId: targetWorkspaceId, roomId };
+    voiceSessionFollowsCurrent = true;
+    voiceSessionUsesDispatcher = false;
+    closeVoiceSessionEvents();
   } catch {
     vcLog("error", `unknown chat code ${ref.toUpperCase()}`, true);
     void speak("unknown chat code");
