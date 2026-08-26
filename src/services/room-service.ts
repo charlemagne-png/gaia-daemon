@@ -43,6 +43,7 @@ import type {
   RoomEvent,
   RoomEventKind,
   RoomState,
+  RoomSummary,
   SlashCommandDefinition,
   Snapshot,
   Task,
@@ -164,6 +165,14 @@ export interface RoomMemoryHooks {
   deepSearch?(agentId: string, query: string, request?: { limit?: number; context?: ActiveContextRef }): Promise<{ hits: MemorySearchHit[]; degraded: string[] }>;
   /** Composer chips when the memory subsystem is degraded ([] = healthy). */
   healthChips?(): Promise<string[]>;
+}
+
+interface VoiceRoomForwardCandidate {
+  id: string;
+  title: string;
+  agentId: string;
+  gist: string;
+  lastActivity?: number;
 }
 
 export interface SendMessageOptions {
@@ -776,6 +785,8 @@ export class RoomService {
       }
     }
     if (command.type === "message" && options.voice && !options.nativeCommand) {
+      const forwarded = await this.maybeForwardVoiceToRoom(text, options);
+      if (forwarded) return forwarded;
       const dispatch = await this.voiceDispatchTarget(text);
       if (dispatch) {
         options = { ...options, targets: [dispatch.target] };
@@ -1095,6 +1106,72 @@ export class RoomService {
       bindings: await listWorkspacePetBindings(this.workspaceId, this.workspace.rootDir),
     });
     await this.emitSnapshot();
+  }
+
+  private async maybeForwardVoiceToRoom(text: string, options: SendMessageOptions): Promise<Task | undefined> {
+    if (!options.voice || options.nativeCommand || !this.options.roomPeer) return undefined;
+    const state = await this.room.state();
+    if (!state.voiceSession) return undefined;
+    if (findLeadingVoiceAddress(text, this.workspace.agents, this.workspace.config)) return undefined;
+    if (stickyVoiceTarget(state, this.workspace.agents)) return undefined;
+    const candidate = await this.rankVoiceForwardRoom(text);
+    if (!candidate) return undefined;
+
+    const task = this.createTask(text, [candidate.agentId]);
+    this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    const event = await this.room.addUserMessage(text, [candidate.agentId], "voice", options.attachments, undefined, true);
+    this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
+
+    const queue = /\bqueue\b/i.test(text);
+    const peer = await this.options.roomPeer(candidate.id);
+    const forwarded = await peer.sendMessage(text, {
+      targets: [candidate.agentId],
+      channel: "voice",
+      ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+      ...(queue ? { queue: true } : {}),
+    });
+    const disposition = queue || forwarded.status === "queued" ? "queued" : forwarded.status === "complete" ? "steered" : "sent";
+    await this.appendSystemNote(`↪ voice forwarded to “${candidate.title}” (${candidate.id}) for @${candidate.agentId}: ${disposition}.`);
+    task.status = "complete";
+    task.endedAt = new Date().toISOString();
+    this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    void this.emitSnapshot();
+    return task;
+  }
+
+  private async rankVoiceForwardRoom(text: string): Promise<VoiceRoomForwardCandidate | undefined> {
+    if (!this.options.llm) return undefined;
+    const candidates = await this.voiceForwardCandidates();
+    if (candidates.length === 0) return undefined;
+    const lines = candidates.map((candidate) => `${candidate.id}\t${candidate.title}\t@${candidate.agentId}\t${candidate.gist}`).join("\n");
+    const reply = await this.options.llm({
+      model: DEFAULTS.roomTitleModel,
+      system: "Pick the single visible GAIA room this spoken utterance should be forwarded into. Return only a room id from the list, or NONE. Prefer NONE when the utterance is general, conversational, or lacks a clear room target.",
+      user: `Utterance:\n${text}\n\nVisible rooms:\n${lines}`,
+    }).catch(() => "NONE");
+    const token = reply.trim().split(/\s+/)[0] ?? "";
+    if (!token || /^NONE\.?$/i.test(token)) return undefined;
+    return candidates.find((candidate) => candidate.id === token);
+  }
+
+  private async voiceForwardCandidates(): Promise<VoiceRoomForwardCandidate[]> {
+    const summaries = (await scanRoomActivity(this.workspace.rootDir)).filter((summary) => !summary.voiceSession).slice(0, 60);
+    return Promise.all(summaries.map((summary) => this.voiceForwardCandidate(summary)));
+  }
+
+  private async voiceForwardCandidate(summary: RoomSummary): Promise<VoiceRoomForwardCandidate> {
+    const room = await RoomHandle.open(this.workspace.rootDir, summary.id);
+    const state = await room.state();
+    const agentId = state.activeAgent && this.workspace.agents[state.activeAgent] ? state.activeAgent : this.workspace.config.defaultAgent;
+    const events = await room.recentEvents(30).catch((): RoomEvent[] => []);
+    const recent = [...events].reverse();
+    const lastUser = recent.find((event) => event.author === "user" && event.text.trim());
+    const lastAgent = recent.find((event) => event.author !== "user" && event.author !== "system" && event.text.trim());
+    const gist = [
+      lastUser ? `user: ${voiceMapSnippet(lastUser.text)}` : "",
+      lastAgent ? `@${lastAgent.author}: ${voiceMapSnippet(lastAgent.text)}` : "",
+    ].filter(Boolean).join(" · ") || "gist: (empty)";
+    return { id: summary.id, title: summary.title || summary.id, agentId, gist, ...(summary.lastActivity ? { lastActivity: summary.lastActivity } : {}) };
   }
 
   private async voiceDispatcherId(): Promise<string> {

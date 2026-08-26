@@ -9,7 +9,7 @@ import { MemoryStore } from "../src/domain/memory.js";
 import { DEFAULTS } from "../src/core/config.js";
 import { readJson } from "../src/core/store.js";
 import { workspacePaths } from "../src/core/paths.js";
-import type { AgentDef, AgentEvent, QueuedMessage, SanitizeProposal, Snapshot, UiEvent, Workspace, WorkspaceConfig } from "../src/core/types.js";
+import type { AgentDef, AgentEvent, QueuedMessage, SanitizeProposal, Snapshot, Task, UiEvent, Workspace, WorkspaceConfig } from "../src/core/types.js";
 import "../src/harness/index.js"; // register Pi: its resolved SKILL.md commands are palette entries
 import { RunnerHost } from "../src/harness/host.js";
 import { registerHarness, type AgentInput, type AgentRuntime } from "../src/harness/spec.js";
@@ -109,19 +109,22 @@ async function makeService(options: {
   roomId?: string;
   /** Seed the room's state.json as incognito before RoomService.open reads it. */
   incognito?: boolean;
+  /** Seed the room as the hidden GaiaVoice dispatcher room. */
+  voiceSession?: boolean;
   /** Tool ids granted to every test agent (default none). */
   tools?: string[];
   /** Durable queue entries to seed before RoomService.open() runs boot drain. */
   queued?: QueuedMessage[];
   workspaceId?: string;
   homeWorkspaceRedirect?: (request: HomeWorkspaceRedirectRequest) => Promise<HomeWorkspaceRedirectResult | undefined>;
+  roomPeer?: (roomId: string) => Promise<RoomService>;
 } = {}): Promise<{ service: RoomService; workspace: Workspace; root: string; events: UiEvent[]; runtimes: Map<string, ReturnType<typeof scriptedRuntime>> }> {
   const root = await mkdtemp(join(tmpdir(), "gaia-svc-"));
   const roomId = options.roomId ?? "default";
   await mkdir(join(root, ".gaia", "rooms", roomId), { recursive: true });
   await writeFile(join(root, ".gaia", "config.json"), "{}", "utf8");
-  if (options.incognito) {
-    await writeFile(workspacePaths.roomState(root, roomId), JSON.stringify({ activeRoles: {}, agentCursors: {}, incognito: true }), "utf8");
+  if (options.incognito || options.voiceSession) {
+    await writeFile(workspacePaths.roomState(root, roomId), JSON.stringify({ activeRoles: {}, agentCursors: {}, ...(options.incognito ? { incognito: true } : {}), ...(options.voiceSession ? { voiceSession: true } : {}) }), "utf8");
   }
 
   const agentIds = options.agents ?? ["gaia", "terry"];
@@ -156,6 +159,7 @@ async function makeService(options: {
     ...(options.summonHost ? { summonHost: options.summonHost } : {}),
     ...(options.llm ? { llm: options.llm } : {}),
     ...(options.homeWorkspaceRedirect ? { homeWorkspaceRedirect: options.homeWorkspaceRedirect } : {}),
+    ...(options.roomPeer ? { roomPeer: options.roomPeer } : {}),
     runtimeFactory: (agent) => {
       const runtime = options.runtimeFactory ? (options.runtimeFactory(agent, workspace) as ReturnType<typeof scriptedRuntime>) : scriptedRuntime(agent, script);
       runtimes.set(agent.id, runtime);
@@ -356,6 +360,67 @@ test("voice dispatch context estimate crosses the 20% rotation trigger", async (
 
   const estimate = await service.estimateVoiceDispatchContext("next spoken turn");
   assert.ok(estimate.usedTokens > estimate.maxTokens * 0.2);
+});
+
+test("voice forward sends to a visible room and writes a system note", async () => {
+  const calls: Array<{ text: string; options: { targets?: string[]; queue?: boolean; channel?: string } }> = [];
+  const fakePeer = {
+    roomId: "target-room",
+    sendMessage: async (text: string, options: { targets?: string[]; queue?: boolean; channel?: string }): Promise<Task> => {
+      calls.push({ text, options });
+      return { id: "task_forward", roomId: "target-room", text, targets: options.targets ?? [], status: "running", startedAt: new Date().toISOString() };
+    },
+  } as unknown as RoomService;
+  const { service, root } = await makeService({
+    roomId: "voice-room",
+    agents: ["gaia", "hermes"],
+    voiceSession: true,
+    llm: async () => "target-room",
+    roomPeer: async () => fakePeer,
+  });
+  await mkdir(join(root, ".gaia", "rooms", "target-room"), { recursive: true });
+  await writeFile(workspacePaths.transcript(root, "target-room"), JSON.stringify({ id: "u1", timestamp: new Date().toISOString(), author: "user", targets: ["gaia"], text: "launch plan" }) + "\n", "utf8");
+  await writeFile(workspacePaths.roomState(root, "target-room"), JSON.stringify({ activeRoles: {}, agentCursors: {}, title: "Launch Plan", activeAgent: "gaia" }), "utf8");
+
+  const task = await service.sendMessage("put this with launch", { origin: "human", voice: true });
+
+  assert.equal(task.status, "complete");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.text, "put this with launch");
+  assert.deepEqual(calls[0]?.options.targets, ["gaia"]);
+  assert.equal(calls[0]?.options.channel, "voice");
+  assert.equal(calls[0]?.options.queue, undefined);
+  const { events: voiceEvents } = await RoomHandle.open(root, "voice-room").then((room) => room.eventsFrom(0));
+  assert.equal(voiceEvents.at(-1)?.author, "system");
+  assert.match(voiceEvents.at(-1)?.text ?? "", /voice forwarded to “Launch Plan” \(target-room\).*sent/);
+});
+
+test("voice forward queue law sets queue only for the explicit word queue", async () => {
+  const calls: Array<{ queue?: boolean }> = [];
+  const fakePeer = {
+    roomId: "target-room",
+    sendMessage: async (_text: string, options: { targets?: string[]; queue?: boolean }): Promise<Task> => {
+      calls.push({ queue: options.queue });
+      return { id: `task_forward_${calls.length}`, roomId: "target-room", text: "", targets: options.targets ?? [], status: options.queue ? "queued" : "running", startedAt: new Date().toISOString() };
+    },
+  } as unknown as RoomService;
+  const { service, root } = await makeService({
+    roomId: "voice-room",
+    agents: ["gaia", "hermes"],
+    voiceSession: true,
+    llm: async () => "target-room",
+    roomPeer: async () => fakePeer,
+  });
+  await mkdir(join(root, ".gaia", "rooms", "target-room"), { recursive: true });
+  await writeFile(workspacePaths.transcript(root, "target-room"), "", "utf8");
+  await writeFile(workspacePaths.roomState(root, "target-room"), JSON.stringify({ activeRoles: {}, agentCursors: {}, title: "Inbox", activeAgent: "gaia" }), "utf8");
+
+  await service.sendMessage("send this to inbox", { origin: "human", voice: true });
+  await service.sendMessage("queue this in inbox", { origin: "human", voice: true });
+
+  assert.deepEqual(calls.map((call) => call.queue), [undefined, true]);
+  const { events: voiceEvents } = await RoomHandle.open(root, "voice-room").then((room) => room.eventsFrom(0));
+  assert.match(voiceEvents.at(-1)?.text ?? "", /queued/);
 });
 
 test("snapshot exposes voice dispatcher availability from the dispatch fallback seam", async () => {
