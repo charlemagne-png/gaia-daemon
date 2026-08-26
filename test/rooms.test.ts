@@ -107,9 +107,13 @@ test("voice session flag normalizes and scan surfaces it for presentation filter
   await writeFile(join(root, ".gaia", "rooms", "chat-voice", "state.json"), JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, voiceSession: true }), "utf8");
   await writeFile(join(root, ".gaia", "rooms", "chat-legacy", "transcript.jsonl"), "", "utf8");
   await writeFile(join(root, ".gaia", "rooms", "chat-legacy", "state.json"), JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, title: "gaiavoice — 08/26 16:20" }), "utf8");
+  await mkdir(join(root, ".gaia", "rooms", "chat-normal"), { recursive: true });
+  await writeFile(join(root, ".gaia", "rooms", "chat-normal", "transcript.jsonl"), "", "utf8");
+  await writeFile(join(root, ".gaia", "rooms", "chat-normal", "state.json"), JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, title: "GaiaVoice Hermes UI lane" }), "utf8");
   const summaries = await scanRoomActivity(root);
   assert.equal(summaries.find((room) => room.id === "chat-voice")?.voiceSession, true);
   assert.equal(summaries.find((room) => room.id === "chat-legacy")?.voiceSession, true);
+  assert.equal(summaries.find((room) => room.id === "chat-normal")?.voiceSession, undefined);
 });
 
 test("normalizeRoomState round-trips thinkingOverrides (mirrors activeRoles)", () => {

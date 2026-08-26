@@ -4376,7 +4376,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
           (info) => info.mtimeMs,
           () => 0,
         );
-        const voiceSession = state.voiceSession || /^gaiavoice\b/i.test(state.title ?? "");
+        const voiceSession = state.voiceSession || /^gaiavoice\s+—\s+\d{2}\/\d{2}\s+\d{2}:\d{2}$/i.test(state.title ?? "");
         return {
           activity,
           summary: {
