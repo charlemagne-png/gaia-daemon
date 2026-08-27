@@ -2864,3 +2864,10 @@ body.berserk .main {
 @media (prefers-reduced-motion: reduce) { .nav-item.room-item.berserk { animation: none; box-shadow: inset 0 0 0 1px #ff2b1f, 0 0 10px rgba(255, 30, 20, 0.55); } }
 .voice-console-header { color: var(--muted); font-size: 10px; letter-spacing: 0.4px; text-transform: lowercase; padding-bottom: 2px; border-bottom: 0; margin-bottom: 3px; }
 .voice-console-header strong { color: var(--accent); font-weight: 600; }
+.voice-console-draft { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 8px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--ink) 82%, transparent); color: var(--muted); }
+.voice-console-draft.has-draft { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--fg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent); }
+.voice-console-draft-text { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.voice-console-draft-actions { display: flex; gap: 6px; }
+.voice-console-draft-actions button { border: 1px solid var(--border); border-radius: 999px; padding: 4px 9px; background: var(--panel); color: var(--fg); cursor: pointer; }
+.voice-console-draft-actions button:disabled { opacity: 0.38; cursor: default; }
+.voice-console-draft-actions .voice-console-go:not(:disabled) { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }

@@ -11,6 +11,8 @@ export const MERGE_WINDOW_MS = 2_500;
  *   dispatch: (text: string) => void | Promise<void>,
  *   setTimeout?: (fn: () => void, ms: number) => unknown,
  *   clearTimeout?: (id: unknown) => void,
+ *   autoDispatch?: boolean,
+ *   onChange?: (text: string) => void,
  * }} options
  */
 export function createVoiceTranscriptMerger(options) {
@@ -21,6 +23,11 @@ export function createVoiceTranscriptMerger(options) {
   let pendingText = "";
   let waitingForContinuation = false;
   let mustMergeNext = false;
+  const autoDispatch = options.autoDispatch !== false;
+
+  function notifyChange() {
+    options.onChange?.(pendingText);
+  }
 
   function clearHoldTimer() {
     if (timer !== null) clearTimer(timer);
@@ -32,11 +39,12 @@ export function createVoiceTranscriptMerger(options) {
     pendingText = "";
     waitingForContinuation = false;
     mustMergeNext = false;
+    notifyChange();
   }
 
   function scheduleHold() {
     clearHoldTimer();
-    if (!pendingText || waitingForContinuation || mustMergeNext) return;
+    if (!autoDispatch || !pendingText || waitingForContinuation || mustMergeNext) return;
     timer = setTimer(() => {
       const text = pendingText;
       resetPending();
@@ -58,6 +66,7 @@ export function createVoiceTranscriptMerger(options) {
       if (trimmed) pendingText = pendingText ? `${pendingText} ${trimmed}` : trimmed;
       waitingForContinuation = false;
       mustMergeNext = Boolean(acceptOptions.mustMergeNext);
+      notifyChange();
       scheduleHold();
     },
 
@@ -69,7 +78,20 @@ export function createVoiceTranscriptMerger(options) {
       void options.dispatch(text);
     },
 
+    /** Human commit: dispatches the composed utterance immediately. */
+    send() {
+      if (!pendingText) return;
+      const text = pendingText;
+      resetPending();
+      void options.dispatch(text);
+    },
+
     cancel: resetPending,
+
+    /** @returns {string} */
+    text() {
+      return pendingText;
+    },
 
     /** @returns {boolean} */
     hasPending() {

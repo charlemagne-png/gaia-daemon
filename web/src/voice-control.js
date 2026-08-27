@@ -108,7 +108,14 @@ let voiceSessionTarget = null;
 let voiceSessionStartedAtMs = 0;
 let voiceSessionUsesDispatcher = false;
 let voiceSessionFollowsCurrent = false;
-const transcriptMerger = createVoiceTranscriptMerger({ dispatch: (text) => routeVoiceControlText(text) });
+const transcriptMerger = createVoiceTranscriptMerger({
+  autoDispatch: false,
+  dispatch: (text) => routeVoiceControlText(text),
+  onChange: (text) => {
+    state.voiceControl.draft = text;
+    markDirty("panel");
+  },
+});
 /** @type {Promise<VoiceStartTarget|null>|null} */
 let voiceStartChoicePromise = null;
 /** @type {Set<string>} */
@@ -192,6 +199,8 @@ export async function startVoiceControl() {
   session = current;
   state.voiceControl.enabled = true;
   state.voiceControl.log = [];
+  state.voiceControl.draft = "";
+  transcriptMerger.cancel();
   pendingConfirm = null;
   state.voiceControl.level = 0;
   state.voiceControl.pulse = 0;
@@ -272,6 +281,7 @@ export function stopVoiceControl() {
   session = null;
   state.voiceControl.enabled = false;
   state.voiceControl.level = 0;
+  state.voiceControl.draft = "";
   pendingConfirm = null;
   voiceSessionTarget = null;
   voiceSessionStartedAtMs = 0;
@@ -825,6 +835,14 @@ async function routeTranscribedVoiceText(rawText, continuation) {
   transcriptMerger.accept(rawText.trim(), { mustMergeNext: continuation });
 }
 
+function sendVoiceDraft() {
+  transcriptMerger.send();
+}
+
+function clearVoiceDraft() {
+  transcriptMerger.cancel();
+}
+
 /** @param {string} rawText @returns {string} */
 function normalizedVoiceControlText(rawText) {
   return rawText.trim().replace(/[.,!?\u3002]+$/, "").trim();
@@ -1009,8 +1027,17 @@ export function VoiceControlConsole() {
       h("span", { class: "voice-console-text", text: entry.text }),
     );
   });
+  const draft = state.voiceControl.draft.trim();
+  const controls = h("div", { class: `voice-console-draft${draft ? " has-draft" : ""}` },
+    h("div", { class: "voice-console-draft-text", text: draft || "speak freely — press Go when the message is complete" }),
+    h("div", { class: "voice-console-draft-actions" },
+      h("button", { class: "voice-console-go", type: "button", ...(draft ? {} : { disabled: true }), onclick: sendVoiceDraft, text: "Go" }),
+      h("button", { class: "voice-console-clear", type: "button", ...(draft ? {} : { disabled: true }), onclick: clearVoiceDraft, text: "Clear" }),
+    ),
+  );
   const node = h("div", { class: "voice-control-console" },
     h("div", { class: "voice-console-header" }, h("strong", { text: "Hermes" }), h("span", { text: " · GaiaVoice transcript" })),
+    controls,
     rows.length ? rows : [h("div", { class: "voice-console-row empty", text: "say something — Hermes will show what he hears" })],
   );
   queueMicrotask(() => { node.scrollTop = node.scrollHeight; });

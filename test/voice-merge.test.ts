@@ -45,6 +45,33 @@ test("GaiaVoice merge window joins transcripts across a thinking pause", () => {
   assert.deepEqual(dispatched, ["Yo, I have this voice agent, but it keeps clipping."]);
 });
 
+test("GaiaVoice manual mode accumulates until Go sends", () => {
+  const clock = fakeTimers();
+  const dispatched: string[] = [];
+  const drafts: string[] = [];
+  const merger = createVoiceTranscriptMerger({
+    autoDispatch: false,
+    dispatch: (text) => dispatched.push(text),
+    onChange: (text) => drafts.push(text),
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+  });
+
+  merger.accept("first part");
+  clock.advance(MERGE_WINDOW_MS * 4);
+  assert.deepEqual(dispatched, []);
+  assert.equal(merger.text(), "first part");
+
+  merger.segmentStarted();
+  merger.accept("second part");
+  assert.equal(merger.text(), "first part second part");
+
+  merger.send();
+  assert.deepEqual(dispatched, ["first part second part"]);
+  assert.equal(merger.text(), "");
+  assert.deepEqual(drafts.at(-1), "");
+});
+
 test("GaiaVoice cap-chopped transcript never dispatches before continuation", () => {
   const clock = fakeTimers();
   const dispatched: string[] = [];
