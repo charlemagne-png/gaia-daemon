@@ -6,6 +6,7 @@ import { h } from "./dom.js";
 import { openEventChannel } from "./eventchannel.js";
 import { markDirty, setError } from "./render.js";
 import { state } from "./state.js";
+import { createVoiceTranscriptMerger } from "./voice-merge.js";
 import {
   appendVoiceReadoutDelta,
   createBargeWatchState,
@@ -68,6 +69,7 @@ const HERMES_SPLAT_URL = "/img/hermes-splat-samples.json";
  * @property {number} peak
  * @property {number} voiceFrames
  * @property {boolean} discard
+ * @property {boolean} continuation
  */
 
 /**
@@ -106,6 +108,7 @@ let voiceSessionTarget = null;
 let voiceSessionStartedAtMs = 0;
 let voiceSessionUsesDispatcher = false;
 let voiceSessionFollowsCurrent = false;
+const transcriptMerger = createVoiceTranscriptMerger({ dispatch: (text) => routeVoiceControlText(text) });
 /** @type {Promise<VoiceStartTarget|null>|null} */
 let voiceStartChoicePromise = null;
 /** @type {Set<string>} */
@@ -274,6 +277,7 @@ export function stopVoiceControl() {
   voiceSessionStartedAtMs = 0;
   voiceSessionFollowsCurrent = false;
   voiceSessionUsesDispatcher = false;
+  transcriptMerger.cancel();
   closeVoiceSessionEvents();
   void cancelVoiceSpeechBackend();
   cancelSpeech();
@@ -366,7 +370,7 @@ function tickAnalyser(current) {
     finishSegment(current, false);
   }
   if (current.segment && now - current.segment.startedAtMs >= MAX_UTTERANCE_MS) {
-    finishSegment(current, false);
+    finishSegment(current, false, true);
   }
 
   current.rafId = requestAnimationFrame(() => tickAnalyser(current));
@@ -402,7 +406,9 @@ function startSegment(current, now) {
     peak: 0,
     voiceFrames: 0,
     discard: false,
+    continuation: false,
   });
+  transcriptMerger.segmentStarted();
   current.segment = segment;
   recorder.ondataavailable = (event) => {
     if (event.data?.size) segment.chunks.push(event.data);
@@ -419,13 +425,14 @@ function startSegment(current, now) {
   }
 }
 
-/** @param {VoiceControlSession} current @param {boolean} discard */
-function finishSegment(current, discard) {
+/** @param {VoiceControlSession} current @param {boolean} discard @param {boolean} [continuation] */
+function finishSegment(current, discard, continuation = false) {
   const segment = current.segment;
   if (!segment) return;
   current.segment = null;
   current.segmentStopping = true;
   segment.discard = discard;
+  segment.continuation = continuation;
   try {
     if (segment.recorder.state !== "inactive") {
       segment.recorder.requestData();
@@ -453,16 +460,16 @@ async function completeSegment(segment) {
   ) {
     return;
   }
-  enqueueTranscription(blob);
+  enqueueTranscription(blob, segment.continuation);
 }
 
-/** @param {Blob} blob */
-function enqueueTranscription(blob) {
-  transcriptionTail = transcriptionTail.catch(() => undefined).then(() => transcribeAndRoute(blob));
+/** @param {Blob} blob @param {boolean} continuation */
+function enqueueTranscription(blob, continuation) {
+  transcriptionTail = transcriptionTail.catch(() => undefined).then(() => transcribeAndRoute(blob, continuation));
 }
 
-/** @param {Blob} blob */
-async function transcribeAndRoute(blob) {
+/** @param {Blob} blob @param {boolean} continuation */
+async function transcribeAndRoute(blob, continuation) {
   activeTranscriptions += 1;
   updateVoiceControlPhase();
   try {
@@ -470,7 +477,7 @@ async function transcribeAndRoute(blob) {
     if (!text || !state.voiceControl.enabled) return;
     state.voiceControl.pulse = Date.now();
     markDirty("panel");
-    await routeVoiceControlText(text);
+    await routeTranscribedVoiceText(text, continuation);
   } finally {
     activeTranscriptions = Math.max(0, activeTranscriptions - 1);
     updateVoiceControlPhase();
@@ -803,6 +810,33 @@ const YES_RE = /^(yes|yeah|yep|do it|confirm|go ahead|sure)$/i;
 const NO_RE = /^(no|nope|cancel|never mind|nevermind|stop)$/i;
 const READOUT_STOP_RE = /^(stop|cancel)$/i;
 
+/** @param {string} rawText @param {boolean} continuation */
+async function routeTranscribedVoiceText(rawText, continuation) {
+  const text = normalizedVoiceControlText(rawText);
+  if (!text) {
+    transcriptMerger.accept("", { mustMergeNext: continuation });
+    return;
+  }
+  if (isInstantVoiceControlText(text)) {
+    transcriptMerger.flushReady();
+    await routeVoiceControlText(rawText);
+    return;
+  }
+  transcriptMerger.accept(rawText.trim(), { mustMergeNext: continuation });
+}
+
+/** @param {string} rawText @returns {string} */
+function normalizedVoiceControlText(rawText) {
+  return rawText.trim().replace(/[.,!?\u3002]+$/, "").trim();
+}
+
+/** @param {string} text @returns {boolean} */
+function isInstantVoiceControlText(text) {
+  if (READOUT_STOP_RE.test(text) && readoutHolds > 0) return true;
+  if (pendingConfirm) return true;
+  return NATIVE_COMMANDS.some((command) => command.pattern.test(text));
+}
+
 async function resolveCurrentVoiceRoom() {
   const workspaceId = state.snapshot?.workspace.id;
   if (!workspaceId) return null;
@@ -837,7 +871,7 @@ async function sendVoiceSessionMessage(text) {
 
 /** @param {string} rawText */
 async function routeVoiceControlText(rawText) {
-  const text = rawText.trim().replace(/[.,!?\u3002]+$/, "").trim();
+  const text = normalizedVoiceControlText(rawText);
   if (!text) return;
   vcLog("heard", text);
   if (READOUT_STOP_RE.test(text) && readoutHolds > 0) {
