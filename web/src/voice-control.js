@@ -948,7 +948,7 @@ async function routeRoomRef(ref) {
       setError("unknown chat code");
       return;
     }
-    await selectRoom(targetWorkspaceId, roomId);
+    await selectRoom(targetWorkspaceId, roomId, { voiceNavigation: true });
     voiceSessionTarget = { workspaceId: targetWorkspaceId, roomId };
     voiceSessionFollowsCurrent = true;
     voiceSessionUsesDispatcher = false;

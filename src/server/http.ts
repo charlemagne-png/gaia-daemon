@@ -816,8 +816,9 @@ export class GaiaWebServer {
       if (!roomId?.trim()) return json(response, 400, { error: "Missing room id" });
       const incognito = boolField(body, "incognito");
       const voiceSession = boolField(body, "voiceSession");
+      const voiceNavigation = boolField(body, "voiceNavigation") || boolField(body, "voiceNav");
       const parentRoomId = stringField(body, "parentRoomId")?.trim();
-      return this.respond(response, () => this.daemon.selectRoom(params![0], roomId.trim(), { incognito, ...(voiceSession ? { voiceSession } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
+      return this.respond(response, () => this.daemon.selectRoom(params![0], roomId.trim(), { incognito, ...(voiceSession ? { voiceSession } : {}), ...(voiceNavigation ? { voiceNavigation } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
     }
 
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/create$/))) {
@@ -835,8 +836,9 @@ export class GaiaWebServer {
       const selectBody = await parseBody(request);
       const incognito = boolField(selectBody, "incognito");
       const voiceSession = boolField(selectBody, "voiceSession");
+      const voiceNavigation = boolField(selectBody, "voiceNavigation") || boolField(selectBody, "voiceNav");
       const parentRoomId = stringField(selectBody, "parentRoomId")?.trim();
-      return this.respond(response, () => this.daemon.selectRoom(params![0], params![1], { incognito, ...(voiceSession ? { voiceSession } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
+      return this.respond(response, () => this.daemon.selectRoom(params![0], params![1], { incognito, ...(voiceSession ? { voiceSession } : {}), ...(voiceNavigation ? { voiceNavigation } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
     }
 
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/default-agent$/))) {
@@ -1937,8 +1939,13 @@ export class GaiaWebServer {
     for (const client of this.clients) {
       const scoped = event as { workspaceId?: string; roomId?: string; fromWorkspaceId?: string; fromRoomId?: string };
       if (event.type === "room-redirect") {
-        if (client.workspaceId && scoped.fromWorkspaceId && client.workspaceId !== scoped.fromWorkspaceId) continue;
-        if (client.roomId && scoped.fromRoomId && client.roomId !== scoped.fromRoomId) continue;
+        const redirect = event as Extract<UiEvent, { type: "room-redirect" }>;
+        if (redirect.scope === "workspace") {
+          if (client.workspaceId && client.workspaceId !== redirect.workspaceId) continue;
+        } else {
+          if (client.workspaceId && scoped.fromWorkspaceId && client.workspaceId !== scoped.fromWorkspaceId) continue;
+          if (client.roomId && scoped.fromRoomId && client.roomId !== scoped.fromRoomId) continue;
+        }
       } else if (!ambient) {
         if (client.workspaceId && scoped.workspaceId && client.workspaceId !== scoped.workspaceId) continue;
         if (client.roomId && scoped.roomId && client.roomId !== scoped.roomId) continue;

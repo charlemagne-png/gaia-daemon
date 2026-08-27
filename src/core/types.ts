@@ -1329,7 +1329,7 @@ export type UiEvent =
   | { type: "artifact-updated"; workspaceId: string; roomId: string; artifactId: string; projectId: string; version: unknown; manifest: unknown }
   | { type: "studio-iteration"; workspaceId: string; roomId: string; projectId: string; taskId: string; status: "queued" | "running" | "complete" | "error" }
   | { type: "voice-status"; workspaceId: string; roomId: string; voice: VoiceCallInfo | null; pending?: { agentId: string; message: string } }
-  | { type: "room-redirect"; workspaceId: string; roomId: string; fromWorkspaceId: string; fromRoomId: string }
+  | { type: "room-redirect"; workspaceId: string; roomId: string; fromWorkspaceId: string; fromRoomId: string; scope?: "source-room" | "workspace" }
   // Workspace-TAGGED, globally DELIVERED (NO roomId): the room list of the named
   // workspace changed — a room started or finished a turn, or its activity
   // advanced. The workspaceId only says WHICH workspace this describes; the

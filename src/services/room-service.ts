@@ -1222,6 +1222,13 @@ export class RoomService {
     });
   }
 
+  /** Workspace-scoped voice navigation: a background/dispatcher room asked to
+   * open a room, so every active client in the workspace must transport there,
+   * not only clients already watching the origin room. */
+  emitVoiceNavigationRedirect(roomId: string, fromRoomId: string): void {
+    this.emit({ type: "room-redirect", workspaceId: this.workspaceId, roomId, fromWorkspaceId: this.workspaceId, fromRoomId, scope: "workspace" });
+  }
+
   /** Human-picked active agent. A pinned agent selected outside its home room
    * redirects the view instead of mutating this room's activeAgent. */
   async setActiveAgent(agentId: string, options: { origin?: "human" } = {}): Promise<HomeWorkspaceRedirectResult | undefined> {

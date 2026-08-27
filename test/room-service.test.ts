@@ -680,6 +680,21 @@ test("home-workspace redirect does not fire for summon-origin targeted messages"
   assert.equal(events.some((event) => event.type === "room-redirect"), false);
 });
 
+test("voice navigation redirect is workspace-scoped", async () => {
+  const { service, events } = await makeService({ roomId: "voice-room", voiceSession: true });
+
+  service.emitVoiceNavigationRedirect("chat-target", "voice-room");
+
+  assert.deepEqual(events.at(-1), {
+    type: "room-redirect",
+    workspaceId: "ws1",
+    roomId: "chat-target",
+    fromWorkspaceId: "ws1",
+    fromRoomId: "voice-room",
+    scope: "workspace",
+  });
+});
+
 test("selecting a pinned foreign-home agent redirects without changing local active agent", async () => {
   const { service, workspace, events, root } = await makeService({
     agents: ["gaia", "artus"],

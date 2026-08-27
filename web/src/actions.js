@@ -123,8 +123,8 @@ export async function addWorkspace() {
 /**
  * @param {string} workspaceId
  * @param {string} roomId
- * @param {{ incognito?: boolean, parentRoomId?: string, voiceSession?: boolean }} [opts]
- *   Creation-only room flags. Existing rooms ignore them.
+ * @param {{ incognito?: boolean, parentRoomId?: string, voiceSession?: boolean, voiceNavigation?: boolean }} [opts]
+ *   Creation-only room flags plus explicit voice navigation transport.
  */
 export async function selectRoom(workspaceId, roomId, opts = {}) {
   try {
@@ -137,6 +137,7 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
         ...(opts.incognito ? { incognito: true } : {}),
         ...(opts.parentRoomId ? { parentRoomId: opts.parentRoomId } : {}),
         ...(opts.voiceSession ? { voiceSession: true } : {}),
+        ...(opts.voiceNavigation ? { voiceNavigation: true } : {}),
       }),
     });
     applySnapshotPayload(body);

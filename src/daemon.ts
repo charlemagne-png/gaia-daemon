@@ -730,7 +730,7 @@ export class Daemon {
     return record;
   }
 
-  async selectRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean }): Promise<SelectionPayload> {
+  async selectRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean; voiceNavigation?: boolean }): Promise<SelectionPayload> {
     const record = await this.registry.find(workspaceId);
     if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
 
@@ -739,6 +739,8 @@ export class Daemon {
     if (this.activeCall?.workspaceId === workspaceId && this.activeCall.info.roomId !== roomId) {
       throw new Error("Stop the active voice call before switching rooms.");
     }
+
+    const fromRoomId = this.currentRoom.get(workspaceId) ?? roomId;
 
     // `incognito` only takes effect when this call CREATES the room (immutable
     // seed in ensureWorkspaceRoom); selecting an existing room ignores it.
@@ -749,6 +751,7 @@ export class Daemon {
     const service = await this.serviceFor(workspaceId, roomId);
     const snapshot = await service.getSnapshot();
     this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
+    if (opts?.voiceNavigation) service.emitVoiceNavigationRedirect(service.roomId, fromRoomId);
     return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
   }
 
