@@ -818,7 +818,7 @@ async function routeTranscribedVoiceText(rawText, continuation) {
     return;
   }
   if (isInstantVoiceControlText(text)) {
-    transcriptMerger.flushReady();
+    transcriptMerger.cancel();
     await routeVoiceControlText(rawText);
     return;
   }
