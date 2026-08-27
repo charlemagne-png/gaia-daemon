@@ -307,6 +307,9 @@ export interface RoomState {
    * so one toggle covers the whole tree and `/berserk off` typed in ANY chat
    * of the tree clears it everywhere at once. */
   berserk?: true;
+  /** /teleport room-local gaiaport link flag. No parent/descendant inheritance:
+   * each room owns exactly its own blue-glow state. */
+  teleport?: boolean;
   agentCursors: Record<string, number>;
   /** Per-agent active-context floor: the transcript line index below which
    * content is NOT in the agent's live context (never loaded via a context-gate
@@ -1125,6 +1128,8 @@ export interface RoomSummary {
    * scanRoomActivity's parent-chain pass) so every listed room in the tree
    * shows the war paint, not just the root. */
   berserk?: boolean;
+  /** Room-local /teleport gaiaport link flag; never inherited by descendants. */
+  teleport?: boolean;
   /** Last transcript write (epoch ms) — the chat-list sort key, and the client's
    * unread signal: a room whose lastActivity exceeds the last value seen while it
    * was open has an unread agent reply. */
@@ -1247,6 +1252,8 @@ export interface Snapshot {
     /** EFFECTIVE /berserk deathmode for this room (own flag or any ancestor's —
      * see RoomState.berserk). Drives the client's deep-red war paint. */
     berserk?: boolean;
+    /** Room-local /teleport gaiaport link flag. Drives the client's blue glow. */
+    teleport?: boolean;
     /** Native desktop pet bindings for this room, keyed by agent. Empty/absent
      * means pets are off. Browser/iOS clients do not render an in-chat stand-in. */
     petBindings?: Record<string, string>;

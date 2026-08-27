@@ -136,11 +136,11 @@ function renderLayout() {
 
 registerRegion("layout", renderLayout);
 
-// /berserk deathmode war paint: one body class drives the deep-red room +
-// glowing border (styles.css `body.berserk`). Effective flag comes resolved
-// from the daemon (snapshot.room.berserk covers subrooms via the parent walk).
+// Room chrome flags: body classes drive the mode-specific glow CSS. Berserk is
+// effective (daemon resolves ancestor inheritance); teleport is room-local only.
 registerRegion("berserk", () => {
   document.body.classList.toggle("berserk", Boolean(state.snapshot?.room.berserk));
+  document.body.classList.toggle("teleport", Boolean(state.snapshot?.room.teleport));
 });
 
 // Drag handle between panes. Resizing rewrites the width CSS var on :root and

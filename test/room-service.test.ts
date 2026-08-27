@@ -3438,6 +3438,48 @@ test("/berserk: flag lives on the ROOT ancestor; subroom inherits via the walk; 
   assert.equal((await rootService.getSnapshot()).room.berserk, undefined);
 });
 
+test("/teleport on|off flips a durable room-local flag synchronously and commits a system note", async () => {
+  let release!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => (markStarted = resolve));
+  const hold = new Promise<void>((resolve) => (release = resolve));
+  const { service, root } = await makeService({
+    runtimeFactory: (agent) => {
+      const runtime = scriptedRuntime(agent, () => []);
+      runtime.send = async function* () {
+        markStarted();
+        yield { type: "text-delta", delta: "still " } as AgentEvent;
+        await hold;
+        yield { type: "text-delta", delta: "running" } as AgentEvent;
+      };
+      return runtime;
+    },
+  });
+  await service.init();
+  const turn = await service.sendMessage("hold the lane");
+  await started;
+
+  const toggle = await service.sendMessage("/teleport on");
+  assert.equal(toggle.status, "complete");
+  let state = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(state.teleport, true);
+  assert.equal((await service.getSnapshot()).room.teleport, true);
+  assert.equal(state.queue, undefined, "toggle did not queue behind the running turn");
+  let transcript = await (await RoomHandle.open(root, "default")).recentEvents(20);
+  assert.ok(transcript.some((event) => event.author === "system" && event.text === "teleport on — gaiaport link active"));
+
+  release();
+  await service.waitForIdle();
+  assert.equal(turn.status, "complete");
+
+  await service.sendMessage("/teleport off");
+  state = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(state.teleport, false);
+  assert.equal((await service.getSnapshot()).room.teleport, false);
+  transcript = await (await RoomHandle.open(root, "default")).recentEvents(20);
+  assert.ok(transcript.some((event) => event.author === "system" && event.text === "teleport off — gaiaport link inactive"));
+});
+
 test("/berserk is the plateau-breaker: flag lands synchronously, proclamation committed, and the command rewrites into a berserker-charge agent turn", async () => {
   const { service, root } = await makeService();
   await service.init();

@@ -528,6 +528,7 @@ export function normalizeRoomState(value: unknown): RoomState {
       ? { thinkingLevel: Math.floor(value.thinkingLevel) }
       : {}),
     ...(value.berserk === true ? { berserk: true as const } : {}),
+    ...(typeof value.teleport === "boolean" ? { teleport: value.teleport } : {}),
     agentCursors: cursorRecord(value.agentCursors),
     ...(Object.keys(contextFloors).length > 0 ? { contextFloors } : {}),
     ...(runtimeDetails && Object.keys(runtimeDetails).length > 0 ? { runtimeDetails } : {}),

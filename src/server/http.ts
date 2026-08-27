@@ -892,6 +892,13 @@ export class GaiaWebServer {
       return this.respond(response, () => this.daemon.setRoomFavorite(params![0], params![1], favorite));
     }
 
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/teleport$/))) {
+      const body = await parseBody(request);
+      const on = body && typeof body === "object" ? (body as Record<string, unknown>).on : undefined;
+      if (typeof on !== "boolean") return json(response, 400, { error: "Missing on boolean" });
+      return this.respond(response, () => this.daemon.setRoomTeleport(params![0], params![1], on));
+    }
+
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/bookmarks$/))) {
       const body = await parseBody(request);
       const eventId = stringField(body, "eventId")?.trim();

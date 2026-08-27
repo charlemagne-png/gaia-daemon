@@ -96,6 +96,23 @@ test("normalizeRoomState keeps bounded JSON plugin state and drops executable sh
   assert.deepEqual(state.pluginState, { rpg: { gm: "terra", roster: [{ name: "Ada" }] } });
 });
 
+test("teleport flag normalizes and scan surfaces it without inheritance", async () => {
+  assert.equal(normalizeRoomState({ teleport: true }).teleport, true);
+  assert.equal(normalizeRoomState({ teleport: false }).teleport, false);
+  assert.equal(normalizeRoomState({ teleport: "yes" }).teleport, undefined);
+
+  const root = await mkdtemp(join(tmpdir(), "gaia-teleport-"));
+  for (const id of ["parent", "child"] ) {
+    await mkdir(join(root, ".gaia", "rooms", id), { recursive: true });
+    await writeFile(join(root, ".gaia", "rooms", id, "transcript.jsonl"), "", "utf8");
+  }
+  await writeFile(join(root, ".gaia", "rooms", "parent", "state.json"), JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, teleport: true }), "utf8");
+  await writeFile(join(root, ".gaia", "rooms", "child", "state.json"), JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, parentRoomId: "parent" }), "utf8");
+  const summaries = await scanRoomActivity(root);
+  assert.equal(summaries.find((room) => room.id === "parent")?.teleport, true);
+  assert.equal(summaries.find((room) => room.id === "child")?.teleport, undefined);
+});
+
 test("voice session flag normalizes and scan surfaces it for presentation filters", async () => {
   const state = normalizeRoomState({ voiceSession: true });
   assert.equal(state.voiceSession, true);

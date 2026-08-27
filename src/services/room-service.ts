@@ -360,6 +360,10 @@ const TRANSCRIPT_STRUCTURAL_COMMANDS = new Set(["clear", "fork", "rewind"]);
 const BERSERK_CHARGE =
   "\u2694\uFE0F The berserker is summoned — a task in this room has hit a wall. Name the plateaued task and the exact wall, one line each. Then BREAK THROUGH: split the wall into independent attack vectors and summon an adversarial swarm of worker lanes — different agents, different angles — each attacking the problem AND the other lanes' approaches. Arbitrate every return SURVIVED/FELLED, force research where reasoning is thin, write the hardened lessons to memory, and report the breach plan plus the lanes you launched.";
 
+function teleportNote(on: boolean): string {
+  return on ? "teleport on — gaiaport link active" : "teleport off — gaiaport link inactive";
+}
+
 /** Command handlers, keyed by parsed type. Adding a command = one entry here
  * plus one line in SLASH_COMMANDS. Each returns the system reply text, with an
  * optional event discriminator when the transcript should render it specially. */
@@ -395,6 +399,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   recall: (service, command) => (command.type === "recall" ? service.runRecallCommand(command.agent, command.query) : Promise.resolve("")),
   gaiago: (service, command) => (command.type === "gaiago" ? service.runGaiagoCommand(command.text) : Promise.resolve("")),
   berserk: (service, command) => (command.type === "berserk" ? service.runBerserkCommand(command.off) : Promise.resolve("")),
+  teleport: (service, command) => (command.type === "teleport" ? service.runTeleportCommand(command.on) : Promise.resolve("")),
   "thanks-dario": (service, command) => (command.type === "thanks-dario" ? service.runThanksDarioCommand(command.sub) : Promise.resolve("")),
   // steer and cancel never reach this registry: both must run WHILE a task is
   // active, so sendMessage handles them before the busy-queue branch.
@@ -699,6 +704,18 @@ export class RoomService {
       task.endedAt = new Date().toISOString();
       this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
       void this.emitSnapshot();
+      return task;
+    }
+    // /teleport on|off: pure room metadata, no turn, no queue slot. Handled
+    // synchronously before the busy branch so the blue gaiaport flag flips even
+    // while an agent is streaming. Room-local only — descendants do not inherit.
+    if (command.type === "teleport" && command.on !== undefined) {
+      const task = this.createTask(text, []);
+      this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+      await this.setTeleport(command.on, { recordSystemNote: true, eventId: `system_${task.id}` });
+      task.status = "complete";
+      task.endedAt = new Date().toISOString();
+      this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
       return task;
     }
     // /berserk (on): the deathmode flag lands on the room tree IMMEDIATELY
@@ -3480,6 +3497,31 @@ export class RoomService {
       : "The lantern is lowered. Berserk deathmode is OFF for this room and every subroom \u2014 the marks are ashes, the walls cool. What survived, survives.";
   }
 
+  /** /teleport on|off — room-local gaiaport flag. Unlike /berserk, this does
+   * not walk parentRoomId and does not affect descendants: one room, one blue
+   * glow. */
+  async runTeleportCommand(on: boolean | undefined): Promise<string> {
+    if (on === undefined) return "usage: /teleport on|off — toggle this room's gaiaport link and blue glow";
+    await this.setTeleport(on);
+    return teleportNote(on);
+  }
+
+  /** Write this room's OWN teleport flag + broadcast. Public for the HTTP API;
+   * shared room metadata only, no runtime/harness interaction. */
+  async setTeleport(on: boolean, options: { recordSystemNote?: boolean; eventId?: string } = {}): Promise<void> {
+    await this.init();
+    await this.room.updateState((state) => {
+      state.teleport = on;
+    });
+    if (options.recordSystemNote) {
+      const event: RoomEvent = { id: options.eventId ?? newRoomEventId(), timestamp: new Date().toISOString(), author: "system", text: teleportNote(on) };
+      await this.room.appendEvent(event);
+      this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
+    }
+    await this.emitSnapshot();
+    await this.emitRoomsChanged();
+  }
+
   /** Room-scoped thinking override (mirrors setRole): writes ONLY
    * state.thinkingOverrides via room state, never agent.json, and never
    * respawns runners — the harness reads the resolved value per-turn
@@ -3921,6 +3963,7 @@ export class RoomService {
         eventTotal: all.length,
         ...(state.thanksDario ? { thanksDario: true } : {}),
         ...((await this.effectiveBerserk(state)) ? { berserk: true } : {}),
+        teleport: state.teleport === true,
         ...(state.activeAgent && this.workspace.agents[state.activeAgent] ? { activeAgent: state.activeAgent } : {}),
         ...(usageAccounts.length > 0 ? { usageAccounts: [...new Set(usageAccounts)] } : {}),
         ...(state.agentDialogue ? { agentDialogue: true } : {}),
@@ -4512,6 +4555,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.incognito ? { incognito: true } : {}),
             ...(voiceSession ? { voiceSession: true } : {}),
             ...(state.berserk ? { berserk: true } : {}),
+            ...(typeof state.teleport === "boolean" ? { teleport: state.teleport } : {}),
             ...(activity ? { lastActivity: activity } : {}),
           } as Snapshot["rooms"][number],
         };

@@ -786,6 +786,16 @@ export class Daemon {
     return this.refreshRoomList(workspaceId);
   }
 
+  /** Toggle this room's /teleport gaiaport flag. Room-local only: no tree walk,
+   * no harness/runtime involvement. */
+  async setRoomTeleport(workspaceId: string, roomId: string, on: boolean): Promise<SelectionPayload> {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    await service.setTeleport(on, { recordSystemNote: true });
+    const snapshot = await service.getSnapshot();
+    this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
+    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
+  }
+
   async setRoomBookmark(workspaceId: string, roomId: string, eventId: string, name: string): Promise<{ bookmark: RoomBookmark; rooms: Snapshot["rooms"] }> {
     const service = await this.serviceForExistingRoom(workspaceId, roomId);
     const bookmark = await service.setBookmark(eventId, name);

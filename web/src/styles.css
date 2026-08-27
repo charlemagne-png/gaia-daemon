@@ -2829,6 +2829,28 @@ body.studio-route #app { min-height: 100vh; }
 @media (max-width: 900px) { .studio-workspace { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .studio-panel *, .studio-popout * { scroll-behavior: auto !important; transition: none !important; } }
 
+/* ── /teleport gaiaport glow ──────────────────────────────────────────────
+   Room-local only (snapshot.room.teleport): a light-blue main-pane glow plus
+   sidebar card pulse. Excludes berserk so red deathmode remains authoritative. */
+body.teleport:not(.berserk) {
+  --border: #2b6f96; --accent: #7ec8ff; --accent2: #b9e6ff;
+}
+body.teleport:not(.berserk) .main {
+  border: 1px solid #7ec8ff;
+  border-radius: 10px;
+  box-shadow: inset 0 0 26px rgba(126, 200, 255, 0.14), 0 0 18px rgba(126, 200, 255, 0.42);
+}
+.nav-item.room-item.teleport:not(.berserk) {
+  background: rgba(126, 200, 255, 0.12);
+  border-radius: 6px;
+  animation: teleport-card 2.6s ease-in-out infinite;
+}
+@keyframes teleport-card {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(126, 200, 255, 0.72), 0 0 6px rgba(126, 200, 255, 0.28); }
+  50% { box-shadow: inset 0 0 0 1px #7ec8ff, 0 0 15px rgba(126, 200, 255, 0.68); }
+}
+@media (prefers-reduced-motion: reduce) { .nav-item.room-item.teleport:not(.berserk) { animation: none; box-shadow: inset 0 0 0 1px #7ec8ff, 0 0 10px rgba(126, 200, 255, 0.5); } }
+
 /* ── /berserk deathmode war paint ─────────────────────────────────────────
    One body class (render.js "berserk" region ← snapshot.room.berserk).
    Theme vars are overridden wholesale so EVERY surface runs deep red, in any
