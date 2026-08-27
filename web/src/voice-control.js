@@ -738,6 +738,9 @@ function spokenAckForLabel(label) {
   if (open) return `opening ${open[1].toUpperCase()}`;
   const normalized = label.toLowerCase();
   if (normalized === "gaiavoice off") return "stopped";
+  if (normalized.includes("send voice draft")) return "sent";
+  if (normalized.includes("clear voice draft")) return "cleared";
+  if (normalized.includes("draft empty")) return "nothing to send";
   if (normalized.includes("new chat")) return "new chat";
   if (normalized.includes("cancel")) return "stopped";
   if (normalized.includes("close")) return "closed";
@@ -805,6 +808,8 @@ let pendingConfirm = null;
 /** @type {{ pattern: RegExp, label: (m: RegExpExecArray) => string, confirm?: boolean, run: (match: RegExpExecArray) => void | Promise<void> }[]} */
 const NATIVE_COMMANDS = [
   { pattern: /^(gaiavoice (off|stop)|voice control off|stop listening)$/i, label: () => "GaiaVoice off", run: () => stopVoiceControl() },
+  { pattern: /^(go|send|send it|send this|send message|submit|dispatch)$/i, label: () => transcriptMerger.hasPending() ? "SEND voice draft" : "voice draft empty", run: () => sendVoiceDraft() },
+  { pattern: /^(clear|clear draft|scratch that|discard that|reset draft|start over)$/i, label: () => "CLEAR voice draft", run: () => clearVoiceDraft() },
   { pattern: /^open ([a-z])\s?(\d{2,3})$/i, label: (m) => `open ${m[1].toUpperCase()}${m[2]}`, run: (m) => routeRoomRef(`${m[1]}${m[2]}`) },
   { pattern: /^(new|create) (chat|room)$/i, label: () => "OPEN a new chat", confirm: true, run: async () => { await addRoom(); } },
   { pattern: /^(stop|cancel)( turn| that| the turn)?$/i, label: () => "CANCEL the running turn", confirm: true, run: () => cancelActiveTask() },
@@ -828,7 +833,6 @@ async function routeTranscribedVoiceText(rawText, continuation) {
     return;
   }
   if (isInstantVoiceControlText(text)) {
-    transcriptMerger.cancel();
     await routeVoiceControlText(rawText);
     return;
   }
