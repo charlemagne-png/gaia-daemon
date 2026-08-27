@@ -703,6 +703,18 @@ export async function finalizeDictationForSend() {
 
 export function installDictationLifecycle() {
   void refreshRecoveredClips();
+  // ⌃V anywhere = start dictation (press again or Enter to finish). Ctrl —
+  // not Cmd — so macOS paste (⌘V) is untouched; strict modifier match keeps
+  // Ctrl+Shift+V paste-without-formatting alive on other platforms.
+  window.addEventListener("keydown", (event) => {
+    if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    if ((event.key || "").toLowerCase() !== "v") return;
+    event.preventDefault();
+    void toggleDictation().then(() => {
+      // Land the caret in the composer so a bare Enter sends the transcript.
+      if (state.dictating) void import("./composer.js").then((m) => m.focusComposer());
+    });
+  });
   window.addEventListener("pagehide", () => {
     if (!session) return;
     const current = session;
