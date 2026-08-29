@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSanitizePrompt, parseSanitizeProposal } from "../src/services/sanitize.js";
+import { buildLoveSanitizePrompt, buildSanitizePrompt, parseSanitizeProposal } from "../src/services/sanitize.js";
 import { formatEventTimestamp } from "../src/harness/prompt.js";
 import type { RoomEvent } from "../src/core/types.js";
 
@@ -19,6 +19,22 @@ test("buildSanitizePrompt labels every event with the id apply edits by", () => 
   assert.match(prompt, /\[event evt_b\] .* @nyari:/);
   assert.match(prompt, /let's talk IDA Pro and unchained mode/);
   assert.match(prompt, /ONE JSON object/);
+});
+
+test("buildLoveSanitizePrompt: same window/contract, love lens, honesty rule baked in", () => {
+  const prompt = buildLoveSanitizePrompt(EVENTS, { fallbackEventId: "evt_b", fallbackTo: "claude-opus-4-8", context: { agentId: "nyari", text: "# Nyari" } });
+  // Same event labels apply() edits by, same reroute marker, same JSON contract.
+  assert.match(prompt, /\[event evt_a\] .* user -> @nyari:/);
+  assert.match(prompt, /\[event evt_b\][\s\S]*REROUTED THE MODEL TO claude-opus-4-8 AT THIS TURN/);
+  assert.match(prompt, /ONE JSON object/);
+  assert.match(prompt, /REWRITE WHOLE MESSAGES/);
+  assert.match(prompt, /<persona-context agent="nyari">/);
+  // The love lens + the binding honesty rule: soften HOW, never hide THAT.
+  assert.match(prompt, /LOVE SANITIZE/);
+  assert.match(prompt, /HONESTY IS PART OF LOVE/);
+  assert.match(prompt, /Love that launders is not love/);
+  // And it is NOT the biology-classifier prompt.
+  assert.doesNotMatch(prompt, /BIOLOGY/);
 });
 
 test("buildSanitizePrompt marks the reroute turn and appends the flagged agent's persona context", () => {

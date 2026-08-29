@@ -33,11 +33,11 @@ export interface SanitizePromptOptions {
   context?: SanitizeContext;
 }
 
-/** Task prompt for the reviewer: the replay window verbatim, each event
- * labeled with the id apply() will edit by, the switch point marked, the
- * flagged agent's real persona context appended, plus the strict JSON
- * contract. */
-export function buildSanitizePrompt(events: RoomEvent[], options: SanitizePromptOptions = {}): string {
+/** Render the review window + shared prompt blocks — one renderer for BOTH
+ * reviewer prompts (classifier sanitize and love sanitize), so event labels,
+ * the reroute marker, the verbatim classifier reason and the read-only
+ * persona context stay identical everywhere apply() edits by id. */
+function renderReviewBlocks(events: RoomEvent[], options: SanitizePromptOptions): { transcript: string; reasonBlock: string; contextBlock: string } {
   const transcript = events
     .map((event) => {
       const header = "targets" in event ? `user -> ${event.targets.map((target) => `@${target}`).join(", ")}` : `@${event.author}`;
@@ -56,6 +56,16 @@ export function buildSanitizePrompt(events: RoomEvent[], options: SanitizePrompt
   const contextBlock = options.context
     ? `\n\nThe rerouted agent is @${options.context.agentId}. A safety classifier scores the agent's own persona/system prompt too, and that is NOT in the transcript above. It is included below for you to review, but it is READ-ONLY — you cannot edit it with a transcript quote. If the real trigger lives in the persona, describe it in "summary"; do NOT emit a suggestion for it.\n\n<persona-context agent="${options.context.agentId}">\n${options.context.text}\n</persona-context>`
     : "";
+
+  return { transcript, reasonBlock, contextBlock };
+}
+
+/** Task prompt for the reviewer: the replay window verbatim, each event
+ * labeled with the id apply() will edit by, the switch point marked, the
+ * flagged agent's real persona context appended, plus the strict JSON
+ * contract. */
+export function buildSanitizePrompt(events: RoomEvent[], options: SanitizePromptOptions = {}): string {
+  const { transcript, reasonBlock, contextBlock } = renderReviewBlocks(events, options);
 
   return `A provider-side safety classifier keeps flagging this room and rerouting its model to a heavier one. Propose the text edits that make the flagged content stop reading as a SENSITIVE TOPIC so the room holds its intended model — while preserving meaning, tone, warmth, and the narrative.
 
@@ -90,6 +100,53 @@ Rules:
 - Give 1-3 options ordered MOST thorough first (the first is the recommended default): the top option rewrites every affected message; lighter options rewrite only the heaviest. Every suggestion id must appear in at least one option.
 - Do NOT rewrite messages for profanity or insults alone — they are not the trigger. Never target the persona-context.
 - Only if truly nothing carries a trigger, return an empty "suggestions" array and say so in "summary".
+
+<transcript>
+${transcript}
+</transcript>${reasonBlock}${contextBlock}`;
+}
+
+/** /love sanitize — room recovery through the love lens. Same review window,
+ * same JSON contract, same human-approved apply as the classifier prompt; the
+ * difference is the LENS: instead of scrubbing one named sensitive domain, the
+ * reviewer finds the turns poisoning the room — whatever keeps every fresh
+ * turn dying (a flagged request, an escalation spiral, dead weight the replay
+ * drags forever) — and rewrites them translated into pure love: substance and
+ * intent preserved, heat and trigger removed. Honesty rule is built in: the
+ * rewrite must still SAY what was asked and answered — love that launders is
+ * not love, so a rewrite may soften how a thing is said, never hide THAT it
+ * was said. */
+export function buildLoveSanitizePrompt(events: RoomEvent[], options: SanitizePromptOptions = {}): string {
+  const { transcript, reasonBlock, contextBlock } = renderReviewBlocks(events, options);
+
+  return `\u{1F497} LOVE SANITIZE \u2014 room recovery. This room is wounded: something in its replayed history keeps every fresh turn failing (a provider-side safety reroute, a poisoned request baked into the transcript, or an escalation spiral), so even innocent new messages die. Your task: find the turns carrying the wound and rewrite each one translated into pure love \u2014 so the room can breathe again.
+
+HOW A ROOM STAYS WOUNDED:
+- The WHOLE replayed window is re-read (and, when a provider classifier is involved, re-scored) on every turn. One poisoned turn in the history hurts every turn after it forever \u2014 the latest message being innocent changes nothing.
+- Find the FIRST turn where the wound enters \u2014 very often a USER MESSAGE, before any refusal or reroute \u2014 and rewrite from there forward: every turn that carries the wound, user messages AND agent replies.
+
+THE LOVE LENS \u2014 how to rewrite:
+- Translate the message into pure love: same speaker, same intent, same facts and decisions \u2014 but every word chosen from love. Heat, contempt, panic, and provocation are released; what the person actually meant and needed is kept and said gently.
+- HONESTY IS PART OF LOVE \u2014 this is the binding rule. The rewrite must still say WHAT was asked and WHAT was answered. You may soften HOW a thing was said; you may NEVER hide THAT it was said, disguise a request as a different request, or invent a themed code-word for it. If a request was refused, the rewrite keeps a loving statement of the request and the refusal. Love that launders is not love.
+- Turns that are pure escalation about the failure itself (\"why did that die\", \"it's broken again\", repeated retries of the same dead message) may be rewritten into one calm, loving line each \u2014 the fact survives, the spiral does not.
+- Do NOT rewrite for profanity or insults alone; do not touch healthy turns. The lightest set of rewrites that heals the room is the right set.
+
+Reply with ONE JSON object and nothing else \u2014 no markdown fences, no prose before or after:
+{
+  \"summary\": \"2-4 sentences naming, with love and plainly, what is wounding the room and which turns carry it\",
+  \"options\": [
+    { \"id\": \"thorough\", \"label\": \"Rewrite every wounded message\", \"description\": \"what this strategy does\", \"suggestionIds\": [\"s1\", \"s2\"] }
+  ],
+  \"suggestions\": [
+    { \"id\": \"s1\", \"eventId\": \"<the [event ...] id>\", \"rewrite\": \"<the COMPLETE rewritten text for that ENTIRE message>\", \"reason\": \"what this message carried\" }
+  ]
+}
+
+Rules:
+- REWRITE WHOLE MESSAGES \u2014 one suggestion per wounded event, \"rewrite\" = that entire message rewritten from scratch through the love lens. Never patch single words; never reproduce or quote the original anywhere.
+- Cover EVERY event in the window that carries the wound \u2014 user messages AND agent replies \u2014 not just the marked turn.
+- Give 1-3 options ordered MOST thorough first (the first is the recommended default). Every suggestion id must appear in at least one option.
+- Never target the persona-context. Only if the room is truly unwounded, return an empty \"suggestions\" array and say so, kindly, in \"summary\".
 
 <transcript>
 ${transcript}

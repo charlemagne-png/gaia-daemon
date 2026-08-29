@@ -23,6 +23,10 @@ test("parseCommand: known commands and arguments", () => {
   assert.deepEqual(parseCommand("/love"), { type: "love" });
   assert.deepEqual(parseCommand("/love off"), { type: "love", off: true });
   assert.deepEqual(parseCommand("/love OFF"), { type: "love", off: true });
+  // /love sanitize — room recovery: reviewer proposes love-toned rewrites of
+  // the wounded turns; human-approved apply, never automatic.
+  assert.deepEqual(parseCommand("/love sanitize"), { type: "love", sanitize: true });
+  assert.deepEqual(parseCommand("/love SANITIZE"), { type: "love", sanitize: true });
   assert.deepEqual(parseCommand("/thinking @gaia off"), { type: "thinking", agent: "gaia", level: "off" });
   // GAIA-THINK protocol level: bare numeric or `off` (single token) → thinking-level.
   assert.deepEqual(parseCommand("/thinking 7"), { type: "thinking-level", level: 7 });

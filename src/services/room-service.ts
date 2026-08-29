@@ -65,7 +65,7 @@ import { readOptional, renderAttachmentLines, renderRoomTranscript } from "../ha
 import { readUserNameSetting } from "./user-name.js";
 import { HELP_TEXT, SLASH_COMMANDS, hasExplicitMention, mentionedAgents, parseCommand, planMentionRoute, validateThinkingLevel, type SlashCommand } from "./commands.js";
 import { loadCommandPlugins, type CommandPlugin, type PluginContext, type PluginPanel } from "./plugins.js";
-import { SANITIZE_REVIEWER_ID, buildSanitizePrompt, parseSanitizeProposal, type SanitizeContext } from "./sanitize.js";
+import { SANITIZE_REVIEWER_ID, buildLoveSanitizePrompt, buildSanitizePrompt, parseSanitizeProposal, type SanitizeContext } from "./sanitize.js";
 import { applyEventToDetails, finalizeInterruptedTools, runAgentTurn } from "./turns.js";
 import type { EpisodeCapture } from "./memory-service.js";
 import { formatDreamProposal } from "./consolidate.js";
@@ -399,7 +399,8 @@ const COMMANDS: Record<string, CommandHandler> = {
   recall: (service, command) => (command.type === "recall" ? service.runRecallCommand(command.agent, command.query) : Promise.resolve("")),
   gaiago: (service, command) => (command.type === "gaiago" ? service.runGaiagoCommand(command.text) : Promise.resolve("")),
   berserk: (service, command) => (command.type === "berserk" ? service.runBerserkCommand(command.off) : Promise.resolve("")),
-  love: (service, command) => (command.type === "love" ? service.runLoveCommand(command.off) : Promise.resolve("")),
+  love: (service, command) =>
+    command.type === "love" ? (command.sanitize ? service.runLoveSanitizeCommand() : service.runLoveCommand(command.off)) : Promise.resolve(""),
   teleport: (service, command) => (command.type === "teleport" ? service.runTeleportCommand(command.on) : Promise.resolve("")),
   "thanks-dario": (service, command) => (command.type === "thanks-dario" ? service.runThanksDarioCommand(command.sub) : Promise.resolve("")),
   // steer and cancel never reach this registry: both must run WHILE a task is
@@ -2726,7 +2727,24 @@ export class RoomService {
    * and persist his proposal. Read-only — apply is a separate, human-approved
    * step. The reviewer runs through the ordinary summon path (sandboxed child
    * room, any harness/provider), so there is nothing harness-specific here. */
-  async sanitizePreview(): Promise<SanitizeProposal> {
+  /** /love sanitize — room recovery built into lovemode. Same machinery as the
+   * thanks-dario review (reviewer persona → proposal → popup → human-approved
+   * apply; originals preserved in redactions.jsonl), but the reviewer reads
+   * through the LOVE lens: find the turns wounding the room and rewrite them
+   * translated into pure love — substance and honesty kept, heat removed. */
+  async runLoveSanitizeCommand(): Promise<string> {
+    const proposal = await this.sanitizePreview({ lens: "love" });
+    const window = `${proposal.window} message${proposal.window === 1 ? "" : "s"}`;
+    if (proposal.parseError) {
+      return `\uD83D\uDC97 The reviewer read ${window} with love, but the reply did not parse as suggestions (${proposal.parseError}). The raw notes are in the review popup.`;
+    }
+    if (proposal.suggestions.length === 0) {
+      return `\uD83D\uDC97 The reviewer read ${window} with love and found no wound to heal. ${proposal.summary}`.trim();
+    }
+    return `\uD83D\uDC97 The reviewer read ${window} with love: ${proposal.suggestions.length} healing rewrite${proposal.suggestions.length === 1 ? "" : "s"} ready in the review popup. Nothing is rewritten until you approve; the originals stay preserved on disk.`;
+  }
+
+  async sanitizePreview(options: { lens?: "love" } = {}): Promise<SanitizeProposal> {
     const host = this.options.summonHost;
     if (!host) throw new Error("Summons are not available in this workspace — the reviewer needs them to run.");
     if (!this.workspace.agents[SANITIZE_REVIEWER_ID]) {
@@ -2775,10 +2793,11 @@ export class RoomService {
       });
     }
     const context = flaggedAgentId ? await this.buildPersonaContext(flaggedAgentId) : undefined;
+    const buildPrompt = options.lens === "love" ? buildLoveSanitizePrompt : buildSanitizePrompt;
     const reply = await host.summonAndWait(
       this.roomId,
       SANITIZE_REVIEWER_ID,
-      buildSanitizePrompt(events, {
+      buildPrompt(events, {
         ...(fallbackEvent ? { fallbackEventId: fallbackEvent.id } : {}),
         ...(fallbackEvent && "details" in fallbackEvent && fallbackEvent.details?.modelFallback
           ? { fallbackTo: fallbackEvent.details.modelFallback.to, fallbackReason: fallbackEvent.details.modelFallback.reason }
