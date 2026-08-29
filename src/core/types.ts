@@ -307,6 +307,10 @@ export interface RoomState {
    * so one toggle covers the whole tree and `/berserk off` typed in ANY chat
    * of the tree clears it everywhere at once. */
   berserk?: true;
+  /** /love lovemode. Same tree semantics as berserk: lives ONLY on the ROOT
+   * ancestor room; descendants inherit via the parentRoomId walk, and
+   * `/love off` typed in ANY chat of the tree clears it everywhere. */
+  love?: true;
   /** /teleport room-local gaiaport link flag. No parent/descendant inheritance:
    * each room owns exactly its own blue-glow state. */
   teleport?: boolean;
@@ -1128,6 +1132,9 @@ export interface RoomSummary {
    * scanRoomActivity's parent-chain pass) so every listed room in the tree
    * shows the war paint, not just the root. */
   berserk?: boolean;
+  /** EFFECTIVE /love lovemode (own flag or any ancestor's — same tree
+   * resolution as berserk) so every listed room in the tree glows pink. */
+  love?: boolean;
   /** Room-local /teleport gaiaport link flag; never inherited by descendants. */
   teleport?: boolean;
   /** Last transcript write (epoch ms) — the chat-list sort key, and the client's
@@ -1252,6 +1259,9 @@ export interface Snapshot {
     /** EFFECTIVE /berserk deathmode for this room (own flag or any ancestor's —
      * see RoomState.berserk). Drives the client's deep-red war paint. */
     berserk?: boolean;
+    /** EFFECTIVE /love lovemode for this room (own flag or any ancestor's —
+     * see RoomState.love). Drives the client's pink glow. */
+    love?: boolean;
     /** Room-local /teleport gaiaport link flag. Drives the client's blue glow. */
     teleport?: boolean;
     /** Native desktop pet bindings for this room, keyed by agent. Empty/absent

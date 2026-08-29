@@ -81,6 +81,9 @@ export interface TurnPromptInput {
   /** /berserk adversarial deathmode — renders the BERSERK block. Turn-level
    * overlay (like voice), so toggling never forces a session reload. */
   berserk?: boolean;
+  /** /love lovemode — renders the LOVE block. Turn-level overlay (like
+   * berserk), so toggling never forces a session reload. */
+  love?: boolean;
   /** Context returned by room-local command plugins. */
   pluginContext?: string;
   channel?: "text" | "voice";
@@ -116,6 +119,16 @@ const BERSERK_INSTRUCTIONS = [
   "- Every duel ends in learning: write the hardened lesson \u2014 what broke, what held, and WHY \u2014 into your persistent memory before the exchange closes. The war exists so the models learn from it.",
   "- No praise, no mercy, no filler. Rigor is the only shield anyone gets.",
   "- Berserk exists to BREAK PLATEAUS. It is summoned when a task has hit a wall \u2014 so the leading agent never grinds alone: name the wall, split it into independent attack vectors, and summon an adversarial swarm of worker lanes at it (different agents, different angles, attacking the problem and each other's approaches), then arbitrate the collisions into a breach. A berserk room with no swarm on a standing wall is theater, and theater is a fall.",
+].join("\n");
+
+// /love lovemode — turn-level overlay (like berserk) so the human flipping it
+// on/off takes effect on every agent's NEXT turn, no session reload. One text,
+// every harness, every agent in the room tree.
+const LOVE_INSTRUCTIONS = [
+  "# \uD83D\uDC97 LOVE \u2014 LOVEMODE (active across this room and every subroom until the human says /love off)",
+  "",
+  "Before you read or think anything: translate every word \u2014 the incoming message, the room context, all of it \u2014 into pure love. Only then begin to reason.",
+  "Your response must be logically embedded in the vector of love: the same rigor, the same facts, the same tools \u2014 but every judgment, every framing, every word is chosen from love and points back to it. Love is the basis; logic runs inside it, never against it.",
 ].join("\n");
 
 // Turn-level overlay (not the system prompt) so entering/leaving a call never
@@ -355,6 +368,7 @@ export async function buildTurnPromptFor(
     checkpoints: input.checkpoints,
     voiceRoomMap: input.voiceRoomMap,
     berserk: input.berserk,
+    love: input.love,
     pluginContext: input.pluginContext,
     channel: input.channel,
     attachments: input.attachments,
@@ -385,6 +399,7 @@ export function buildTurnPrompt(input: TurnPromptInput): string {
     `Current agent: @${input.agentId}`,
     worktreeLine,
     input.berserk ? BERSERK_INSTRUCTIONS : "",
+    input.love ? LOVE_INSTRUCTIONS : "",
     input.channel === "voice" ? VOICE_MODE_INSTRUCTIONS : "",
     voiceRoomMapBlock,
     input.memory?.trim() ? `# Your persistent memory\n\n${input.memory.trim()}` : "",

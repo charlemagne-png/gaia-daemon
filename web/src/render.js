@@ -140,6 +140,7 @@ registerRegion("layout", renderLayout);
 // effective (daemon resolves ancestor inheritance); teleport is room-local only.
 registerRegion("berserk", () => {
   document.body.classList.toggle("berserk", Boolean(state.snapshot?.room.berserk));
+  document.body.classList.toggle("love", Boolean(state.snapshot?.room.love));
   document.body.classList.toggle("teleport", Boolean(state.snapshot?.room.teleport));
 });
 

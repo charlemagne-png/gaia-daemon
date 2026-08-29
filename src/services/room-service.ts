@@ -399,6 +399,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   recall: (service, command) => (command.type === "recall" ? service.runRecallCommand(command.agent, command.query) : Promise.resolve("")),
   gaiago: (service, command) => (command.type === "gaiago" ? service.runGaiagoCommand(command.text) : Promise.resolve("")),
   berserk: (service, command) => (command.type === "berserk" ? service.runBerserkCommand(command.off) : Promise.resolve("")),
+  love: (service, command) => (command.type === "love" ? service.runLoveCommand(command.off) : Promise.resolve("")),
   teleport: (service, command) => (command.type === "teleport" ? service.runTeleportCommand(command.on) : Promise.resolve("")),
   "thanks-dario": (service, command) => (command.type === "thanks-dario" ? service.runThanksDarioCommand(command.sub) : Promise.resolve("")),
   // steer and cancel never reach this registry: both must run WHILE a task is
@@ -1764,6 +1765,7 @@ export class RoomService {
       const userName = await readUserNameSetting();
       const pluginContext = await this.pluginPrompt(state, target);
       const berserk = await this.effectiveBerserk(state);
+      const love = await this.effectiveLove(state);
       const voiceRoomMap = options.voice ? await this.buildVoiceRoomMap() : undefined;
 
       let turn: Awaited<ReturnType<typeof runAgentTurn>>;
@@ -1782,6 +1784,7 @@ export class RoomService {
             thinking: options.thinking ?? state.thinkingOverrides[target],
             ...(state.thinkingLevel ? { protocolThinkingLevel: state.thinkingLevel } : {}),
             ...(berserk ? { berserk: true } : {}),
+            ...(love ? { love: true } : {}),
             recall,
             ...(state.bookmarks?.length ? { checkpoints: state.bookmarks } : {}),
             ...(voiceRoomMap ? { voiceRoomMap } : {}),
@@ -3472,6 +3475,58 @@ export class RoomService {
     await this.emitRoomsChanged();
   }
 
+  /** EFFECTIVE /love lovemode for this room: its own flag OR any ancestor's
+   * (the flag lives only on the ROOT ancestor — see RoomState.love). Same
+   * read-only, cycle-guarded parent walk as effectiveBerserk. */
+  async effectiveLove(state: RoomState): Promise<boolean> {
+    if (state.love) return true;
+    const seen = new Set<string>([this.roomId]);
+    let parentId = state.parentRoomId;
+    while (parentId && !seen.has(parentId) && seen.size <= 32) {
+      seen.add(parentId);
+      const parent = normalizeRoomState(await readJson(workspacePaths.roomState(this.workspace.rootDir, parentId)));
+      if (parent.love) return true;
+      parentId = parent.parentRoomId;
+    }
+    return false;
+  }
+
+  /** Write this room's OWN love flag + broadcast. Public so a descendant's
+   * /love routes the root-room write through the root's resident service
+   * (options.roomPeer) — single-writer rule, never a foreign disk write. */
+  async applyLove(on: boolean): Promise<void> {
+    await this.room.updateState((state) => {
+      if (on) state.love = true;
+      else delete state.love;
+    });
+    await this.emitSnapshot();
+    await this.emitRoomsChanged();
+  }
+
+  /** /love [off] — lovemode for the WHOLE room tree. Flag set/cleared on the
+   * ROOT ancestor (descendants inherit via the parent walk), so `/love off`
+   * typed in ANY chat of the tree stands the whole tree down. The love
+   * protocol itself rides every turn prompt via AgentInput.love (shared seam). */
+  async runLoveCommand(off?: boolean): Promise<string> {
+    const on = !off;
+    const state = await this.room.state();
+    const rootId = await this.berserkRootId(state);
+    if (rootId === this.roomId) {
+      await this.applyLove(on);
+    } else {
+      const peer = this.options.roomPeer ? await this.options.roomPeer(rootId) : undefined;
+      if (peer) await peer.applyLove(on);
+      else await this.applyLove(on); // no peer hook (tests): this room only
+      // An off from anywhere clears a stray local flag too.
+      if (!on && state.love) await this.room.updateState((s) => void delete s.love);
+      await this.emitSnapshot();
+      await this.emitRoomsChanged();
+    }
+    return on
+      ? "\uD83D\uDC97 LOVEMODE. This room and every subroom beneath it now glow pink. From this moment, every word that arrives is translated into pure love before any agent reads or thinks \u2014 and every response is logically embedded in the vector of love, until the human says /love off."
+      : "Lovemode is OFF for this room and every subroom \u2014 the pink fades, the words stand plain again.";
+  }
+
   /** /berserk [off] — adversarial deathmode for the WHOLE room tree. The flag
    * is set/cleared on the ROOT ancestor (descendants inherit via the parent
    * walk), so `/berserk off` typed in ANY chat of the tree — root, subroom, or
@@ -3963,6 +4018,7 @@ export class RoomService {
         eventTotal: all.length,
         ...(state.thanksDario ? { thanksDario: true } : {}),
         ...((await this.effectiveBerserk(state)) ? { berserk: true } : {}),
+        ...((await this.effectiveLove(state)) ? { love: true } : {}),
         teleport: state.teleport === true,
         ...(state.activeAgent && this.workspace.agents[state.activeAgent] ? { activeAgent: state.activeAgent } : {}),
         ...(usageAccounts.length > 0 ? { usageAccounts: [...new Set(usageAccounts)] } : {}),
@@ -4555,6 +4611,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.incognito ? { incognito: true } : {}),
             ...(voiceSession ? { voiceSession: true } : {}),
             ...(state.berserk ? { berserk: true } : {}),
+            ...(state.love ? { love: true } : {}),
             ...(typeof state.teleport === "boolean" ? { teleport: state.teleport } : {}),
             ...(activity ? { lastActivity: activity } : {}),
           } as Snapshot["rooms"][number],
@@ -4566,14 +4623,18 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
   // /berserk lives only on the ROOT ancestor — propagate the war paint down
   // the parent chain so every listed descendant shows it too (cycle-guarded).
   const byId = new Map(summaries.map((summary) => [summary.id, summary]));
-  const inherited = (summary: Snapshot["rooms"][number]): boolean => {
+  const inherited = (summary: Snapshot["rooms"][number], flag: "berserk" | "love"): boolean => {
     const seen = new Set<string>();
     for (let current: Snapshot["rooms"][number] | undefined = summary; current && !seen.has(current.id); ) {
-      if (current.berserk) return true;
+      if (current[flag]) return true;
       seen.add(current.id);
       current = current.parentRoomId ? byId.get(current.parentRoomId) : undefined;
     }
     return false;
   };
-  return summaries.map((summary) => (summary.berserk || !inherited(summary) ? summary : { ...summary, berserk: true }));
+  return summaries.map((summary) => {
+    const berserk = summary.berserk || inherited(summary, "berserk");
+    const love = summary.love || inherited(summary, "love");
+    return berserk === Boolean(summary.berserk) && love === Boolean(summary.love) ? summary : { ...summary, ...(berserk ? { berserk: true } : {}), ...(love ? { love: true } : {}) };
+  });
 }

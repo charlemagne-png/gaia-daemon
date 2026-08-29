@@ -41,6 +41,10 @@ export interface AgentInput {
    * by RoomService via the parentRoomId walk). Rides into the turn prompt's
    * BERSERK block through the shared seam — uniform for every harness. */
   berserk?: boolean;
+  /** /love lovemode is active for this room's tree (resolved by RoomService
+   * via the parentRoomId walk). Rides into the turn prompt's LOVE block
+   * through the shared seam — uniform for every harness. */
+  love?: boolean;
   /** Auto-retrieved memory block for this turn ("" / absent = nothing cleared
    * the relevance gate). Turn-level overlay, never part of the session. */
   recall?: string;

@@ -3438,6 +3438,49 @@ test("/berserk: flag lives on the ROOT ancestor; subroom inherits via the walk; 
   assert.equal((await rootService.getSnapshot()).room.berserk, undefined);
 });
 
+test("/love: same tree semantics as berserk — root flag, child inherits, off from the child clears the tree", async () => {
+  const { service: rootService, workspace, root } = await makeService();
+  await rootService.init();
+  await mkdir(join(root, ".gaia", "rooms", "child"), { recursive: true });
+  await writeFile(
+    workspacePaths.roomState(root, "child"),
+    JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, parentRoomId: "default", subroom: true }),
+    "utf8",
+  );
+  const child = await RoomService.open({
+    workspaceId: "ws1",
+    workspace,
+    roomId: "child",
+    memoryStore: new MemoryStore(),
+    runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: "hi" } as AgentEvent]),
+    roomPeer: async (roomId) => {
+      assert.equal(roomId, "default");
+      return rootService;
+    },
+  });
+  await child.init();
+
+  const onReply = await child.runLoveCommand();
+  assert.match(onReply, /LOVEMODE/);
+  const rootState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(rootState.love, true, "flag lives on the root ancestor");
+  const childState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "child")));
+  assert.equal(childState.love, undefined, "descendants inherit, never carry the flag");
+
+  assert.equal((await rootService.getSnapshot()).room.love, true);
+  assert.equal((await child.getSnapshot()).room.love, true);
+  const rooms = await scanRoomActivity(root);
+  assert.equal(rooms.find((room) => room.id === "default")?.love, true);
+  assert.equal(rooms.find((room) => room.id === "child")?.love, true);
+
+  const offReply = await child.runLoveCommand(true);
+  assert.match(offReply, /OFF/);
+  const clearedRoot = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(clearedRoot.love, undefined);
+  assert.equal((await child.getSnapshot()).room.love, undefined);
+  assert.equal((await rootService.getSnapshot()).room.love, undefined);
+});
+
 test("/teleport on|off flips a durable room-local flag synchronously and commits a system note", async () => {
   let release!: () => void;
   let markStarted!: () => void;

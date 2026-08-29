@@ -268,7 +268,7 @@ function RoomNode(room, childrenOf, depth) {
       h(
         "button",
         {
-          class: `nav-item room-item ${room.isCurrent ? "active" : ""} ${focused ? "focused" : ""} ${room.berserk ? "berserk" : ""} ${room.teleport ? "teleport" : ""}`,
+          class: `nav-item room-item ${room.isCurrent ? "active" : ""} ${focused ? "focused" : ""} ${room.berserk ? "berserk" : ""} ${room.love ? "love" : ""} ${room.teleport ? "teleport" : ""}`,
           title: `${label} — ${room.path}`,
           // Clicking makes this the delete target (the ⌘⌫ / Del chord acts on
           // it) and opens it. Re-clicking the current room just re-targets it.
@@ -310,6 +310,7 @@ function RoomNode(room, childrenOf, depth) {
           room.favorite ? h("span", { class: "room-star", title: "favorite", text: "★" }) : null,
           room.incognito ? h("span", { class: "room-incognito", title: "incognito — no memory", text: "🕶" }) : null,
           room.berserk ? h("span", { class: "room-berserk", title: "BERSERK — adversarial deathmode", text: "⚔\uFE0F" }) : null,
+          room.love ? h("span", { class: "room-love", title: "LOVE — lovemode", text: "💗" }) : null,
           // Living-titles law: titles carry purpose, so the card itself names the
           // operator — agent + model ride beside the status dot.
           RoomAgentChip(room),

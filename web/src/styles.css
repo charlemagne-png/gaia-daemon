@@ -2884,6 +2884,40 @@ body.berserk .main {
   50% { box-shadow: inset 0 0 0 1px #ff2b1f, 0 0 16px rgba(255, 30, 20, 0.8); }
 }
 @media (prefers-reduced-motion: reduce) { .nav-item.room-item.berserk { animation: none; box-shadow: inset 0 0 0 1px #ff2b1f, 0 0 10px rgba(255, 30, 20, 0.55); } }
+
+/* ── /love lovemode pink glow ─────────────────────────────────────────
+   One body class (render.js "berserk" region ← snapshot.room.love). Theme vars
+   overridden wholesale so every surface runs warm pink; the main pane glows
+   with a soft pulsing halo. Excludes berserk — red deathmode stays authoritative. */
+body.love:not(.berserk) {
+  --bg: #1f0812; --bg2: #2a0b18; --bg3: #3a1122; --fg: #ffe1ef; --muted: #c07a9b;
+  --border: #7a2450; --accent: #ff5fa2; --accent2: #ff8cc2;
+}
+body.love:not(.berserk) .main {
+  border: 1px solid #ff5fa2;
+  border-radius: 10px;
+  animation: love-glow 2.6s ease-in-out infinite;
+}
+.room-love { flex: 0 0 auto; font-size: 0.82em; filter: drop-shadow(0 0 3px rgba(255, 95, 162, 0.9)); }
+@keyframes love-glow {
+  0%, 100% { box-shadow: inset 0 0 30px rgba(255, 95, 162, 0.14), 0 0 14px rgba(255, 95, 162, 0.4); }
+  50% { box-shadow: inset 0 0 48px rgba(255, 95, 162, 0.28), 0 0 28px rgba(255, 95, 162, 0.75); }
+}
+@media (prefers-reduced-motion: reduce) { body.love:not(.berserk) .main { animation: none; box-shadow: 0 0 16px rgba(255, 95, 162, 0.55); } }
+
+/* /love: the room's CARD glows pink wherever it's listed — sidebar included —
+   until the mode is off (nav-item.love ← RoomSummary.love, tree-resolved
+   server-side). Berserk red outranks it. */
+.nav-item.room-item.love:not(.berserk) {
+  background: rgba(120, 24, 70, 0.32);
+  border-radius: 6px;
+  animation: love-card 2.6s ease-in-out infinite;
+}
+@keyframes love-card {
+  0%, 100% { box-shadow: inset 0 0 0 1px #ff5fa2, 0 0 6px rgba(255, 95, 162, 0.3); }
+  50% { box-shadow: inset 0 0 0 1px #ff5fa2, 0 0 15px rgba(255, 95, 162, 0.7); }
+}
+@media (prefers-reduced-motion: reduce) { .nav-item.room-item.love:not(.berserk) { animation: none; box-shadow: inset 0 0 0 1px #ff5fa2, 0 0 10px rgba(255, 95, 162, 0.5); } }
 .voice-console-header { color: var(--muted); font-size: 10px; letter-spacing: 0.4px; text-transform: lowercase; padding-bottom: 2px; border-bottom: 0; margin-bottom: 3px; }
 .voice-console-header strong { color: var(--accent); font-weight: 600; }
 .voice-console-draft { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 8px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--ink) 82%, transparent); color: var(--muted); }
