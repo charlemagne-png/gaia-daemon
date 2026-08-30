@@ -25,7 +25,7 @@ import { join } from "node:path";
 import type { SqliteDatabase as DatabaseSync } from "../core/sqlite.js";
 import { openSqlite } from "../core/sqlite.js";
 import { workspacePaths } from "../core/paths.js";
-import type { EpisodeOutcome } from "./episodes.js";
+import type { Episode, EpisodeOutcome } from "./episodes.js";
 import { readEpisodesFrom } from "./episodes.js";
 import type { FactSource } from "./facts.js";
 import { readFactOpsFrom, sharedFactsDir, WORKSPACE_FACTS_AGENT } from "./facts.js";
@@ -421,6 +421,19 @@ function deleteRoomChunks(db: DatabaseSync, roomId: string, fromIdx: number): vo
  * pass only visits rooms that still exist on disk and has no orphan-prune, so
  * without this a deleted room's rows would linger and keep matching recall
  * forever. Idempotent; derived data, so always safe to run. */
+/** Sanitize-apply propagation for the DERIVED index: the transcript was
+ * rewritten IN PLACE (same line count), which the incremental chunk sync
+ * cannot see — closed chunks would keep serving the original text to recall
+ * forever. Drop the room's chunks + sync cursor so the next sync re-chunks the
+ * sanitized transcript from scratch, and re-upsert the rewritten episodes
+ * (INSERT OR REPLACE by id, same shape the normal episode sync writes — the
+ * agent's jsonl cursor never moves). Derived data only; always safe. */
+export function rewriteRoomIndex(db: DatabaseSync, roomId: string, episodes: Array<{ agentId: string; items: Episode[] }>): void {
+  deleteRoomChunks(db, roomId, 0);
+  db.prepare("DELETE FROM rooms WHERE room_id = ?").run(roomId);
+  for (const source of episodes) applyEpisodes(db, source.agentId, source.items);
+}
+
 export function purgeRoomIndex(db: DatabaseSync, roomId: string): void {
   deleteRoomChunks(db, roomId, 0);
   db.prepare("DELETE FROM rooms WHERE room_id = ?").run(roomId);

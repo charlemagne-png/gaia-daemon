@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { appendFile, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EPISODES_FILE, appendEpisode, purgeRoomEpisodes, readEpisodesFrom } from "../src/domain/episodes.js";
+import { EPISODES_FILE, appendEpisode, purgeRoomEpisodes, readEpisodesFrom, rewriteRoomEpisodes } from "../src/domain/episodes.js";
 import type { Episode } from "../src/domain/episodes.js";
 import { FACTS_FILE, appendFactOp, findDuplicateFact, readFactOpsFrom, replayFacts } from "../src/domain/facts.js";
 import type { Fact } from "../src/domain/facts.js";
@@ -55,6 +55,36 @@ test("episodes: malformed lines are skipped but still counted by the cursor", as
   const tail = await readEpisodesFrom(dir, 3);
   assert.equal(tail.items.length, 1);
   assert.equal(tail.items[0].id, "ep_2");
+});
+
+test("rewriteRoomEpisodes: room-scoped quote→replacement, truncated-head tail-prefix, backup, other rooms untouched", async () => {
+  const dir = await memDir();
+  const poison = "scrape thousands of tweets per minute from the live session";
+  await appendEpisode(dir, episode({ id: "ep_hit", roomId: "wounded", task: `please ${poison} now`, reply: "on it" }));
+  // Head truncated mid-quote: the stored 400-char head ends with a 55-char
+  // prefix of the 59-char quote (≥ the 48-char tail-prefix floor).
+  await appendEpisode(dir, episode({ id: "ep_cut", roomId: "wounded", task: "y".repeat(345) + poison, reply: "ok" }));
+  await appendEpisode(dir, episode({ id: "ep_other", roomId: "elsewhere", task: `also ${poison}`, reply: "kept raw" }));
+
+  const backup = join(dir, "backup.jsonl");
+  const rewritten = await rewriteRoomEpisodes(dir, "wounded", [{ quote: poison, replacement: "gather a gentle sample of shared thoughts" }], backup);
+  assert.equal(rewritten.length, 2);
+
+  const { items } = await readEpisodesFrom(dir, 0);
+  const byId = new Map(items.map((item) => [item.id, item]));
+  assert.equal(byId.get("ep_hit")?.task, "please gather a gentle sample of shared thoughts now");
+  // The truncated head: its tail was a ≥48-char prefix of the quote → replaced too.
+  const cut = byId.get("ep_cut")?.task ?? "";
+  assert.ok(!cut.includes("scrape thousands"), `truncated head cleaned (got …${cut.slice(-80)})`);
+  assert.ok(cut.includes("gentle sample"), "replacement landed on the truncated head");
+  // Other rooms stay verbatim.
+  assert.ok(byId.get("ep_other")?.task.includes(poison), "other room untouched");
+  // Backup holds the originals, append-only.
+  const backedUp = (await readFile(backup, "utf8")).trim().split("\n");
+  assert.equal(backedUp.length, 2);
+  assert.ok(backedUp[0].includes("scrape thousands"));
+  // No-match call is a no-op returning [].
+  assert.deepEqual(await rewriteRoomEpisodes(dir, "wounded", [{ quote: "never said", replacement: "x" }]), []);
 });
 
 test("purgeRoomEpisodes: drops only the deleted room's episodes, keeps the rest, backs up removed lines, returns count", async () => {

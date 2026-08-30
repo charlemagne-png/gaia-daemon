@@ -153,6 +153,11 @@ export interface RoomMemoryHooks {
    * are self-matches and excluded (MEMORY-DESIGN.md §7). */
   autoRecallBlock(agentId: string, query: string, context?: ActiveContextRef): Promise<string>;
   capture(agentId: string, capture: EpisodeCapture): Promise<void>;
+  /** Sanitize-apply propagation: approved transcript edits rewrite the room's
+   * HISTORICAL context too (episodes + derived index), or auto-recall
+   * re-injects the redacted originals on the very next turn. Optional — a
+   * hookless workspace just skips the propagation. */
+  applyRedactions?(roomId: string, edits: Array<{ quote: string; replacement: string }>, backupDir?: string): Promise<number>;
   consolidate(agentId: string, options?: { force?: boolean; propose?: boolean }): Promise<ConsolidateResult>;
   /** Dream v2 apply: commits a standing dream-proposal.json (backs `/dream
    * [agent] --apply`, mirrors the CLI/harness route). null = no proposal
@@ -2949,6 +2954,7 @@ export class RoomService {
     const texts = new Map(events.map((event) => [event.id, event.text]));
     const next = new Map<string, string>();
     let skipped = 0;
+    const appliedEdits: Array<{ quote: string; replacement: string }> = [];
     for (const edit of edits) {
       const current = next.get(edit.eventId) ?? texts.get(edit.eventId);
       if (current === undefined || !edit.quote || !current.includes(edit.quote)) {
@@ -2956,6 +2962,7 @@ export class RoomService {
         continue;
       }
       next.set(edit.eventId, current.replace(edit.quote, edit.replacement));
+      appliedEdits.push({ quote: edit.quote, replacement: edit.replacement });
     }
     if (next.size === 0) throw new Error("None of the selected edits matched the current transcript.");
     const edited = await this.room.redactEvents(next);
@@ -2979,6 +2986,24 @@ export class RoomService {
     const { events: sanitized } = await this.room.eventsFrom(0);
     const firstEdited = sanitized.findIndex((event) => next.has(event.id));
     await this.resetAfterTruncation("reset-keep-context", firstEdited >= 0 ? firstEdited : 0);
+    // Rewrite HISTORICAL context too (thanks-dario, 08-30 lesson): the same
+    // approved edits propagate into every store recall reads — episode heads
+    // captured from the poisoned turns and the derived transcript chunks. Left
+    // untouched, the next turn's auto-recall re-injects the ORIGINAL text and
+    // the provider classifier re-flags the freshly healed room. Best-effort:
+    // the transcript rewrite above is already committed and must stand.
+    let episodesRewritten = 0;
+    if (!this.incognito && this.options.memory?.applyRedactions) {
+      try {
+        episodesRewritten = await this.options.memory.applyRedactions(
+          this.roomId,
+          appliedEdits,
+          workspacePaths.roomDir(this.workspace.rootDir, this.roomId),
+        );
+      } catch (error) {
+        console.warn(`[sanitize] historical-context rewrite failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     this.emit({
       type: "room-event",
       workspaceId: this.workspaceId,
@@ -2987,7 +3012,7 @@ export class RoomService {
         id: newId("system_sanitize"),
         timestamp: new Date().toISOString(),
         author: "system",
-        text: `✂ Rewrote ${edited.length} message${edited.length === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} skipped)` : ""} in place — context unchanged. Originals are preserved in redactions.jsonl; the next turn replays the full sanitized history.`,
+        text: `✂ Rewrote ${edited.length} message${edited.length === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} skipped)` : ""} in place${episodesRewritten > 0 ? ` + ${episodesRewritten} memory episode${episodesRewritten === 1 ? "" : "s"}` : ""} — context unchanged. Originals are preserved in redactions.jsonl; the next turn replays the full sanitized history.`,
       },
     });
     return { applied: edited.length, skipped };

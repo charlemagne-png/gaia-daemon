@@ -15,7 +15,7 @@ import { newId } from "../core/ids.js";
 import { DEFAULTS, resolveMemoryConfig } from "../core/config.js";
 import type { SqliteDatabase as DatabaseSync } from "../core/sqlite.js";
 import type { Episode, EpisodeOutcome } from "../domain/episodes.js";
-import { appendEpisode, purgeRoomEpisodes } from "../domain/episodes.js";
+import { appendEpisode, purgeRoomEpisodes, rewriteRoomEpisodes } from "../domain/episodes.js";
 import type { ActiveContextRef, MemoryHealthRow, MemorySearchHit, RoomRef, TranscriptSearchHit } from "../domain/workspace-index.js";
 import {
   countEmbeddings,
@@ -24,6 +24,7 @@ import {
   openWorkspaceIndex,
   pendingEmbeddings,
   purgeRoomIndex,
+  rewriteRoomIndex,
   readHealth,
   searchTranscripts,
   searchWorkspaceIndex,
@@ -198,6 +199,27 @@ export class MemoryService {
       purged += await purgeRoomEpisodes(source.memoryDir, roomId, backupPath);
     }
     return purged;
+  }
+
+  /** Sanitize-apply propagation (thanks-dario "rewrite historical context"):
+   * the transcript edits the human approved must reach EVERY store recall
+   * reads, or the next turn re-injects the original text via auto-recall and
+   * the classifier re-flags the healed room (the 08-30 loop). Rewrites each
+   * agent's episodes captured in this room (originals → backupDir, reversible)
+   * and resets the room's derived index slice so the next sync re-chunks the
+   * sanitized transcript. Uniform across harnesses; derived index only ever
+   * rebuilt from already-sanitized sources. Returns episodes rewritten. */
+  async applyRedactions(roomId: string, edits: Array<{ quote: string; replacement: string }>, backupDir?: string): Promise<number> {
+    if (!edits.length) return 0;
+    const bySource: Array<{ agentId: string; items: Episode[] }> = [];
+    for (const source of this.sources().agents) {
+      const backupPath = backupDir ? join(backupDir, `episode-redactions-${source.agentId}.jsonl`) : undefined;
+      const items = await rewriteRoomEpisodes(source.memoryDir, roomId, edits, backupPath);
+      if (items.length) bySource.push({ agentId: source.agentId, items });
+    }
+    rewriteRoomIndex(this.db(), roomId, bySource);
+    for (const source of bySource) this.scheduleEmbedSync(source.agentId);
+    return bySource.reduce((sum, source) => sum + source.items.length, 0);
   }
 
   // --- search ----------------------------------------------------------------

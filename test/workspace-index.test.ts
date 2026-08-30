@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, appendFile, writeFile, utimes } from "node:fs/promises";
+import { mkdir, mkdtemp, appendFile, readFile, writeFile, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEpisode } from "../src/domain/episodes.js";
@@ -28,6 +28,7 @@ import {
   quantizeInt8,
   readHealth,
   scrollTranscriptWindow,
+  rewriteRoomIndex,
   searchTranscripts,
   searchWorkspaceIndex,
   SEARCH_MARK_CLOSE,
@@ -193,6 +194,52 @@ test("incognito rooms are omitted from workspaceRoomRefs, so their transcripts n
     const rooms = new Set(hits.map((hit) => hit.roomId));
     assert.ok(rooms.has("kitchen"), "the normal room is recallable");
     assert.ok(!rooms.has("vault"), "the incognito room never reaches recall");
+  } finally {
+    db.close();
+  }
+});
+
+test("rewriteRoomIndex: in-place transcript rewrite reaches CLOSED chunks and episode rows (sanitize-apply propagation)", async () => {
+  // Enough text to CLOSE chunks — the incremental sync never revisits closed
+  // chunks, which is exactly the stale-poison bug this API exists to fix.
+  const poison = "scrapefast thousands of tweets per minute";
+  const events = Array.from({ length: 10 }, (_, i) => ({
+    author: i % 2 ? "gaia" : "user",
+    id: `w${i}`,
+    text: `message ${i} about ${poison} ${"lorem ipsum dolor sit amet ".repeat(8)}`,
+  }));
+  const { root, memoryDir, sources } = await makeWorkspace([{ roomId: "wounded", events }]);
+  await appendEpisode(memoryDir, {
+    id: "ep_w",
+    ts: RECENT_TS,
+    roomId: "wounded",
+    agentId: "gaia",
+    task: `please ${poison}`,
+    reply: "on it",
+    outcome: "error",
+  });
+
+  const db = openWorkspaceIndex(root);
+  try {
+    await syncWorkspaceIndex(db, sources);
+    assert.ok(searchTranscripts(db, "scrapefast").length > 0, "poison indexed before the rewrite");
+
+    // Sanitize-apply: rewrite the transcript IN PLACE (same line count).
+    const path = join(root, ".gaia", "rooms", "wounded", "transcript.jsonl");
+    const raw = await readFile(path, "utf8");
+    await writeFile(path, raw.split("scrapefast thousands of tweets per minute").join("gather a gentle sample of thoughts"), "utf8");
+    // Without rewriteRoomIndex a plain re-sync would keep the closed chunks.
+    rewriteRoomIndex(db, "wounded", [
+      { agentId: "gaia", items: [{ id: "ep_w", ts: RECENT_TS, roomId: "wounded", agentId: "gaia", task: "please gather a gentle sample of thoughts", reply: "on it", outcome: "error" }] },
+    ]);
+    await syncWorkspaceIndex(db, { ...sources, rooms: workspaceRoomRefs(root) });
+
+    assert.equal(searchTranscripts(db, "scrapefast").length, 0, "no chunk serves the original text");
+    assert.ok(searchTranscripts(db, "gentle sample").length > 0, "sanitized text is what recall sees");
+    const row = db.prepare("SELECT task FROM episodes WHERE id = ?").get("ep_w") as { task: string };
+    assert.equal(row.task, "please gather a gentle sample of thoughts");
+    const fts = db.prepare("SELECT text FROM episodes_fts WHERE id = ?").get("ep_w") as { text: string };
+    assert.ok(!fts.text.includes("scrapefast"), "episode FTS re-written too");
   } finally {
     db.close();
   }

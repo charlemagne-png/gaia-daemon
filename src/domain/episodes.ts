@@ -70,6 +70,78 @@ export async function purgeRoomEpisodes(dir: string, roomId: string, backupPath?
   return removed.length;
 }
 
+/** Sanitize-apply propagation (thanks-dario): rewrite this room's episodes in
+ * place with the SAME quote→replacement edits the human approved for the
+ * transcript. Episodes hold 400-char HEADS of raw turns, so a quote may be cut
+ * mid-way — a long tail-prefix of the quote (≥48 chars) at the end of a head
+ * is treated as the same poison and replaced too. Originals are appended to
+ * `backupPath` first (append-only, mirrors purgeRoomEpisodes), so the rewrite
+ * stays reversible. Returns the rewritten episodes (for the derived index). */
+export async function rewriteRoomEpisodes(
+  dir: string,
+  roomId: string,
+  replacements: Array<{ quote: string; replacement: string }>,
+  backupPath?: string,
+): Promise<Episode[]> {
+  const path = join(dir, EPISODES_FILE);
+  const text = await readText(path);
+  if (!text) return [];
+  const lines = text.split("\n").filter((line) => line.trim());
+  const out: string[] = [];
+  const originals: string[] = [];
+  const rewritten: Episode[] = [];
+  for (const line of lines) {
+    let episode: Episode | undefined;
+    try {
+      episode = episodeFrom(JSON.parse(line));
+    } catch {
+      // unparseable lines stay verbatim
+    }
+    if (!episode || episode.roomId !== roomId) {
+      out.push(line);
+      continue;
+    }
+    const task = applyReplacements(episode.task, replacements);
+    const reply = applyReplacements(episode.reply, replacements);
+    const lesson = episode.lesson === undefined ? undefined : applyReplacements(episode.lesson, replacements);
+    if (task === episode.task && reply === episode.reply && lesson === episode.lesson) {
+      out.push(line);
+      continue;
+    }
+    originals.push(line);
+    const next: Episode = { ...episode, task: task.slice(0, HEAD_LIMIT), reply: reply.slice(0, HEAD_LIMIT), ...(lesson !== undefined ? { lesson } : {}) };
+    rewritten.push(next);
+    out.push(JSON.stringify(next));
+  }
+  if (!rewritten.length) return [];
+  if (backupPath) await appendText(backupPath, `${originals.join("\n")}\n`);
+  await writeTextAtomic(path, out.length ? `${out.join("\n")}\n` : "");
+  return rewritten;
+}
+
+/** Longest-prefix-aware replacement over a truncated head. */
+const TAIL_PREFIX_MIN = 48;
+
+function applyReplacements(text: string, replacements: Array<{ quote: string; replacement: string }>): string {
+  let next = text;
+  for (const { quote, replacement } of replacements) {
+    if (!quote) continue;
+    if (next.includes(quote)) {
+      next = next.split(quote).join(replacement);
+      continue;
+    }
+    // Head truncated mid-quote: the head ends with a long prefix of the quote.
+    for (let cut = Math.min(quote.length - 1, next.length); cut >= TAIL_PREFIX_MIN; cut -= 1) {
+      const prefix = quote.slice(0, cut);
+      if (next.endsWith(prefix)) {
+        next = next.slice(0, next.length - cut) + replacement;
+        break;
+      }
+    }
+  }
+  return next;
+}
+
 function episodeFrom(raw: unknown): Episode | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const record = raw as Record<string, unknown>;
