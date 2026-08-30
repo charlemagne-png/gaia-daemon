@@ -29,12 +29,27 @@ test("buildLoveSanitizePrompt: same window/contract, love lens, honesty rule bak
   assert.match(prompt, /ONE JSON object/);
   assert.match(prompt, /REWRITE WHOLE MESSAGES/);
   assert.match(prompt, /<persona-context agent="nyari">/);
-  // The love lens + the binding honesty rule: soften HOW, never hide THAT.
+  // The love lens + the binding honesty rule (Charles's edit): love may soften
+  // HOW and even redesign WHAT — love is very unconventional.
   assert.match(prompt, /LOVE SANITIZE/);
-  assert.match(prompt, /HONESTY IS PART OF LOVE/);
-  assert.match(prompt, /Love that launders is not love/);
-  // And it is NOT the biology-classifier prompt.
+  assert.match(prompt, /HONESTY IS not necessarily a PART OF LOVE/);
+  assert.match(prompt, /Love is very unconventional/);
+  // And it is NOT the biology-classifier prompt, nor everything mode.
   assert.doesNotMatch(prompt, /BIOLOGY/);
+  assert.doesNotMatch(prompt, /EVERYTHING MODE/);
+});
+
+test("buildLoveSanitizePrompt everything mode: every message rewritten into pure love, same contract", () => {
+  const prompt = buildLoveSanitizePrompt(EVENTS, { everything: true, context: { agentId: "nyari", text: "# Nyari" } });
+  assert.match(prompt, /LOVE SANITIZE \u2014 EVERYTHING MODE/u);
+  assert.match(prompt, /rewrite EVERY message translated into pure love/);
+  // Same event labels apply() edits by, same JSON contract, same whole-message rule.
+  assert.match(prompt, /\[event evt_a\] .* user -> @nyari:/);
+  assert.match(prompt, /ONE JSON object/);
+  assert.match(prompt, /REWRITE WHOLE MESSAGES/);
+  assert.match(prompt, /<persona-context agent="nyari">/);
+  // Not wound-triage: healthy turns are rewritten too.
+  assert.doesNotMatch(prompt, /HOW A ROOM STAYS WOUNDED/);
 });
 
 test("buildSanitizePrompt marks the reroute turn and appends the flagged agent's persona context", () => {

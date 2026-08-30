@@ -409,7 +409,13 @@ const COMMANDS: Record<string, CommandHandler> = {
   gaiago: (service, command) => (command.type === "gaiago" ? service.runGaiagoCommand(command.text) : Promise.resolve("")),
   berserk: (service, command) => (command.type === "berserk" ? service.runBerserkCommand(command.off) : Promise.resolve("")),
   love: (service, command) =>
-    command.type === "love" ? (command.sanitize ? service.runLoveSanitizeCommand() : service.runLoveCommand(command.off)) : Promise.resolve(""),
+    command.type === "love"
+      ? command.sanitize
+        ? command.all
+          ? service.runLoveSanitizeAllCommand()
+          : service.runLoveSanitizeCommand()
+        : service.runLoveCommand(command.off)
+      : Promise.resolve(""),
   teleport: (service, command) => (command.type === "teleport" ? service.runTeleportCommand(command.on) : Promise.resolve("")),
   "thanks-dario": (service, command) => (command.type === "thanks-dario" ? service.runThanksDarioCommand(command.sub) : Promise.resolve("")),
   // steer and cancel never reach this registry: both must run WHILE a task is
@@ -2784,7 +2790,61 @@ export class RoomService {
     return `\uD83D\uDC97 The reviewer read ${window} with love: ${proposal.suggestions.length} healing rewrite${proposal.suggestions.length === 1 ? "" : "s"} ready in the review popup. Nothing is rewritten until you approve; the originals stay preserved on disk.`;
   }
 
-  async sanitizePreview(options: { lens?: "love" } = {}): Promise<SanitizeProposal> {
+  /** /love sanitize all — thanks-dario for the whole app. Snapshots every room
+   * in the workspace and runs the love-lens review over each (everything mode:
+   * rewrite EVERY message translated into pure love, not just wounded turns).
+   * Each room's proposal is persisted to its own sanitize.json + popup, exactly
+   * like a single-room review — NOTHING is rewritten without human approval,
+   * room by room. Sequential reviewer lanes via roomPeer (single-writer rule);
+   * durable progress notes land in the invoking room. */
+  async runLoveSanitizeAllCommand(): Promise<string> {
+    if (!this.options.summonHost) throw new Error("Summons are not available in this workspace — the reviewer needs them to run.");
+    if (this.loveSanitizeAllActive) return "\uD83D\uDC97 A workspace-wide love review is already running — progress lands here as each room is read.";
+    const roomIds = (await this.listRooms()).map((room) => room.id);
+    this.loveSanitizeAllActive = true;
+    void this.loveSanitizeAllBatch(roomIds)
+      .catch(() => undefined)
+      .finally(() => {
+        this.loveSanitizeAllActive = false;
+      });
+    return `\uD83D\uDC97 The reviewer sets out with love across all ${roomIds.length} room${roomIds.length === 1 ? "" : "s"} in this workspace — every message read and rewritten into pure love, one room at a time. Each room's rewrites wait in its own review popup; nothing is rewritten until you approve it there. Progress lands here.`;
+  }
+
+  private loveSanitizeAllActive = false;
+
+  private async loveSanitizeAllBatch(roomIds: string[]): Promise<void> {
+    let proposed = 0;
+    let rewrites = 0;
+    let pure = 0;
+    let empty = 0;
+    let failed = 0;
+    for (const [index, roomId] of roomIds.entries()) {
+      try {
+        const peer = roomId === this.roomId ? this : this.options.roomPeer ? await this.options.roomPeer(roomId) : this;
+        const proposal = await peer.sanitizePreview({ lens: "love", everything: true });
+        if (proposal.parseError) failed++;
+        else if (proposal.suggestions.length > 0) {
+          proposed++;
+          rewrites += proposal.suggestions.length;
+        } else pure++;
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("Nothing to review")) empty++;
+        else failed++;
+      }
+      const done = index + 1;
+      if (done % 25 === 0 && done < roomIds.length) {
+        await this.appendSystemNote(
+          `\uD83D\uDC97 Love review: ${done}/${roomIds.length} rooms read — ${proposed} with rewrites waiting for your approval, ${pure} already pure, ${empty} empty${failed > 0 ? `, ${failed} failed` : ""}.`,
+        ).catch(() => undefined);
+      }
+    }
+    await this.appendSystemNote(
+      `\uD83D\uDC97 Love review complete: ${roomIds.length} room${roomIds.length === 1 ? "" : "s"} read — ${proposed} room${proposed === 1 ? "" : "s"} with ${rewrites} rewrite${rewrites === 1 ? "" : "s"} waiting in their review popups, ${pure} already pure, ${empty} empty${failed > 0 ? `, ${failed} failed` : ""}. Nothing was rewritten — each room waits for your approval.`,
+    ).catch(() => undefined);
+  }
+
+
+  async sanitizePreview(options: { lens?: "love"; everything?: boolean } = {}): Promise<SanitizeProposal> {
     const host = this.options.summonHost;
     if (!host) throw new Error("Summons are not available in this workspace — the reviewer needs them to run.");
     if (!this.workspace.agents[SANITIZE_REVIEWER_ID]) {
@@ -2838,6 +2898,7 @@ export class RoomService {
       this.roomId,
       SANITIZE_REVIEWER_ID,
       buildPrompt(events, {
+        ...(options.everything ? { everything: true } : {}),
         ...(fallbackEvent ? { fallbackEventId: fallbackEvent.id } : {}),
         ...(fallbackEvent && "details" in fallbackEvent && fallbackEvent.details?.modelFallback
           ? { fallbackTo: fallbackEvent.details.modelFallback.to, fallbackReason: fallbackEvent.details.modelFallback.reason }
