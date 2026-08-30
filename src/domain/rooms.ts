@@ -975,6 +975,46 @@ export class RoomHandle {
     });
   }
 
+  /** Stuck-turn watchdog hand-off: preserve any flushed partial under the
+   * already-reserved reply event id, then atomically replace THAT pending marker
+   * with a durable, already-recorded queue entry. A crash before the state swap
+   * sees the reserved event and finishes its idempotent commit; a crash after it
+   * re-drains the queue. */
+  async requeuePendingTurn(pending: PendingTurn, queuedAt: string): Promise<QueuedMessage | undefined> {
+    const partial = pending.partialReply.trim();
+    const eventId = pending.eventId ?? newRoomEventId();
+    if (partial && !(await this.hasEvent(eventId))) {
+      await this.appendEvent({ id: eventId, timestamp: queuedAt, author: pending.agentId, text: pending.partialReply });
+    }
+    let cursorAfter: number | undefined;
+    if (partial) {
+      const page = await readJsonlFrom<number>(this.transcriptPath, 0, (raw, lineIndex) =>
+        raw && typeof raw === "object" && (raw as { id?: unknown }).id === eventId ? lineIndex : undefined,
+      );
+      cursorAfter = page.items.length > 0 ? page.items[page.items.length - 1] + 1 : page.nextCursor;
+    }
+    const queued: QueuedMessage = {
+      taskId: newId("task"),
+      text: pending.prompt,
+      targets: pending.targets,
+      ...(pending.channel ? { channel: pending.channel } : {}),
+      ...(pending.voice ? { voice: true } : {}),
+      ...(pending.attachments?.length ? { attachments: pending.attachments } : {}),
+      recorded: true,
+      queuedAt,
+    };
+    let moved = false;
+    await this.updateState((state) => {
+      const current = state.pendingTurn;
+      if (!current || current.id !== pending.id || current.eventId !== pending.eventId) return;
+      delete state.pendingTurn;
+      state.queue = [...(state.queue ?? []), queued];
+      if (cursorAfter !== undefined) state.agentCursors[pending.agentId] = cursorAfter;
+      moved = true;
+    });
+    return moved ? queued : undefined;
+  }
+
   /**
    * Commit a finished turn: append the reply event (reserved id + details on
    * the event), then ONE atomic state write that clears the pending marker

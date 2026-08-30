@@ -224,6 +224,11 @@ export class RunnerHost implements AgentRuntime {
     return this._modelLabel;
   }
 
+  /** Uniform process truth for daemon watchdogs — no harness-specific probe. */
+  hasLiveTurn(_roomId: string): boolean {
+    return Boolean(this.child && this.turnInFlight && this.activeChannel);
+  }
+
   async *send(input: AgentInput): AsyncIterable<AgentEvent> {
     await this.ensureChild(input.roomId);
     const backgroundTasks = harnessSpecFor(this.options.harness).backgroundTasks;

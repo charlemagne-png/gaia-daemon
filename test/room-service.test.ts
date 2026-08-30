@@ -1649,6 +1649,75 @@ test("auto-compact: a turn ending above the context threshold queues a /compact 
   assert.equal(compactCalls, 1, "no auto-compact loop after the pass");
 });
 
+test("deliver:note wakes the parent's active steward once through the durable callback queue", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const factory = (agent: AgentDef): AgentRuntime => {
+    const runtime = scriptedRuntime(agent, () => []);
+    runtime.send = async function* () {
+      runtime.sends += 1;
+      await gate;
+      yield { type: "text-delta", delta: "triaged" } as AgentEvent;
+    };
+    runtime.abort = async () => { release(); };
+    return runtime;
+  };
+  const { service, root } = await makeService({ runtimeFactory: factory });
+  const room = service.room;
+  await room.updateState((state) => { state.activeAgent = "gaia"; });
+
+  const delivery = { childRoomId: "child-lane-1", failed: false };
+  await service.deliverAgentResult("terry", "worker result", delivery);
+  await service.deliverAgentResult("terry", "worker result retry", delivery);
+
+  const state = await room.state();
+  assert.ok(state.pendingTurn?.agentId === "gaia" || state.queue?.some((entry) => entry.targets.includes("gaia")), "active steward turn is durable");
+  const { events } = await room.eventsFrom(0);
+  assert.equal(events.filter((event) => event.author === "system" && event.text.includes("child-lane wake:")).length, 1);
+  release();
+  await service.waitForIdle();
+});
+
+test("stuck-turn watchdog preserves partial progress, clears stale WAL, and re-queues the turn", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const began = new Promise<void>((resolve) => { started = resolve; });
+  const factory = (agent: AgentDef): AgentRuntime => {
+    const runtime = scriptedRuntime(agent, () => []);
+    runtime.send = async function* () {
+      runtime.sends += 1;
+      started();
+      await gate;
+      yield { type: "text-delta", delta: " resumed" } as AgentEvent;
+    };
+    runtime.abort = async () => { release(); };
+    return runtime;
+  };
+  const { service, root } = await makeService({ runtimeFactory: factory });
+  await service.init();
+  const room = service.room;
+  const now = Date.now();
+  await room.markPendingTurn({
+    id: "stale-task",
+    eventId: "reserved-reply",
+    prompt: "finish this",
+    targets: ["gaia"],
+    agentId: "gaia",
+    partialReply: "saved partial",
+    startedAt: new Date(now - 11 * 60_000).toISOString(),
+  });
+
+  assert.equal(await service.recoverStuckTurn(now), true);
+  await began;
+  const state = await room.state();
+  assert.notEqual(state.pendingTurn?.id, "stale-task", "stale WAL marker retired");
+  const { events } = await room.eventsFrom(0);
+  assert.ok(events.some((event) => event.id === "reserved-reply" && event.text === "saved partial"), "flushed partial committed under reserved id");
+  release();
+  await service.waitForIdle();
+});
+
 test("durable compaction: a compacted agent that LOSES its session reloads [summary + tail], not the full raw transcript", async () => {
   let sessionAlive = true;
   let lastInput: AgentInput | undefined;

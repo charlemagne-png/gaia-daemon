@@ -332,6 +332,9 @@ function autoCompactPercent(): number {
   return Number.isFinite(parsed) ? parsed : 40;
 }
 
+/** Pending WAL marker with no runner past this age → watchdog re-queue. */
+export const STUCK_TURN_MS = 10 * 60 * 1_000;
+
 /** System prompt for the context-gate "compact" summary (option 1). */
 const CONTEXT_SUMMARY_SYSTEM = [
   "You are compacting a group-chat room transcript so a NEW participant can catch up fast.",
@@ -1417,7 +1420,59 @@ export class RoomService {
       summonResult: { childRoomId: delivery.childRoomId, failed: delivery.failed },
     });
     const target = delivery.triggerTarget;
-    if (target && this.workspace.agents[target]) await this.triggerSummonCallback(target, reply, delivery);
+    if (target && this.workspace.agents[target]) {
+      await this.triggerSummonCallback(target, reply, delivery);
+      return;
+    }
+
+    // deliver:"note" used to stop at the collapsed note, leaving autonomous
+    // steward rooms asleep. Wake their explicitly active agent through the same
+    // durable callback queue as agent dialogue. No active agent → human-read
+    // note. A live WAL turn already sees the appended note; a queued pointer
+    // for this child is the idempotence key across delivery retries.
+    if (delivery.childRoomId === this.roomId) return;
+    const state = await this.room.state();
+    const active = state.activeAgent;
+    if (!active || !this.workspace.agents[active] || state.pendingTurn) return;
+    const pointer = delivery.failed
+      ? `Child lane '${delivery.childRoomId}' FAILED — its error is in the message just above. Triage it and continue.`
+      : `Child lane '${delivery.childRoomId}' finished — its result is in the message just above. Triage it and continue.`;
+    if (state.queue?.some((queued) => queued.fromAgentDialogue && queued.text === pointer)) return;
+    await this.appendSystemNote(`⚙ child-lane wake: @${active} queued to triage '${delivery.childRoomId}'.`);
+    await this.enqueueAgentDialogue([active], pointer);
+  }
+
+  /** Periodic daemon backstop: stale WAL marker + no live task/runner → preserve
+   * its flushed partial under the reserved event id and atomically move the
+   * prompt back to the normal durable queue. Returns true only when recovered. */
+  async recoverStuckTurn(now = Date.now()): Promise<boolean> {
+    await this.init();
+    const state = await this.room.state();
+    const pending = state.pendingTurn;
+    if (!pending || now - Date.parse(pending.startedAt) <= STUCK_TURN_MS) return false;
+    const runtime = this.runtimes[pending.agentId];
+    const live = runtime?.hasLiveTurn?.(this.roomId) ?? Boolean(this.activeAgentTurn?.targets.includes(pending.agentId));
+    if (this.activeTask || live) return false;
+    if ((await this.room.resumeMode(pending)) === "finish-commit") {
+      await this.resumePendingTurn(pending);
+      return true;
+    }
+    const queued = await this.room.requeuePendingTurn(pending, new Date(now).toISOString());
+    if (!queued) return false;
+    const task: Task = {
+      id: queued.taskId,
+      roomId: this.roomId,
+      text: queued.text,
+      targets: queued.targets,
+      status: "queued",
+      startedAt: queued.queuedAt,
+      callback: true,
+    };
+    this.queuedTasks.push(task);
+    this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    await this.appendSystemNote(`⚙ stuck-turn watchdog: re-queued interrupted turn '${pending.id}'.`);
+    void this.drain();
+    return true;
   }
 
   /** Public rooms rebroadcast for the summon coordinator: a summon child

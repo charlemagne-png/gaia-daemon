@@ -194,6 +194,8 @@ export class Daemon {
   private hintSourcesCache: { toolNames: string[]; models: ModelChoice[] } | undefined;
   private bridge: HarnessBridge | undefined;
   private scheduler: SchedulerService | undefined;
+  /** Periodic stale-WAL backstop; room recovery itself stays in RoomService. */
+  private stuckTurnTimer: ReturnType<typeof setInterval> | undefined;
   /** One voice call at a time; unmute's chat-completions requests bind to it. */
   activeCall: { workspaceId: string; info: VoiceCallInfo; settings: VoiceSettings } | undefined;
   voiceStarting = false;
@@ -256,6 +258,8 @@ export class Daemon {
     // happens to look at; see room-service.ts's own "/reload ... in-flight
     // turns resume after restart" promise, which this keeps.
     void this.recoverPendingTurns();
+    this.stuckTurnTimer = setInterval(() => void this.watchStuckTurns(), 60_000);
+    this.stuckTurnTimer.unref?.();
     await ensureVoiceSettingsFile();
     // A crash mid-call must never leave a "temporary" thinking override applied
     // forever: restore any persisted override from a dead call.
@@ -395,6 +399,8 @@ export class Daemon {
   async dispose(): Promise<void> {
     this.usageService.dispose();
     this.scheduler?.dispose();
+    clearInterval(this.stuckTurnTimer);
+    this.stuckTurnTimer = undefined;
     this.ttsBridge?.stop();
     this.voiceStack.stop();
     this.keepAwakeManager.dispose();
@@ -704,6 +710,19 @@ export class Daemon {
         } catch (error) {
           this.log(`turn recovery failed for ${record.id}::${roomId}: ${error instanceof Error ? error.message : String(error)}`);
         }
+      }
+    }
+  }
+
+  /** Resident rooms with a stale pending marker but no live runner are put back
+   * on their durable queue. Boot recovery makes every persisted pending room
+   * resident; the periodic pass catches later process/channel loss. */
+  private async watchStuckTurns(): Promise<void> {
+    for (const [key, service] of this.services) {
+      try {
+        if (await service.recoverStuckTurn()) this.log(`stuck-turn watchdog recovered ${key}`);
+      } catch (error) {
+        this.log(`stuck-turn watchdog failed for ${key}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }

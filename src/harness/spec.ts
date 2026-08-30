@@ -80,6 +80,11 @@ export interface AgentRuntime {
    * any queued events, so the uniform runner sends `turn-error` and the room
    * can commit the accumulated partial instead of mistaking it for success. */
   send(input: AgentInput): AsyncIterable<AgentEvent>;
+  /** Shared runner liveness seam: true only while this runtime owns a living
+   * subprocess turn for `roomId`. Watchdogs use it without learning a harness
+   * id; absent on in-process/test runtimes means the room's task state is the
+   * conservative source of truth. */
+  hasLiveTurn?(roomId: string): boolean;
   abort(): Promise<void>;
   /** Inject guidance into the room's RUNNING turn (backs /steer). Resolves
    * false when there is nothing to steer. Only present when
