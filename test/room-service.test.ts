@@ -2768,7 +2768,7 @@ test("/thanks-dario on|off persists the room flag and surfaces it on the snapsho
   assert.equal((await service.getSnapshot()).room.thanksDario, undefined);
 });
 
-test("sanitize preview runs the reviewer through the summon host; apply rewrites, preserves, resets", async () => {
+test("sanitize preview runs the reviewer through the summon host; apply rewrites, preserves, drops sessions", async () => {
   // The fake reviewer reads the event id out of the prompt it was given —
   // proving the prompt labels events the way apply expects them back.
   const host = fakeSummonHost((_agentId, task) => {
@@ -2811,11 +2811,12 @@ test("sanitize preview runs the reviewer through the summon host; apply rewrites
   // Original preserved beside the transcript.
   const preserved = (await readFileText(join(root, ".gaia", "rooms", "default", "redactions.jsonl"), "utf8")).trim();
   assert.match(preserved, /please discuss IDA Pro internals/);
-  // The agent whose session read the original text got a fresh session and a
-  // capped cursor; agents that never spoke have no session holding the
-  // original, so they are untouched (resetting them was always a no-op).
+  // Every harness-side room session drops through the same neutral seam as
+  // /clear: raw provider/session files can hold the original text even when an
+  // agent cursor does not prove involvement.
   assert.ok((runtimes.get("gaia")?.resets ?? 0) >= 1, "the exposed session resets");
-  assert.equal(runtimes.get("terry")?.resets ?? 0, 0, "uninvolved agents keep their sessions");
+  assert.ok((runtimes.get("terry")?.resets ?? 0) >= 1, "uninvolved room sessions drop too");
+  assert.ok((runtimes.get("dario")?.resets ?? 0) >= 1, "reviewer room session drops too");
   const state = await room.state();
   assert.equal(state.agentCursors.gaia, 0);
   // The saved proposal is stamped applied (popup shows the ✂ state).

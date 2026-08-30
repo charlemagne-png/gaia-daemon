@@ -3054,6 +3054,12 @@ export class RoomService {
     }
     if (next.size === 0) throw new Error("None of the selected edits matched the current transcript.");
     const edited = await this.room.redactEvents(next);
+    // The transcript is now healed on disk; drop EVERY harness-side room session
+    // through the same harness-neutral seam as /clear. Some runtimes keep raw
+    // provider/session files outside transcript.jsonl, and a cursor-only
+    // affected-agent reset can miss them. resetRoom also drops any session-scoped
+    // system-prompt snapshot for harnesses that cache one.
+    this.resetHarnessSessions();
 
     const proposal = (await readJson(this.sanitizeProposalPath)) as SanitizeProposal | null;
     if (proposal?.at) {
@@ -3073,7 +3079,7 @@ export class RoomService {
     // original text and must re-seed.
     const { events: sanitized } = await this.room.eventsFrom(0);
     const firstEdited = sanitized.findIndex((event) => next.has(event.id));
-    await this.resetAfterTruncation("reset-keep-context", firstEdited >= 0 ? firstEdited : 0);
+    await this.resetAfterTruncation("reset-keep-context", firstEdited >= 0 ? firstEdited : 0, undefined, { resetSessions: false });
     // Rewrite HISTORICAL context too (thanks-dario, 08-30 lesson): the same
     // approved edits propagate into every store recall reads — episode heads
     // captured from the poisoned turns and the derived transcript chunks. Left
@@ -3239,6 +3245,7 @@ export class RoomService {
     mode: "reset-sessions" | "reset-keep-context",
     cut?: number,
     forkOrigin?: { id: string; userOrdinal: number },
+    options: { resetSessions?: boolean } = {},
   ): Promise<void> {
     const kept = (await this.room.eventsFrom(0)).events.length;
     const affectedAbove = Math.min(cut ?? kept, kept);
@@ -3260,7 +3267,7 @@ export class RoomService {
         // Native fork failed (ordinal out of range, unsupported session build,
         // stalled runner, …) — fall through to the fail-safe reset below.
       }
-      runtime?.resetRoom(this.roomId);
+      if (options.resetSessions !== false) runtime?.resetRoom(this.roomId);
     }
     // rewind moves the floor to a fresh window base — any durable compaction
     // summary captured at the old floor is now stale and must be dropped (its
@@ -4064,10 +4071,16 @@ export class RoomService {
     return "Usage: /setup list | activate <id> [room] | status | off";
   }
 
+  /** Drop every harness-side session for this room. Backs /clear and sanitize
+   * apply; harness details live behind AgentRuntime.resetRoom only. */
+  private resetHarnessSessions(): void {
+    for (const runtime of Object.values(this.runtimes)) runtime.resetRoom(this.roomId);
+  }
+
   /** /clear: wipe transcript, reset cursors + legacy details, drop every
    * harness session for this room. Role assignments are configuration — kept. */
   async runClearCommand(): Promise<string> {
-    for (const runtime of Object.values(this.runtimes)) runtime.resetRoom(this.roomId);
+    this.resetHarnessSessions();
     await this.room.clearTranscript();
     await this.room.updateState((state) => {
       state.agentCursors = {};
