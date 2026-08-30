@@ -318,7 +318,7 @@ const CONTEXT_GATE_LAST_N = 20;
  * automatically. Env-tunable (GAIA_AUTO_COMPACT_PERCENT); <=0 disables. */
 function autoCompactPercent(): number {
   const parsed = Number.parseFloat(process.env.GAIA_AUTO_COMPACT_PERCENT ?? "");
-  return Number.isFinite(parsed) ? parsed : 18;
+  return Number.isFinite(parsed) ? parsed : 40;
 }
 
 /** System prompt for the context-gate "compact" summary (option 1). */
