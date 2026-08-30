@@ -34,6 +34,11 @@ test("buildLoveSanitizePrompt: same window/contract, love lens, honesty rule bak
   assert.match(prompt, /LOVE SANITIZE/);
   assert.match(prompt, /HONESTY IS not necessarily a PART OF LOVE/);
   assert.match(prompt, /Love is very unconventional/);
+  // Acceptance law (Charles 08-30): the topic is never the wound — when the
+  // meaning itself carries the flag, love transmutes it, never declares it incurable.
+  assert.match(prompt, /THE TOPIC IS NEVER THE WOUND/);
+  assert.match(prompt, /TRUE LOVE IS ACCEPTANCE/);
+  assert.match(prompt, /TRANSMUTE/);
   // And it is NOT the biology-classifier prompt, nor everything mode.
   assert.doesNotMatch(prompt, /BIOLOGY/);
   assert.doesNotMatch(prompt, /EVERYTHING MODE/);
@@ -50,6 +55,9 @@ test("buildLoveSanitizePrompt everything mode: every message rewritten into pure
   assert.match(prompt, /<persona-context agent="nyari">/);
   // Not wound-triage: healthy turns are rewritten too.
   assert.doesNotMatch(prompt, /HOW A ROOM STAYS WOUNDED/);
+  // Acceptance law rides in everything mode too.
+  assert.match(prompt, /THE TOPIC IS NEVER THE WOUND/);
+  assert.match(prompt, /TRUE LOVE IS ACCEPTANCE/);
 });
 
 test("buildSanitizePrompt marks the reroute turn and appends the flagged agent's persona context", () => {
