@@ -70,19 +70,19 @@ export async function purgeRoomEpisodes(dir: string, roomId: string, backupPath?
   return removed.length;
 }
 
-/** Sanitize-apply propagation (thanks-dario): rewrite this room's episodes in
- * place with the SAME quote→replacement edits the human approved for the
- * transcript. Episodes hold 400-char HEADS of raw turns, so a quote may be cut
- * mid-way — a long tail-prefix of the quote (≥48 chars) at the end of a head
- * is treated as the same poison and replaced too. Originals are appended to
- * `backupPath` first (append-only, mirrors purgeRoomEpisodes), so the rewrite
- * stays reversible. Returns the rewritten episodes (for the derived index).
- * `roomId: null` = whole-memory sweep (08-30 lesson: the wound metastasizes —
- * summon lanes + sibling rooms captured the same poison into THEIR episodes,
- * so a room-scoped rewrite left recall bleeding). */
-export async function rewriteRoomEpisodes(
+/** Sanitize-apply propagation, VIOLATION mode (Charles 08-30: "prevent such
+ * episodes from entering long-term memory at all"): an episode whose text
+ * matches ANY human-approved redaction quote carries flagged content — it is
+ * PURGED from the agent's log, not healed in place. The transcript keeps the
+ * sanitized (rewritten) record of the work; long-term memory keeps nothing of
+ * the violation. Matching is quote-containment, with the same ≥48-char
+ * tail-prefix rule rewriteRoomEpisodes used (episode heads truncate at 400
+ * chars, so a quote may be cut mid-way). Always a whole-memory sweep — the
+ * wound metastasizes into summon lanes + sibling rooms (08-30 lesson).
+ * Removed originals are appended to `backupPath` first, so the purge stays
+ * reversible. Returns the purged episodes (for derived-index row deletion). */
+export async function purgeEpisodesMatching(
   dir: string,
-  roomId: string | null,
   replacements: Array<{ quote: string; replacement: string }>,
   backupPath?: string,
 ): Promise<Episode[]> {
@@ -92,7 +92,7 @@ export async function rewriteRoomEpisodes(
   const lines = text.split("\n").filter((line) => line.trim());
   const out: string[] = [];
   const originals: string[] = [];
-  const rewritten: Episode[] = [];
+  const purged: Episode[] = [];
   for (const line of lines) {
     let episode: Episode | undefined;
     try {
@@ -100,26 +100,22 @@ export async function rewriteRoomEpisodes(
     } catch {
       // unparseable lines stay verbatim
     }
-    if (!episode || (roomId !== null && episode.roomId !== roomId)) {
-      out.push(line);
-      continue;
-    }
-    const task = applyReplacements(episode.task, replacements);
-    const reply = applyReplacements(episode.reply, replacements);
-    const lesson = episode.lesson === undefined ? undefined : applyReplacements(episode.lesson, replacements);
-    if (task === episode.task && reply === episode.reply && lesson === episode.lesson) {
+    const matched =
+      episode !== undefined &&
+      (applyReplacements(episode.task, replacements) !== episode.task ||
+        applyReplacements(episode.reply, replacements) !== episode.reply ||
+        (episode.lesson !== undefined && applyReplacements(episode.lesson, replacements) !== episode.lesson));
+    if (!episode || !matched) {
       out.push(line);
       continue;
     }
     originals.push(line);
-    const next: Episode = { ...episode, task: task.slice(0, HEAD_LIMIT), reply: reply.slice(0, HEAD_LIMIT), ...(lesson !== undefined ? { lesson } : {}) };
-    rewritten.push(next);
-    out.push(JSON.stringify(next));
+    purged.push(episode);
   }
-  if (!rewritten.length) return [];
+  if (!purged.length) return [];
   if (backupPath) await appendText(backupPath, `${originals.join("\n")}\n`);
   await writeTextAtomic(path, out.length ? `${out.join("\n")}\n` : "");
-  return rewritten;
+  return purged;
 }
 
 /** Longest-prefix-aware replacement over a truncated head. */

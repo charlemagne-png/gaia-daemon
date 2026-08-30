@@ -28,6 +28,7 @@ import {
   quantizeInt8,
   readHealth,
   scrollTranscriptWindow,
+  dropEpisodeRows,
   rewriteIndexText,
   rewriteRoomIndex,
   searchTranscripts,
@@ -276,6 +277,14 @@ test("rewriteIndexText: whole-memory sweep cleans OTHER rooms' closed chunks + f
     assert.notEqual(fact.hash, "h0", "fact hash refreshed so embeddings re-sync");
     const factFts = db.prepare("SELECT text FROM facts_fts WHERE id = ?").get("fact_p") as { text: string };
     assert.ok(!factFts.text.includes("scrapefast"), "fact FTS rewritten");
+    // Violation-purge propagation: purged episodes lose their index rows too.
+    db.prepare("INSERT INTO episodes (id, agent_id, ts, room_id, outcome, task, reply, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
+      "ep_v", "gaia", RECENT_TS, "lane", "complete", "violation head", "violation reply", "hv",
+    );
+    db.prepare("INSERT INTO episodes_fts (text, id) VALUES (?, ?)").run("violation head violation reply", "ep_v");
+    dropEpisodeRows(db, ["ep_v"]);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM episodes WHERE id = 'ep_v'").get() as { n: number }).n, 0);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM episodes_fts WHERE id = 'ep_v'").get() as { n: number }).n, 0);
     // Cursors untouched — the incremental sync must not resurrect anything.
     await syncWorkspaceIndex(db, { ...sources, rooms: workspaceRoomRefs(root) });
     assert.equal(searchTranscripts(db, "scrapefast").length, 0, "re-sync keeps the sweep");

@@ -154,10 +154,11 @@ export interface RoomMemoryHooks {
   autoRecallBlock(agentId: string, query: string, context?: ActiveContextRef): Promise<string>;
   capture(agentId: string, capture: EpisodeCapture): Promise<void>;
   /** Sanitize-apply propagation: approved transcript edits rewrite the
-   * HISTORICAL context too — WHOLE memory (every agent's episodes from every
-   * room, their distilled memory files, and every derived index row), or
-   * auto-recall re-injects the redacted originals on the very next turn.
-   * Optional — a hookless workspace just skips the propagation. */
+   * HISTORICAL context too — WHOLE memory: episodes matching flagged quotes
+   * are PURGED (violations never persist in long-term memory — Charles
+   * 08-30), distilled memory files + derived index rows have the flagged text
+   * excised. Otherwise auto-recall re-injects the redacted originals on the
+   * very next turn. Optional — a hookless workspace skips the propagation. */
   applyRedactions?(
     roomId: string,
     edits: Array<{ quote: string; replacement: string }>,
@@ -3017,7 +3018,7 @@ export class RoomService {
         id: newId("system_sanitize"),
         timestamp: new Date().toISOString(),
         author: "system",
-        text: `✂ Rewrote ${edited.length} message${edited.length === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} skipped)` : ""} in place${memorySweep.episodes > 0 ? ` + ${memorySweep.episodes} memory episode${memorySweep.episodes === 1 ? "" : "s"}` : ""}${memorySweep.files > 0 ? ` + ${memorySweep.files} memory file${memorySweep.files === 1 ? "" : "s"}` : ""}${memorySweep.indexRows > 0 ? ` + ${memorySweep.indexRows} index row${memorySweep.indexRows === 1 ? "" : "s"}` : ""} — whole-memory sweep, context unchanged. Originals are preserved in redactions.jsonl; the next turn replays the full sanitized history.`,
+        text: `✂ Rewrote ${edited.length} message${edited.length === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} skipped)` : ""} in place${memorySweep.episodes > 0 ? ` · ${memorySweep.episodes} memory episode${memorySweep.episodes === 1 ? "" : "s"} purged (violations never persist)` : ""}${memorySweep.files > 0 ? ` · ${memorySweep.files} memory file${memorySweep.files === 1 ? "" : "s"} cleaned` : ""}${memorySweep.indexRows > 0 ? ` · ${memorySweep.indexRows} index row${memorySweep.indexRows === 1 ? "" : "s"} cleaned` : ""} — whole-memory sweep, context unchanged. Originals are preserved in redactions.jsonl; the next turn replays the full sanitized history.`,
       },
     });
     return { applied: edited.length, skipped };

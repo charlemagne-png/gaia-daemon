@@ -434,6 +434,19 @@ export function rewriteRoomIndex(db: DatabaseSync, roomId: string, episodes: Arr
   for (const source of episodes) applyEpisodes(db, source.agentId, source.items);
 }
 
+/** Violation-purge propagation to the DERIVED index: episodes purged from an
+ * agent's jsonl (purgeEpisodesMatching) must lose their index rows too, or
+ * recall keeps serving the flagged text the source no longer holds. */
+export function dropEpisodeRows(db: DatabaseSync, ids: string[]): void {
+  if (!ids.length) return;
+  const dropFts = db.prepare("DELETE FROM episodes_fts WHERE id = ?");
+  const drop = db.prepare("DELETE FROM episodes WHERE id = ?");
+  for (const id of ids) {
+    dropFts.run(id);
+    drop.run(id);
+  }
+}
+
 /** Whole-memory sanitize sweep over the DERIVED index (08-30: the wound
  * metastasizes — sibling rooms + summon lanes hold chunks/facts with the same
  * poison, and their transcripts/cursors are NOT reset by a room-scoped apply,

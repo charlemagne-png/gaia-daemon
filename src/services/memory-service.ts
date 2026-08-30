@@ -17,7 +17,7 @@ import { appendText, readText, writeTextAtomic } from "../core/store.js";
 import { DEFAULTS, resolveMemoryConfig } from "../core/config.js";
 import type { SqliteDatabase as DatabaseSync } from "../core/sqlite.js";
 import type { Episode, EpisodeOutcome } from "../domain/episodes.js";
-import { EPISODES_FILE, appendEpisode, applyReplacements, purgeRoomEpisodes, rewriteRoomEpisodes } from "../domain/episodes.js";
+import { EPISODES_FILE, appendEpisode, applyReplacements, purgeEpisodesMatching, purgeRoomEpisodes } from "../domain/episodes.js";
 import type { ActiveContextRef, MemoryHealthRow, MemorySearchHit, RoomRef, TranscriptSearchHit } from "../domain/workspace-index.js";
 import {
   countEmbeddings,
@@ -25,6 +25,7 @@ import {
   formatMemoryHits,
   openWorkspaceIndex,
   pendingEmbeddings,
+  dropEpisodeRows,
   purgeRoomIndex,
   rewriteIndexText,
   rewriteRoomIndex,
@@ -210,10 +211,13 @@ export class MemoryService {
    * the classifier re-flags the healed room (the 08-30 loop). WHOLE-memory
    * sweep (08-30 follow-up: room-scoped left the wound alive — summon lanes +
    * sibling rooms captured the same poison into their episodes, distilled
-   * notes, and index chunks): rewrites EVERY agent's episodes from EVERY room,
-   * their memory files (*.md + fact logs), the wounded room's index slice
-   * (re-chunked from the sanitized transcript), and every remaining index
-   * chunk/fact row in place. Originals → backupDir, reversible. Uniform across
+   * notes, and index chunks). VIOLATION LAW (Charles 08-30, "prevent such
+   * episodes from entering long-term memory at all"): episodes matching a
+   * flagged quote are PURGED outright — the sanitized transcript keeps the
+   * healed record of the work, long-term memory keeps nothing of the
+   * violation. Distilled notes (*.md + fact logs) and index chunk/fact rows
+   * are text stores, not per-event records — there the flagged text is
+   * excised in place. Originals → backupDir, reversible. Uniform across
    * harnesses; derived index only rebuilt from already-sanitized sources. */
   async applyRedactions(
     roomId: string,
@@ -221,14 +225,14 @@ export class MemoryService {
     backupDir?: string,
   ): Promise<{ episodes: number; files: number; indexRows: number }> {
     if (!edits.length) return { episodes: 0, files: 0, indexRows: 0 };
-    const bySource: Array<{ agentId: string; items: Episode[] }> = [];
+    const purgedIds: string[] = [];
     const touched = new Set<string>();
     let files = 0;
     for (const source of this.sources().agents) {
       const backupPath = backupDir ? join(backupDir, `episode-redactions-${source.agentId}.jsonl`) : undefined;
-      const items = await rewriteRoomEpisodes(source.memoryDir, null, edits, backupPath);
-      if (items.length) {
-        bySource.push({ agentId: source.agentId, items });
+      const purged = await purgeEpisodesMatching(source.memoryDir, edits, backupPath);
+      if (purged.length) {
+        purgedIds.push(...purged.map((episode) => episode.id));
         touched.add(source.agentId);
       }
       const fileBackup = backupDir ? join(backupDir, `memory-file-redactions-${source.agentId}.jsonl`) : undefined;
@@ -238,16 +242,17 @@ export class MemoryService {
         touched.add(source.agentId);
       }
     }
-    rewriteRoomIndex(this.db(), roomId, bySource);
+    rewriteRoomIndex(this.db(), roomId, []); // re-chunk the wounded room from its sanitized transcript
+    dropEpisodeRows(this.db(), purgedIds);
     const indexRows = rewriteIndexText(this.db(), edits);
     for (const agentId of touched) this.scheduleEmbedSync(agentId);
-    return { episodes: bySource.reduce((sum, source) => sum + source.items.length, 0), files, indexRows };
+    return { episodes: purgedIds.length, files, indexRows };
   }
 
   /** Sweep one memory dir's distilled stores with the approved sanitize edits:
    * every *.md (MEMORY/USER/topic notes — consolidation may have baked the
    * poison into durable facts) and every *.jsonl EXCEPT episodes.jsonl
-   * (handled by rewriteRoomEpisodes), rewritten JSON-aware per line so
+   * (handled by purgeEpisodesMatching), rewritten JSON-aware per line so
    * escaping survives. Changed files' originals are appended to `backupPath`
    * as { path, before } lines first. Returns files rewritten. */
   private async rewriteMemoryFiles(dir: string, edits: Array<{ quote: string; replacement: string }>, backupPath?: string): Promise<number> {
