@@ -313,6 +313,14 @@ function readAmbientWatchdog(roomId: string): AmbientWatchdog | undefined {
 /** Default "load last N messages" when the human doesn't specify N. */
 const CONTEXT_GATE_LAST_N = 20;
 
+/** Auto-compaction threshold (Charles 2026-08-30): an agent turn that ENDS with
+ * live context above this % of the window queues a /compact for that agent
+ * automatically. Env-tunable (GAIA_AUTO_COMPACT_PERCENT); <=0 disables. */
+function autoCompactPercent(): number {
+  const parsed = Number.parseFloat(process.env.GAIA_AUTO_COMPACT_PERCENT ?? "");
+  return Number.isFinite(parsed) ? parsed : 18;
+}
+
 /** System prompt for the context-gate "compact" summary (option 1). */
 const CONTEXT_SUMMARY_SYSTEM = [
   "You are compacting a group-chat room transcript so a NEW participant can catch up fast.",
@@ -467,6 +475,10 @@ export class RoomService {
    * runtime (which kills the harness pass), and this marker turns the resulting
    * rejection into "cancelled", not a scary harness exit error. */
   private readonly compactCancels = new Set<string>();
+  /** Last usage figure (usedTokens) that already triggered an auto-compact per
+   * agent — a compaction that can't shrink the session (harness no-op) leaves
+   * usage unchanged, and this guard keeps that from looping forever. */
+  private readonly autoCompactAt = new Map<string, number>();
   private recentTasks: Task[] = [];
   /** Tasks mirroring the DURABLE queue (state.queue) for snapshot chips. */
   private queuedTasks: Task[] = [];
@@ -4368,6 +4380,7 @@ export class RoomService {
       this.emit({ type: "task-error", workspaceId: this.workspaceId, roomId: this.roomId, task, error: task.error ?? "" });
     } else {
       this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
+      if (status === "complete") this.maybeAutoCompact(task);
     }
     void this.emitRoomsChanged();
     // Emit the settle snapshot BEFORE draining the next queued turn. SSE is a
@@ -4389,6 +4402,37 @@ export class RoomService {
           if (this.draining) this.draining = undefined;
         });
       });
+  }
+
+  /** Auto-compaction (Charles 2026-08-30): when a finished agent turn leaves an
+   * agent's context above AUTO_COMPACT_PERCENT of its window, queue a /compact
+   * for it through the normal durable command path — same mechanics, system
+   * reply, and compact boundary as a human-typed /compact, and it drains only
+   * once the room goes idle. Uniform: capability-gated, never harness-branched.
+   * Loop-guarded per (agent, usage figure) so a no-op harness compaction can't
+   * re-fire endlessly, and deduped against an already-queued/running compact. */
+  private maybeAutoCompact(task: Task): void {
+    const threshold = autoCompactPercent();
+    if (threshold <= 0) return;
+    for (const target of task.targets) {
+      const agent = this.workspace.agents[target];
+      if (!agent) continue;
+      const runtime = this.runtimes[target];
+      if (!runtime?.capabilities.supportsCompact || !runtime.compact) continue;
+      if (this.compactingAgents.has(target)) continue;
+      const pendingCompact = (candidate?: Task) => candidate && parseCommand(candidate.text).type === "compact";
+      if (pendingCompact(this.activeTask) || this.queuedTasks.some((queued) => pendingCompact(queued))) continue;
+      const usage = this.contextFor(agent);
+      if (!usage?.maxTokens || usage.usedTokens <= 0) continue;
+      const percent = (usage.usedTokens / usage.maxTokens) * 100;
+      if (!(percent > threshold)) continue;
+      if (this.autoCompactAt.get(target) === usage.usedTokens) continue;
+      this.autoCompactAt.set(target, usage.usedTokens);
+      void this.appendSystemNote(
+        `⚙ auto-compact: @${target} context at ${Math.round(percent)}% (>${threshold}%) — compacting.`,
+      ).catch(() => {});
+      void this.sendMessage(`/compact ${target}`).catch(() => {});
+    }
   }
 
   private taskCancelled(task: Task): boolean {

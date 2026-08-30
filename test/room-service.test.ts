@@ -1567,6 +1567,10 @@ test("/cancel aborts a running compaction — the pass is killed and the reply s
 });
 
 test("a successful compact refreshes the stale ctx chip: streamed summary size, else dropped", async () => {
+  // Auto-compaction would fire its own /compact at 50% usage and eat the
+  // scripted passes this test counts — disable it; it has its own test below.
+  process.env.GAIA_AUTO_COMPACT_PERCENT = "0";
+  try {
   // Before the fix the chip sat on the pre-compact % until the next turn.
   let compactCalls = 0;
   const factory = (agent: AgentDef) => {
@@ -1601,6 +1605,48 @@ test("a successful compact refreshes the stale ctx chip: streamed summary size, 
   await service.sendMessage("/compact");
   const dropped = (await service.getSnapshot()).agents.find((agent) => agent.id === "gaia")?.context;
   assert.equal(dropped, undefined, "stale usage dropped when the harness streamed no post-compact figure");
+  } finally {
+    delete process.env.GAIA_AUTO_COMPACT_PERCENT;
+  }
+});
+
+test("auto-compact: a turn ending above the context threshold queues a /compact automatically, once", async () => {
+  let compactCalls = 0;
+  const factory = (agent: AgentDef) => {
+    const runtime = scriptedRuntime(agent, () => [
+      { type: "context-usage", usedTokens: 100_000, maxTokens: 200_000 } as AgentEvent, // 50% > 18%
+      { type: "text-delta", delta: "hi" } as AgentEvent,
+    ]);
+    runtime.capabilities = { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsCompact: true };
+    (runtime as unknown as { compact: () => Promise<{ compacted: boolean; message: string }> }).compact = async () => {
+      compactCalls += 1;
+      return { compacted: true, message: "session compacted." };
+    };
+    return runtime as unknown as AgentRuntime;
+  };
+  const { service, root } = await makeService({ runtimeFactory: factory });
+
+  await service.sendMessage("hello");
+  await service.waitForIdle();
+  // The auto /compact rides the durable queue behind the settle — poll it in.
+  const deadline = Date.now() + 5_000;
+  while (compactCalls < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(compactCalls, 1, "auto-compact fired the harness compaction exactly once");
+
+  await service.waitForIdle();
+  const room = await RoomHandle.open(root, "default");
+  const { events: transcript } = await room.eventsFrom(0);
+  assert.ok(
+    transcript.some((event) => event.author === "system" && /auto-compact: @gaia context at 50%/.test(event.text)),
+    "auto-compact announcement persisted",
+  );
+  assert.ok(
+    transcript.some((event) => event.author === "system" && /session compacted\./.test(event.text)),
+    "compact reply persisted",
+  );
+  // No streamed post-compact figure → usage entry dropped → no re-fire loop.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(compactCalls, 1, "no auto-compact loop after the pass");
 });
 
 test("durable compaction: a compacted agent that LOSES its session reloads [summary + tail], not the full raw transcript", async () => {
