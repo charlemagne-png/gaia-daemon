@@ -3481,6 +3481,62 @@ test("/love: same tree semantics as berserk — root flag, child inherits, off f
   assert.equal((await rootService.getSnapshot()).room.love, undefined);
 });
 
+test("/scaffold: steward subroom — first-class (subroom:true) under the origin, titled from the task, steward seeded and running the task as its first message; origin gets the durable note", async () => {
+  // roomPeer opens the SUBROOM's own resident service (single-writer rule);
+  // the workspace ref is filled after makeService returns — the peer hook only
+  // fires later, inside sendMessage.
+  let workspaceRef: Workspace | undefined;
+  const opened: string[] = [];
+  const children: RoomService[] = [];
+  const { service, workspace, root } = await makeService({
+    roomPeer: async (roomId) => {
+      opened.push(roomId);
+      const child = await RoomService.open({
+        workspaceId: "ws1",
+        workspace: workspaceRef!,
+        roomId,
+        memoryStore: new MemoryStore(),
+        runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: "on it" } as AgentEvent]),
+      });
+      await child.init();
+      children.push(child);
+      return child;
+    },
+  });
+  workspaceRef = workspace;
+  await service.init();
+
+  const task = await service.sendMessage("/scaffold ship the vault UI");
+  assert.equal(task.status, "complete", "synchronous command task settles");
+  assert.equal(opened.length, 1, "exactly one steward subroom minted");
+  const childId = opened[0];
+
+  // Subroom state: nested under the origin, FIRST-CLASS (not a summon lane),
+  // steward active, titled from the task in the human's words (auto — living).
+  const childState = normalizeRoomState(await readJson(workspacePaths.roomState(root, childId)));
+  assert.equal(childState.parentRoomId, "default", "nests under the origin room");
+  assert.equal(childState.subroom, true, "subroom:true — isSummonRoom stays parentRoomId && !subroom");
+  assert.equal(childState.activeAgent, "gaia", "steward is the active agent");
+  assert.equal(childState.title, "ship the vault UI");
+  assert.equal(childState.titleSource, "auto");
+
+  // The task ran as the subroom's FIRST message and the steward took the turn.
+  await children[0].waitForIdle();
+  const childTranscript = await (await RoomHandle.open(root, childId)).recentEvents(20);
+  assert.equal(childTranscript.find((event) => event.author === "user")?.text, "ship the vault UI", "task forwarded verbatim as the first message");
+  assert.ok(childTranscript.some((event) => event.author === "gaia"), "steward turn ran immediately");
+
+  // Origin room: durable system note naming the subroom.
+  const originTranscript = await (await RoomHandle.open(root, "default")).recentEvents(20);
+  const note = originTranscript.find((event) => event.author === "system" && event.text.includes(childId));
+  assert.ok(note, "origin system note carries the subroom id");
+  assert.ok(note!.text.includes("ship the vault UI"), "note names the task title");
+
+  // Origin room untouched otherwise: no queue slot, no flag.
+  const originState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(originState.queue, undefined, "/scaffold never queues in the origin");
+});
+
 test("/teleport on|off flips a durable room-local flag synchronously and commits a system note", async () => {
   let release!: () => void;
   let markStarted!: () => void;

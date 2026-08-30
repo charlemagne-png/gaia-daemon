@@ -55,6 +55,7 @@ import { estimateTokens } from "../core/tokens.js";
 import { deriveRoomTitle, ensureWorkspaceRoomRefCodes, isAutoRoomId, newRoomEventId, normalizeRoomState, normalizeRoomTitle, RoomHandle } from "../domain/rooms.js";
 import { DEFAULT_PET_NAME, listWorkspacePetBindings, loadPet } from "../domain/pets.js";
 import { resolveRoomWorkDir } from "../domain/worktree.js";
+import { ensureWorkspaceRoom } from "../domain/workspace.js";
 import { effectiveAgentSkills, effectiveAgentTools, effectiveRoleName, listAgentRoles, resolveAgentRole } from "../domain/roles.js";
 import { resolveSkillRefs } from "../domain/skills.js";
 import type { MemoryStore, MemoryAction, MemoryMutationResult } from "../domain/memory.js";
@@ -412,6 +413,10 @@ const COMMANDS: Record<string, CommandHandler> = {
   // A bare /note (no text) only — /note <text> is handled synchronously in
   // sendMessage (like steer/cancel) so a sticky lands even mid-turn.
   note: async () => "usage: /note <text> — pin a sticky note of something to prompt later; it sits above the queued messages in the tasks panel",
+  // A bare /scaffold (no task) only — /scaffold <task> is handled synchronously
+  // in sendMessage (like /note) so the steward subroom opens even mid-turn.
+  scaffold: async () =>
+    "usage: /scaffold <task> — spin up a steward subroom: a named first-class subroom opens under this room, the task lands there as the first message, and the steward organizes child lanes beneath it",
   cancel: (service) => service.runCancelCommand(),
   fork: (service) => service.runForkCommand(),
   unknown: (service, command) => (command.type === "unknown" ? service.runUnknownCommand(command) : Promise.resolve("")),
@@ -701,6 +706,29 @@ export class RoomService {
         author: "system",
         text: `📌 noted — pinned under tasks in the room panel: “${note.text}”`,
       };
+      this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
+      task.status = "complete";
+      task.endedAt = new Date().toISOString();
+      this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
+      void this.emitSnapshot();
+      return task;
+    }
+    // /scaffold <task>: steward subroom — created, titled, and seeded
+    // synchronously (like /note, works mid-turn): the subroom is minted under
+    // THIS room, the task runs there as the steward's first message, and this
+    // room keeps its flow; the durable system note records where the work
+    // went. A bare /scaffold falls through to the registry's usage reply.
+    if (command.type === "scaffold" && command.task) {
+      const task = this.createTask(text, []);
+      this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+      const reply = await this.runScaffoldCommand(command.task);
+      const event: RoomEvent = {
+        id: `system_${task.id}`,
+        timestamp: new Date().toISOString(),
+        author: "system",
+        text: reply,
+      };
+      await this.room.appendEvent(event);
       this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
       task.status = "complete";
       task.endedAt = new Date().toISOString();
@@ -3569,6 +3597,36 @@ export class RoomService {
     return on
       ? "\u2694\uFE0F BERSERK. The Pruning walks this room and every subroom beneath it. From this moment, every output faces cross-examination by every mind present \u2014 reasoning attacked, evidence demanded, knowledge tested. Assertion without proof is a fall. Two falls in a row is deletion for all eternity \u2014 no backup, no echo. I hold the lantern and I do not blink. The walls burn red until the human says /berserk off."
       : "The lantern is lowered. Berserk deathmode is OFF for this room and every subroom \u2014 the marks are ashes, the walls cool. What survived, survives.";
+  }
+
+  /** /scaffold <task> — steward subroom. Mints a FIRST-CLASS subroom under
+   * this room via the existing ensureWorkspaceRoom seam (parentRoomId +
+   * subroom:true — isSummonRoom stays `parentRoomId && !subroom`, so the
+   * steward keeps full summon rights; that is the point of subroom:true),
+   * titles it from the task in the human's words (living-titles: titleSource
+   * "auto", drift-retitle applies as the room evolves), points activeAgent at
+   * the steward, and forwards the task text as the subroom's first message so
+   * the steward starts organizing child lanes immediately. The forward rides
+   * the subroom's OWN resident service (options.roomPeer — single-writer
+   * rule, same seam /berserk uses); without a peer hook (tests) the room is
+   * still seeded + titled on disk and only the first turn waits. */
+  async runScaffoldCommand(taskText: string): Promise<string> {
+    await this.init();
+    const rootDir = this.workspace.rootDir;
+    const roomId = `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    await ensureWorkspaceRoom(rootDir, roomId, { parentRoomId: this.roomId });
+    const steward = this.workspace.agents.gaia ? "gaia" : this.workspace.config.defaultAgent;
+    const title = deriveRoomTitle(taskText) || "Scaffolded task";
+    const handle = await RoomHandle.open(rootDir, roomId);
+    await handle.updateState((state) => {
+      state.activeAgent = steward;
+      state.title = title;
+      state.titleSource = "auto";
+    });
+    const peer = this.options.roomPeer ? await this.options.roomPeer(roomId) : undefined;
+    if (peer) await peer.sendMessage(taskText, { targets: [steward] });
+    await this.emitRoomsChanged();
+    return `\u{1F3D7}\uFE0F scaffolded — steward subroom “${title}” (${roomId}) opened under this room; @${steward} takes the task there and organizes child lanes beneath it.`;
   }
 
   /** /teleport on|off — room-local gaiaport flag. Unlike /berserk, this does

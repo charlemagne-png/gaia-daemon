@@ -26,6 +26,7 @@ export type SlashCommand =
   | { type: "steer"; text?: string }
   | { type: "queue"; text?: string }
   | { type: "note"; text?: string }
+  | { type: "scaffold"; task?: string }
   | { type: "cancel" }
   | { type: "recall"; agent?: string; query?: string }
   | { type: "gaiago"; text?: string }
@@ -75,6 +76,12 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "steer", type: "steer", description: "inject guidance into the running turn: /steer <text>" },
   { name: "queue", type: "queue", description: "park an idea on the durable queue without steering the running turn: /queue <text> (pause/resume it in the tasks panel)" },
   { name: "note", type: "note", description: "pin a sticky note of something to prompt later: /note <text> (shown above queued messages in the tasks panel)" },
+  {
+    name: "scaffold",
+    type: "scaffold",
+    description:
+      "spin up a steward subroom for a task: /scaffold <task> — opens a named first-class subroom under this room, @gaia takes the task as its first message and organizes child lanes beneath it",
+  },
   { name: "cancel", type: "cancel", description: "stop the running turn and drop queued messages", aliases: ["stop"] },
   { name: "recall", type: "recall", description: "search memory + room history: /recall [@agent] <query>" },
   { name: "gaiago", type: "gaiago", description: "seal text (or a file/audio path) into gaiago via a worker translator — only the translation returns: /gaiago <text|path>" },
@@ -180,6 +187,10 @@ export function parseCommand(input: string): SlashCommand {
       return { type: "queue", text: args.join(" ") || undefined };
     case "note":
       return { type: "note", text: args.join(" ") || undefined };
+    case "scaffold":
+      // The whole tail is the steward TASK — forwarded verbatim as the
+      // subroom's first message, so it is never mention-stripped or split.
+      return { type: "scaffold", task: args.join(" ") || undefined };
     case "recall": {
       // Only an explicit @-prefix names an agent; anything else is the query.
       const hasAgent = args[0]?.startsWith("@") ?? false;
