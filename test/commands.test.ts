@@ -30,6 +30,8 @@ test("parseCommand: known commands and arguments", () => {
   // /love sanitize all — fan the love review across every room in the workspace.
   assert.deepEqual(parseCommand("/love sanitize all"), { type: "love", sanitize: true, all: true });
   assert.deepEqual(parseCommand("/love sanitize ALL"), { type: "love", sanitize: true, all: true });
+  assert.deepEqual(parseCommand("/love sanitize auto"), { type: "love", sanitize: true, auto: true });
+  assert.deepEqual(parseCommand("/love sanitize AUTO"), { type: "love", sanitize: true, auto: true });
   // /scaffold: the whole tail is the steward TASK (verbatim); bare = usage reply.
   assert.deepEqual(parseCommand("/scaffold ship the vault UI"), { type: "scaffold", task: "ship the vault UI" });
   assert.deepEqual(parseCommand("/scaffold"), { type: "scaffold", task: undefined });

@@ -22,6 +22,10 @@ export interface ModelFallback {
   from: string;
   to: string;
   reason: string;
+  /** True when the switch was a safety-classifier reroute (a refusal
+   * fallback), not a capacity/availability one — the violation auto-heal
+   * trigger keys on this. */
+  refusal?: boolean;
 }
 
 /** A file pasted into the composer and attached to a user message. The bytes
@@ -960,7 +964,7 @@ export interface BackgroundTask extends BackgroundTaskInfo {
 
 export type AgentEvent =
   | { type: "model-info"; provider: string; modelId: string; subscription: boolean }
-  | { type: "model-fallback"; fromModel: string; toModel: string; reason: string }
+  | { type: "model-fallback"; fromModel: string; toModel: string; reason: string; refusal?: boolean }
   | { type: "context-usage"; usedTokens: number; maxTokens?: number }
   | { type: "text-delta"; delta: string }
   | { type: "thinking-start" }
@@ -1325,7 +1329,7 @@ export type UiEvent =
   | { type: "task-end"; workspaceId: string; roomId: string; task: Task }
   | { type: "task-error"; workspaceId: string; roomId: string; task: Task; error: string }
   | ({ type: "model-info"; provider: string; modelId: string; subscription: boolean } & StreamScope)
-  | ({ type: "model-fallback"; fromModel: string; toModel: string; reason: string } & StreamScope)
+  | ({ type: "model-fallback"; fromModel: string; toModel: string; reason: string; refusal?: boolean } & StreamScope)
   | ({ type: "context-usage"; usedTokens: number; maxTokens?: number } & StreamScope)
   | ({ type: "text-delta"; delta: string } & StreamScope)
   | ({ type: "thinking-start" } & StreamScope)

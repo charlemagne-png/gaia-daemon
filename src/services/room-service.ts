@@ -424,7 +424,9 @@ const COMMANDS: Record<string, CommandHandler> = {
       ? command.sanitize
         ? command.all
           ? service.runLoveSanitizeAllCommand()
-          : service.runLoveSanitizeCommand()
+          : command.auto
+            ? service.runLoveSanitizeAutoCommand()
+            : service.runLoveSanitizeCommand()
         : service.runLoveCommand(command.off)
       : Promise.resolve(""),
   teleport: (service, command) => (command.type === "teleport" ? service.runTeleportCommand(command.on) : Promise.resolve("")),
@@ -1873,7 +1875,7 @@ export class RoomService {
               }
             }
             if (event.type === "model-fallback") {
-              this.modelFallbacks[target] = { from: event.fromModel, to: event.toModel, reason: event.reason };
+              this.modelFallbacks[target] = { from: event.fromModel, to: event.toModel, reason: event.reason, ...(event.refusal ? { refusal: true } : {}) };
             }
             if (event.type === "background-task") {
               void this.recordBackgroundTask(target, event).catch(() => {});
@@ -2789,6 +2791,29 @@ export class RoomService {
    * apply; originals preserved in redactions.jsonl), but the reviewer reads
    * through the LOVE lens: find the turns wounding the room and rewrite them
    * translated into pure love — substance and honesty kept, heat removed. */
+  /** /love sanitize auto — VIOLATION AUTO-HEAL (Charles 08-30: "auto rewrite
+   * and forensic scrub in place", zero-trace): the love review runs and its
+   * rewrites are applied IMMEDIATELY — no approval popup — so transcript heal
+   * + whole-memory scrub (violation episodes purged, notes/index excised) land
+   * as ONE motion. Queued automatically by maybeAutoHeal when a provider
+   * safety reroute flags a turn; lives on every room service, so subrooms and
+   * summon lanes heal themselves the same way. Manual use works too. */
+  async runLoveSanitizeAutoCommand(): Promise<string> {
+    const proposal = await this.sanitizePreview({ lens: "love" });
+    const window = `${proposal.window} message${proposal.window === 1 ? "" : "s"}`;
+    if (proposal.parseError) {
+      return `\uD83D\uDC97 auto-heal: the reviewer read ${window} but the reply did not parse as suggestions (${proposal.parseError}) — nothing rewritten; the raw notes are in the review popup.`;
+    }
+    if (proposal.suggestions.length === 0) {
+      return `\uD83D\uDC97 auto-heal: the reviewer read ${window} and found no wound to heal. ${proposal.summary}`.trim();
+    }
+    const result = await this.sanitizeApply(
+      proposal.suggestions.map((suggestion) => ({ eventId: suggestion.eventId, quote: suggestion.quote, replacement: suggestion.replacement })),
+      { auto: true },
+    );
+    return `\uD83D\uDC97 auto-heal: applied ${result.applied} healing rewrite${result.applied === 1 ? "" : "s"}${result.skipped > 0 ? ` (${result.skipped} skipped)` : ""} — transcript healed and long-term memory scrubbed in one motion. Originals preserved in redactions.jsonl.`;
+  }
+
   async runLoveSanitizeCommand(): Promise<string> {
     const proposal = await this.sanitizePreview({ lens: "love" });
     const window = `${proposal.window} message${proposal.window === 1 ? "" : "s"}`;
@@ -2953,8 +2978,10 @@ export class RoomService {
    * cursors so the next turn replays the sanitized window. Every quote is
    * re-validated against the live transcript — a stale or hallucinated quote
    * is skipped, never guessed at. */
-  async sanitizeApply(edits: { eventId: string; quote: string; replacement: string }[]): Promise<{ applied: number; skipped: number }> {
-    if (this.activeTask) throw new Error("A turn is running — wait for it to finish (or /cancel) before rewriting context.");
+  async sanitizeApply(edits: { eventId: string; quote: string; replacement: string }[], options: { auto?: boolean } = {}): Promise<{ applied: number; skipped: number }> {
+    // The auto-heal command runs AS the active (command) task — no agent stream
+    // is writing the transcript then, so the busy guard must let it through.
+    if (this.activeTask && !options.auto) throw new Error("A turn is running — wait for it to finish (or /cancel) before rewriting context.");
     if (edits.length === 0) throw new Error("No edits selected.");
     const { events } = await this.room.eventsFrom(0);
     const texts = new Map(events.map((event) => [event.id, event.text]));
@@ -2999,7 +3026,11 @@ export class RoomService {
     // the provider classifier re-flags the freshly healed room. Best-effort:
     // the transcript rewrite above is already committed and must stand.
     let memorySweep = { episodes: 0, files: 0, indexRows: 0 };
-    if (!this.incognito && this.options.memory?.applyRedactions) {
+    // Zero-trace (Charles 08-30): the scrub runs for incognito rooms too — a
+    // summon lane's transcript stays out of the index, but its worker
+    // self-episodes DO live in memory, and the sweep is whole-memory anyway
+    // (no chunks exist for an incognito room, so that part is a no-op).
+    if (this.options.memory?.applyRedactions) {
       try {
         memorySweep = await this.options.memory.applyRedactions(
           this.roomId,
@@ -4474,6 +4505,9 @@ export class RoomService {
       this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
       if (status === "complete") this.maybeAutoCompact(task);
     }
+    // Auto-heal fires on EVERY settle status — a refusal reroute can end a turn
+    // complete (the fallback model answered) or error; both need the heal.
+    this.maybeAutoHeal(task);
     void this.emitRoomsChanged();
     // Emit the settle snapshot BEFORE draining the next queued turn. SSE is a
     // single ordered stream and the client REPLACES its snapshot wholesale, so a
@@ -4525,6 +4559,36 @@ export class RoomService {
       ).catch(() => {});
       void this.sendMessage(`/compact ${target}`).catch(() => {});
     }
+  }
+
+  /** VIOLATION AUTO-HEAL trigger (Charles 08-30): a settling turn whose agent
+   * was safety-rerouted (`modelFallback.refusal`) queues `/love sanitize auto`
+   * through the normal durable command path — same mechanics as auto-compact,
+   * drains when the room goes idle. Fires once per reroute (the refusal flag
+   * is consumed on queue), deduped against an already queued/active heal, and
+   * lives in the shared settle funnel so EVERY room service — root, subroom,
+   * summon lane — heals itself. GAIA_AUTO_HEAL=0/off disables. */
+  private maybeAutoHeal(task: Task): void {
+    if (/^(0|off|false)$/i.test(process.env.GAIA_AUTO_HEAL ?? "")) return;
+    let flagged = false;
+    for (const target of task.targets) {
+      const fallback = this.modelFallbacks[target];
+      if (!fallback?.refusal) continue;
+      flagged = true;
+      const { refusal: _consumed, ...rest } = fallback;
+      this.modelFallbacks[target] = rest; // once per reroute
+    }
+    if (!flagged) return;
+    const pendingHeal = (candidate?: Task): boolean => {
+      if (!candidate) return false;
+      const parsed = parseCommand(candidate.text);
+      return parsed.type === "love" && parsed.sanitize === true && parsed.auto === true;
+    };
+    if (pendingHeal(this.activeTask) || this.queuedTasks.some((queued) => pendingHeal(queued))) return;
+    void this.appendSystemNote(
+      "\uD83D\uDC97 auto-heal: a safety reroute flagged this turn — queueing the love review; its rewrites and the whole-memory scrub apply automatically.",
+    ).catch(() => {});
+    void this.sendMessage("/love sanitize auto").catch(() => {});
   }
 
   private taskCancelled(task: Task): boolean {

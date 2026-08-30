@@ -693,6 +693,7 @@ export class ClaudeRuntime implements AgentRuntime {
                 fromModel: from,
                 toModel: to,
                 reason: sys.content?.trim() || `switched to ${to}${sys.trigger ? ` (${sys.trigger})` : ""}`,
+                ...(sys.subtype === "model_refusal_fallback" ? { refusal: true } : {}),
               });
             }
           } else if (sys.subtype === "thinking_tokens") {
