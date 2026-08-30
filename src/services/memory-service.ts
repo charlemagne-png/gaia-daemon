@@ -9,13 +9,15 @@
 // (health table + flags on every result), and the embedder is local-first —
 // `auto` never selects cloud, and no provider is trusted without a probe.
 
-import { join } from "node:path";
+import { readdir } from "node:fs/promises";
+import { join, relative } from "node:path";
 import type { AgentDef, MemoryConfig } from "../core/types.js";
 import { newId } from "../core/ids.js";
+import { appendText, readText, writeTextAtomic } from "../core/store.js";
 import { DEFAULTS, resolveMemoryConfig } from "../core/config.js";
 import type { SqliteDatabase as DatabaseSync } from "../core/sqlite.js";
 import type { Episode, EpisodeOutcome } from "../domain/episodes.js";
-import { appendEpisode, purgeRoomEpisodes, rewriteRoomEpisodes } from "../domain/episodes.js";
+import { EPISODES_FILE, appendEpisode, applyReplacements, purgeRoomEpisodes, rewriteRoomEpisodes } from "../domain/episodes.js";
 import type { ActiveContextRef, MemoryHealthRow, MemorySearchHit, RoomRef, TranscriptSearchHit } from "../domain/workspace-index.js";
 import {
   countEmbeddings,
@@ -24,6 +26,7 @@ import {
   openWorkspaceIndex,
   pendingEmbeddings,
   purgeRoomIndex,
+  rewriteIndexText,
   rewriteRoomIndex,
   readHealth,
   searchTranscripts,
@@ -204,22 +207,102 @@ export class MemoryService {
   /** Sanitize-apply propagation (thanks-dario "rewrite historical context"):
    * the transcript edits the human approved must reach EVERY store recall
    * reads, or the next turn re-injects the original text via auto-recall and
-   * the classifier re-flags the healed room (the 08-30 loop). Rewrites each
-   * agent's episodes captured in this room (originals → backupDir, reversible)
-   * and resets the room's derived index slice so the next sync re-chunks the
-   * sanitized transcript. Uniform across harnesses; derived index only ever
-   * rebuilt from already-sanitized sources. Returns episodes rewritten. */
-  async applyRedactions(roomId: string, edits: Array<{ quote: string; replacement: string }>, backupDir?: string): Promise<number> {
-    if (!edits.length) return 0;
+   * the classifier re-flags the healed room (the 08-30 loop). WHOLE-memory
+   * sweep (08-30 follow-up: room-scoped left the wound alive — summon lanes +
+   * sibling rooms captured the same poison into their episodes, distilled
+   * notes, and index chunks): rewrites EVERY agent's episodes from EVERY room,
+   * their memory files (*.md + fact logs), the wounded room's index slice
+   * (re-chunked from the sanitized transcript), and every remaining index
+   * chunk/fact row in place. Originals → backupDir, reversible. Uniform across
+   * harnesses; derived index only rebuilt from already-sanitized sources. */
+  async applyRedactions(
+    roomId: string,
+    edits: Array<{ quote: string; replacement: string }>,
+    backupDir?: string,
+  ): Promise<{ episodes: number; files: number; indexRows: number }> {
+    if (!edits.length) return { episodes: 0, files: 0, indexRows: 0 };
     const bySource: Array<{ agentId: string; items: Episode[] }> = [];
+    const touched = new Set<string>();
+    let files = 0;
     for (const source of this.sources().agents) {
       const backupPath = backupDir ? join(backupDir, `episode-redactions-${source.agentId}.jsonl`) : undefined;
-      const items = await rewriteRoomEpisodes(source.memoryDir, roomId, edits, backupPath);
-      if (items.length) bySource.push({ agentId: source.agentId, items });
+      const items = await rewriteRoomEpisodes(source.memoryDir, null, edits, backupPath);
+      if (items.length) {
+        bySource.push({ agentId: source.agentId, items });
+        touched.add(source.agentId);
+      }
+      const fileBackup = backupDir ? join(backupDir, `memory-file-redactions-${source.agentId}.jsonl`) : undefined;
+      const swept = await this.rewriteMemoryFiles(source.memoryDir, edits, fileBackup);
+      if (swept > 0) {
+        files += swept;
+        touched.add(source.agentId);
+      }
     }
     rewriteRoomIndex(this.db(), roomId, bySource);
-    for (const source of bySource) this.scheduleEmbedSync(source.agentId);
-    return bySource.reduce((sum, source) => sum + source.items.length, 0);
+    const indexRows = rewriteIndexText(this.db(), edits);
+    for (const agentId of touched) this.scheduleEmbedSync(agentId);
+    return { episodes: bySource.reduce((sum, source) => sum + source.items.length, 0), files, indexRows };
+  }
+
+  /** Sweep one memory dir's distilled stores with the approved sanitize edits:
+   * every *.md (MEMORY/USER/topic notes — consolidation may have baked the
+   * poison into durable facts) and every *.jsonl EXCEPT episodes.jsonl
+   * (handled by rewriteRoomEpisodes), rewritten JSON-aware per line so
+   * escaping survives. Changed files' originals are appended to `backupPath`
+   * as { path, before } lines first. Returns files rewritten. */
+  private async rewriteMemoryFiles(dir: string, edits: Array<{ quote: string; replacement: string }>, backupPath?: string): Promise<number> {
+    const walk = async (d: string): Promise<string[]> => {
+      const out: string[] = [];
+      let entries;
+      try {
+        entries = await readdir(d, { withFileTypes: true });
+      } catch {
+        return out;
+      }
+      for (const entry of entries) {
+        const path = join(d, entry.name);
+        if (entry.isDirectory()) out.push(...(await walk(path)));
+        else if (entry.isFile()) out.push(path);
+      }
+      return out;
+    };
+    const deepReplace = (value: unknown): unknown => {
+      if (typeof value === "string") return applyReplacements(value, edits);
+      if (Array.isArray(value)) return value.map(deepReplace);
+      if (value && typeof value === "object") {
+        return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, deepReplace(entry)]));
+      }
+      return value;
+    };
+    let changed = 0;
+    for (const path of await walk(dir)) {
+      const isMd = path.endsWith(".md");
+      const isJsonl = path.endsWith(".jsonl") && !path.endsWith(EPISODES_FILE);
+      if (!isMd && !isJsonl) continue;
+      const text = await readText(path);
+      if (!text) continue;
+      let next: string;
+      if (isMd) {
+        next = applyReplacements(text, edits);
+      } else {
+        next = text
+          .split("\n")
+          .map((line) => {
+            if (!line.trim()) return line;
+            try {
+              return JSON.stringify(deepReplace(JSON.parse(line)));
+            } catch {
+              return line; // unparseable lines stay verbatim
+            }
+          })
+          .join("\n");
+      }
+      if (next === text) continue;
+      if (backupPath) await appendText(backupPath, `${JSON.stringify({ path: relative(dir, path), before: text })}\n`);
+      await writeTextAtomic(path, next);
+      changed += 1;
+    }
+    return changed;
   }
 
   // --- search ----------------------------------------------------------------

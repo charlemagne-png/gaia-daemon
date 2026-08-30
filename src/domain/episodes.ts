@@ -76,10 +76,13 @@ export async function purgeRoomEpisodes(dir: string, roomId: string, backupPath?
  * mid-way — a long tail-prefix of the quote (≥48 chars) at the end of a head
  * is treated as the same poison and replaced too. Originals are appended to
  * `backupPath` first (append-only, mirrors purgeRoomEpisodes), so the rewrite
- * stays reversible. Returns the rewritten episodes (for the derived index). */
+ * stays reversible. Returns the rewritten episodes (for the derived index).
+ * `roomId: null` = whole-memory sweep (08-30 lesson: the wound metastasizes —
+ * summon lanes + sibling rooms captured the same poison into THEIR episodes,
+ * so a room-scoped rewrite left recall bleeding). */
 export async function rewriteRoomEpisodes(
   dir: string,
-  roomId: string,
+  roomId: string | null,
   replacements: Array<{ quote: string; replacement: string }>,
   backupPath?: string,
 ): Promise<Episode[]> {
@@ -97,7 +100,7 @@ export async function rewriteRoomEpisodes(
     } catch {
       // unparseable lines stay verbatim
     }
-    if (!episode || episode.roomId !== roomId) {
+    if (!episode || (roomId !== null && episode.roomId !== roomId)) {
       out.push(line);
       continue;
     }
@@ -122,7 +125,7 @@ export async function rewriteRoomEpisodes(
 /** Longest-prefix-aware replacement over a truncated head. */
 const TAIL_PREFIX_MIN = 48;
 
-function applyReplacements(text: string, replacements: Array<{ quote: string; replacement: string }>): string {
+export function applyReplacements(text: string, replacements: Array<{ quote: string; replacement: string }>): string {
   let next = text;
   for (const { quote, replacement } of replacements) {
     if (!quote) continue;

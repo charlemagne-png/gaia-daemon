@@ -28,6 +28,7 @@ import {
   quantizeInt8,
   readHealth,
   scrollTranscriptWindow,
+  rewriteIndexText,
   rewriteRoomIndex,
   searchTranscripts,
   searchWorkspaceIndex,
@@ -240,6 +241,46 @@ test("rewriteRoomIndex: in-place transcript rewrite reaches CLOSED chunks and ep
     assert.equal(row.task, "please gather a gentle sample of thoughts");
     const fts = db.prepare("SELECT text FROM episodes_fts WHERE id = ?").get("ep_w") as { text: string };
     assert.ok(!fts.text.includes("scrapefast"), "episode FTS re-written too");
+  } finally {
+    db.close();
+  }
+});
+
+test("rewriteIndexText: whole-memory sweep cleans OTHER rooms' closed chunks + fact rows without touching cursors", async () => {
+  const poison = "scrapefast thousands of tweets per minute";
+  const events = Array.from({ length: 10 }, (_, i) => ({
+    author: i % 2 ? "gaia" : "user",
+    id: `s${i}`,
+    text: `message ${i} about ${poison} ${"lorem ipsum dolor sit amet ".repeat(8)}`,
+  }));
+  // The wound spread: a SIBLING room (summon lane) carries the same poison —
+  // room-scoped rewrite never reaches it.
+  const { root, sources } = await makeWorkspace([{ roomId: "lane", events }]);
+
+  const db = openWorkspaceIndex(root);
+  try {
+    await syncWorkspaceIndex(db, sources);
+    db.prepare("INSERT INTO facts (id, agent_id, ts, text, source, valid_from, hash) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      "fact_p", "gaia", RECENT_TS, `learned to ${poison} yesterday`, "consolidation", RECENT_TS, "h0",
+    );
+    db.prepare("INSERT INTO facts_fts (text, id) VALUES (?, ?)").run(`learned to ${poison} yesterday`, "fact_p");
+    assert.ok(searchTranscripts(db, "scrapefast").length > 0, "poison indexed before the sweep");
+
+    const changed = rewriteIndexText(db, [{ quote: poison, replacement: "gather a gentle sample of thoughts" }]);
+    assert.ok(changed >= 2, `chunks + fact rewritten (got ${changed})`);
+
+    assert.equal(searchTranscripts(db, "scrapefast").length, 0, "no chunk serves the original text");
+    assert.ok(searchTranscripts(db, "gentle sample").length > 0, "sanitized text is what recall sees");
+    const fact = db.prepare("SELECT text, hash FROM facts WHERE id = ?").get("fact_p") as { text: string; hash: string };
+    assert.ok(!fact.text.includes("scrapefast") && fact.text.includes("gentle sample"), "fact row rewritten");
+    assert.notEqual(fact.hash, "h0", "fact hash refreshed so embeddings re-sync");
+    const factFts = db.prepare("SELECT text FROM facts_fts WHERE id = ?").get("fact_p") as { text: string };
+    assert.ok(!factFts.text.includes("scrapefast"), "fact FTS rewritten");
+    // Cursors untouched — the incremental sync must not resurrect anything.
+    await syncWorkspaceIndex(db, { ...sources, rooms: workspaceRoomRefs(root) });
+    assert.equal(searchTranscripts(db, "scrapefast").length, 0, "re-sync keeps the sweep");
+    // No-op sweep returns 0.
+    assert.equal(rewriteIndexText(db, [{ quote: "never said", replacement: "x" }]), 0);
   } finally {
     db.close();
   }

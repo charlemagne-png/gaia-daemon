@@ -153,11 +153,16 @@ export interface RoomMemoryHooks {
    * are self-matches and excluded (MEMORY-DESIGN.md §7). */
   autoRecallBlock(agentId: string, query: string, context?: ActiveContextRef): Promise<string>;
   capture(agentId: string, capture: EpisodeCapture): Promise<void>;
-  /** Sanitize-apply propagation: approved transcript edits rewrite the room's
-   * HISTORICAL context too (episodes + derived index), or auto-recall
-   * re-injects the redacted originals on the very next turn. Optional — a
-   * hookless workspace just skips the propagation. */
-  applyRedactions?(roomId: string, edits: Array<{ quote: string; replacement: string }>, backupDir?: string): Promise<number>;
+  /** Sanitize-apply propagation: approved transcript edits rewrite the
+   * HISTORICAL context too — WHOLE memory (every agent's episodes from every
+   * room, their distilled memory files, and every derived index row), or
+   * auto-recall re-injects the redacted originals on the very next turn.
+   * Optional — a hookless workspace just skips the propagation. */
+  applyRedactions?(
+    roomId: string,
+    edits: Array<{ quote: string; replacement: string }>,
+    backupDir?: string,
+  ): Promise<{ episodes: number; files: number; indexRows: number }>;
   consolidate(agentId: string, options?: { force?: boolean; propose?: boolean }): Promise<ConsolidateResult>;
   /** Dream v2 apply: commits a standing dream-proposal.json (backs `/dream
    * [agent] --apply`, mirrors the CLI/harness route). null = no proposal
@@ -2992,10 +2997,10 @@ export class RoomService {
     // untouched, the next turn's auto-recall re-injects the ORIGINAL text and
     // the provider classifier re-flags the freshly healed room. Best-effort:
     // the transcript rewrite above is already committed and must stand.
-    let episodesRewritten = 0;
+    let memorySweep = { episodes: 0, files: 0, indexRows: 0 };
     if (!this.incognito && this.options.memory?.applyRedactions) {
       try {
-        episodesRewritten = await this.options.memory.applyRedactions(
+        memorySweep = await this.options.memory.applyRedactions(
           this.roomId,
           appliedEdits,
           workspacePaths.roomDir(this.workspace.rootDir, this.roomId),
@@ -3012,7 +3017,7 @@ export class RoomService {
         id: newId("system_sanitize"),
         timestamp: new Date().toISOString(),
         author: "system",
-        text: `✂ Rewrote ${edited.length} message${edited.length === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} skipped)` : ""} in place${episodesRewritten > 0 ? ` + ${episodesRewritten} memory episode${episodesRewritten === 1 ? "" : "s"}` : ""} — context unchanged. Originals are preserved in redactions.jsonl; the next turn replays the full sanitized history.`,
+        text: `✂ Rewrote ${edited.length} message${edited.length === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} skipped)` : ""} in place${memorySweep.episodes > 0 ? ` + ${memorySweep.episodes} memory episode${memorySweep.episodes === 1 ? "" : "s"}` : ""}${memorySweep.files > 0 ? ` + ${memorySweep.files} memory file${memorySweep.files === 1 ? "" : "s"}` : ""}${memorySweep.indexRows > 0 ? ` + ${memorySweep.indexRows} index row${memorySweep.indexRows === 1 ? "" : "s"}` : ""} — whole-memory sweep, context unchanged. Originals are preserved in redactions.jsonl; the next turn replays the full sanitized history.`,
       },
     });
     return { applied: edited.length, skipped };

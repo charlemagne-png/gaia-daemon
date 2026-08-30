@@ -85,6 +85,14 @@ test("rewriteRoomEpisodes: room-scoped quote→replacement, truncated-head tail-
   assert.ok(backedUp[0].includes("scrape thousands"));
   // No-match call is a no-op returning [].
   assert.deepEqual(await rewriteRoomEpisodes(dir, "wounded", [{ quote: "never said", replacement: "x" }]), []);
+
+  // Whole-memory sweep (roomId null): the wound metastasized — the sibling
+  // room's episode carries the same poison and must be cleaned too.
+  const sweep = await rewriteRoomEpisodes(dir, null, [{ quote: poison, replacement: "gather a gentle sample of shared thoughts" }]);
+  assert.equal(sweep.length, 1);
+  assert.equal(sweep[0].id, "ep_other");
+  const after = new Map((await readEpisodesFrom(dir, 0)).items.map((item) => [item.id, item]));
+  assert.ok(!after.get("ep_other")?.task.includes(poison), "sibling-room episode cleaned by the global sweep");
 });
 
 test("purgeRoomEpisodes: drops only the deleted room's episodes, keeps the rest, backs up removed lines, returns count", async () => {

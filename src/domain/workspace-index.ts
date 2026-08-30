@@ -434,6 +434,48 @@ export function rewriteRoomIndex(db: DatabaseSync, roomId: string, episodes: Arr
   for (const source of episodes) applyEpisodes(db, source.agentId, source.items);
 }
 
+/** Whole-memory sanitize sweep over the DERIVED index (08-30: the wound
+ * metastasizes — sibling rooms + summon lanes hold chunks/facts with the same
+ * poison, and their transcripts/cursors are NOT reset by a room-scoped apply,
+ * so closed chunks would serve the original text to recall forever). Applies
+ * the approved quote→replacement edits to EVERY chunk and fact row in place
+ * (fts + hash refreshed so embeddings re-sync). Line counts and cursors are
+ * untouched — the incremental sync never revisits these rows. Derived data
+ * only; always safe. Returns rows rewritten. */
+export function rewriteIndexText(db: DatabaseSync, edits: Array<{ quote: string; replacement: string }>): number {
+  const replace = (text: string): string => {
+    let next = text;
+    for (const { quote, replacement } of edits) {
+      if (quote && next.includes(quote)) next = next.split(quote).join(replacement);
+    }
+    return next;
+  };
+  let changed = 0;
+  const chunkUpdate = db.prepare("UPDATE chunks SET text = ?, hash = ? WHERE id = ?");
+  const chunkFtsDrop = db.prepare("DELETE FROM chunks_fts WHERE chunk_id = ?");
+  const chunkFtsInsert = db.prepare("INSERT INTO chunks_fts (text, chunk_id) VALUES (?, ?)");
+  for (const row of db.prepare("SELECT id, text FROM chunks").all() as Array<{ id: number; text: string }>) {
+    const next = replace(row.text);
+    if (next === row.text) continue;
+    chunkUpdate.run(next, sha256Hex(next), row.id);
+    chunkFtsDrop.run(row.id);
+    chunkFtsInsert.run(next, row.id);
+    changed += 1;
+  }
+  const factUpdate = db.prepare("UPDATE facts SET text = ?, hash = ? WHERE id = ?");
+  const factFtsDrop = db.prepare("DELETE FROM facts_fts WHERE id = ?");
+  const factFtsInsert = db.prepare("INSERT INTO facts_fts (text, id) VALUES (?, ?)");
+  for (const row of db.prepare("SELECT id, text FROM facts").all() as Array<{ id: string; text: string }>) {
+    const next = replace(row.text);
+    if (next === row.text) continue;
+    factUpdate.run(next, sha256Hex(next), row.id);
+    factFtsDrop.run(row.id);
+    factFtsInsert.run(next, row.id);
+    changed += 1;
+  }
+  return changed;
+}
+
 export function purgeRoomIndex(db: DatabaseSync, roomId: string): void {
   deleteRoomChunks(db, roomId, 0);
   db.prepare("DELETE FROM rooms WHERE room_id = ?").run(roomId);
