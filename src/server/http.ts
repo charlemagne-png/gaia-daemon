@@ -892,6 +892,11 @@ export class GaiaWebServer {
       return this.respond(response, () => this.daemon.setRoomFavorite(params![0], params![1], favorite));
     }
 
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/project$/))) {
+      const project = stringField(await parseBody(request), "project") ?? "";
+      return this.respond(response, () => this.daemon.setRoomProject(params![0], params![1], project));
+    }
+
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/teleport$/))) {
       const body = await parseBody(request);
       const on = body && typeof body === "object" ? (body as Record<string, unknown>).on : undefined;

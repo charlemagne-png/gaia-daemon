@@ -407,6 +407,11 @@ body.resizing { cursor: col-resize; user-select: none; }
    (e.g. a nested whale-* child) can't blow the column past the pane and shove
    the trailing twisty off-screen. min-width:0 lets the row shrink to match. */
 .room-tree, .room-node, .room-children { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; }
+/* Day → project grouping of the top-level room list (sidebar.js GroupedRooms). */
+.room-day-head { margin: 6px 0 -2px; padding: 0 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+.room-tree > .room-day-head:first-child { margin-top: 0; }
+.room-project-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; margin-left: 5px; padding-left: 7px; border-left: 1px solid var(--border); }
+.room-project-head { font-size: 10px; letter-spacing: 0.5px; color: var(--muted); padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room-row { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
 
 .room-twisty {

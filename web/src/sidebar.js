@@ -2,7 +2,7 @@
 // child room nests under its parent (via room.parentRoomId) and is collapsed
 // by default behind a twisty. Nesting is unbounded — grandchildren summon
 // their own children.
-import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, openSubroom, renameRoom, selectRoom, setRoomFavorite, summonAgentInRoom } from "./actions.js";
+import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, openSubroom, renameRoom, selectRoom, setRoomFavorite, setRoomProject, summonAgentInRoom } from "./actions.js";
 import { closeSidebarOverlay } from "./chrome.js";
 import { $, h } from "./dom.js";
 import { PathText } from "./links.js";
@@ -148,7 +148,7 @@ function RoomTree() {
   return h(
     "div",
     { class: "room-tree" },
-    visible.map((room) => RoomNode(room, childrenOf, 0)),
+    state.snapshot ? GroupedRooms(visible, childrenOf) : visible.map((room) => RoomNode(room, childrenOf, 0)),
     remaining > 0
       ? h("button", {
           class: "nav-action rooms-more",
@@ -160,6 +160,68 @@ function RoomTree() {
         })
       : null,
   );
+}
+
+/**
+ * Day label for the sidebar's group headers. Calendar days, local time.
+ * @param {number|undefined} timestamp
+ */
+function dayLabel(timestamp) {
+  if (!timestamp) return "older";
+  const date = new Date(timestamp);
+  const now = new Date();
+  const startOfDay = (/** @type {Date} */ d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+/**
+ * The top-level room list grouped by DAY of last activity, then by PROJECT
+ * label within each day (RoomState.project, right-click → "Set project…").
+ * Order stays newest-first: a project cluster is anchored where its newest
+ * room sits; unlabeled rooms ride plain under the day header. Subrooms are
+ * untouched — they still nest under their parents inside RoomNode.
+ * @param {RoomSummary[]} visible
+ * @param {Map<string|null, RoomSummary[]>} childrenOf
+ * @returns {HTMLElement[]}
+ */
+function GroupedRooms(visible, childrenOf) {
+  /** @type {{ label: string, groups: { project: string|null, rooms: RoomSummary[] }[], byProject: Map<string, { project: string|null, rooms: RoomSummary[] }> }[]} */
+  const days = [];
+  let day = days[0];
+  for (const room of visible) {
+    const label = dayLabel(room.lastActivity);
+    if (!day || day.label !== label) {
+      day = { label, groups: [], byProject: new Map() };
+      days.push(day);
+    }
+    if (room.project) {
+      let group = day.byProject.get(room.project);
+      if (!group) {
+        group = { project: room.project, rooms: [] };
+        day.byProject.set(room.project, group);
+        day.groups.push(group);
+      }
+      group.rooms.push(room);
+    } else {
+      day.groups.push({ project: null, rooms: [room] });
+    }
+  }
+  return days.flatMap((section) => [
+    h("div", { class: "room-day-head", text: section.label }),
+    ...section.groups.map((group) =>
+      group.project
+        ? h(
+            "div",
+            { class: "room-project-group" },
+            h("div", { class: "room-project-head", title: `project · ${group.project}`, text: group.project }),
+            group.rooms.map((room) => RoomNode(room, childrenOf, 0)),
+          )
+        : RoomNode(group.rooms[0], childrenOf, 0),
+    ),
+  ]);
 }
 
 /**
@@ -378,6 +440,15 @@ function RoomContextMenu() {
         void setRoomFavorite(room.id, !room.favorite);
       },
       text: room.favorite ? "Remove favorite" : "Add favorite",
+    }),
+    // Project label — the sidebar's second grouping axis (day → project).
+    h("button", {
+      type: "button",
+      onclick: () => {
+        close();
+        void setRoomProject(room.id, room.project ?? "");
+      },
+      text: room.project ? `Set project… (${room.project})` : "Set project…",
     }),
     // Open a first-class side room NESTED under this one — the human's own
     // parallel lane: no delivery back, no steer, the parent's running turn is

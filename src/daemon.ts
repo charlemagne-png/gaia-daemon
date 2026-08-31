@@ -805,6 +805,14 @@ export class Daemon {
     return this.refreshRoomList(workspaceId);
   }
 
+  /** Set/clear a room's project label (sidebar's day → project grouping).
+   * Display metadata only, like title/favorite. */
+  async setRoomProject(workspaceId: string, roomId: string, project: string): Promise<{ rooms: Snapshot["rooms"] }> {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    await service.setProject(project);
+    return this.refreshRoomList(workspaceId);
+  }
+
   /** Toggle this room's /teleport gaiaport flag. Room-local only: no tree walk,
    * no harness/runtime involvement. */
   async setRoomTeleport(workspaceId: string, roomId: string, on: boolean): Promise<SelectionPayload> {

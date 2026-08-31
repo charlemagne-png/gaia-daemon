@@ -542,6 +542,7 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(value.titleSource === "auto" || value.titleSource === "model" || value.titleSource === "manual" ? { titleSource: value.titleSource } : {}),
     ...(typeof value.titleDrift === "number" && Number.isFinite(value.titleDrift) && value.titleDrift > 0 ? { titleDrift: Math.floor(value.titleDrift) } : {}),
     ...(value.favorite === true ? { favorite: true } : {}),
+    ...(typeof value.project === "string" && value.project.trim() ? { project: value.project.trim() } : {}),
     ...(() => {
       const bookmarks = bookmarksFrom(value.bookmarks);
       return bookmarks ? { bookmarks } : {};

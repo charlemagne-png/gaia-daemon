@@ -519,6 +519,27 @@ export async function summonAgentInRoom(roomId, agentId) {
   }
 }
 
+/** Set/clear a room's project label — the sidebar's second grouping axis
+ * (day → project). Empty input clears; Esc cancels.
+ * @param {string} roomId @param {string} [currentProject] */
+export async function setRoomProject(roomId, currentProject = "") {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  const project = await promptText("Set project (empty clears)", { value: currentProject, placeholder: "project name…", okLabel: "Set" });
+  if (project === null) return;
+  try {
+    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/project`, {
+      method: "POST",
+      body: JSON.stringify({ project }),
+    });
+    applyRoomsPayload(snapshot.workspace.id, body.rooms);
+    state.error = "";
+    markDirty("sidebar", "tabs", "status");
+  } catch (error) {
+    setError(error);
+  }
+}
+
 /** @param {string} roomId @param {boolean} favorite */
 export async function setRoomFavorite(roomId, favorite) {
   const snapshot = state.snapshot;

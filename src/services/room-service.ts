@@ -4404,6 +4404,17 @@ export class RoomService {
     await this.emitRoomsChanged();
   }
 
+  /** Project label — the sidebar's second grouping axis (day → project).
+   * Display metadata only, like title/favorite; empty clears it. */
+  async setProject(rawProject: string): Promise<void> {
+    const project = rawProject.replace(/\s+/g, " ").trim();
+    await this.room.updateState((state) => {
+      if (project) state.project = project;
+      else delete state.project;
+    });
+    await this.emitRoomsChanged();
+  }
+
   /** User-named checkpoint pinned to one transcript event. */
   async setBookmark(eventId: string, name: string): Promise<RoomBookmark> {
     const bookmark = await this.room.setBookmark(eventId, name);
@@ -4951,6 +4962,7 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.title ? { title: state.title } : {}),
             ...(state.activeAgent ? { agent: state.activeAgent } : {}),
             ...(state.favorite ? { favorite: true } : {}),
+            ...(state.project ? { project: state.project } : {}),
             ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),
             ...(state.incognito ? { incognito: true } : {}),

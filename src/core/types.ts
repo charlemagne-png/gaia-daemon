@@ -369,6 +369,9 @@ export interface RoomState {
   /** Pinned by the human for quick filtering in the room list. Display-only
    * room metadata, like title: the room id/path stay stable. */
   favorite?: boolean;
+  /** Human/agent project label — the sidebar's second grouping axis (day →
+   * project). Display-only metadata like title/favorite: id/path stay stable. */
+  project?: string;
   /** User-named checkpoints anchored to transcript events (see RoomBookmark).
    * Ordered by the anchored event's timestamp. */
   bookmarks?: RoomBookmark[];
@@ -1121,6 +1124,9 @@ export interface RoomSummary {
   agent?: string;
   /** Human-pinned room (see RoomState.favorite). */
   favorite?: boolean;
+  /** Project label (see RoomState.project) — the sidebar groups rooms by day,
+   * then by this within each day. */
+  project?: string;
   /** User-named checkpoints (see RoomState.bookmarks) — surfaced on the
    * summary so the client's checkpoint navigator rides the same rooms
    * broadcast as title/favorite. */
