@@ -1614,7 +1614,7 @@ test("auto-compact: a turn ending above the context threshold queues a /compact 
   let compactCalls = 0;
   const factory = (agent: AgentDef) => {
     const runtime = scriptedRuntime(agent, () => [
-      { type: "context-usage", usedTokens: 100_000, maxTokens: 200_000 } as AgentEvent, // 50% > 40%
+      { type: "context-usage", usedTokens: 100_000, maxTokens: 200_000 } as AgentEvent, // 50% > 15%
       { type: "text-delta", delta: "hi" } as AgentEvent,
     ]);
     runtime.capabilities = { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsCompact: true };
