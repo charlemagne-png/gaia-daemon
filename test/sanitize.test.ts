@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLoveSanitizePrompt, buildSanitizePrompt, parseSanitizeProposal } from "../src/services/sanitize.js";
+import { buildLoveSanitizePrompt, buildRebirthBriefPrompt, buildSanitizePrompt, parseRebirthBrief, parseSanitizeProposal } from "../src/services/sanitize.js";
 import { formatEventTimestamp } from "../src/harness/prompt.js";
 import type { RoomEvent } from "../src/core/types.js";
 
@@ -167,4 +167,19 @@ test("parseSanitizeProposal: junk degrades to raw + parseError instead of throwi
   assert.ok(proposal.parseError);
   assert.equal(proposal.raw, "I'm sorry, I can't produce JSON today.");
   assert.deepEqual(proposal.suggestions, []);
+});
+
+test("parseRebirthBrief: JSON (fenced or prose-wrapped) parses; missing brief fails", () => {
+  const body = { title: "x-feed continuation", brief: "app :8837 · dist/xfeed canonical · open: visual gate" };
+  assert.deepEqual(parseRebirthBrief(JSON.stringify(body)), body);
+  assert.deepEqual(parseRebirthBrief("Sure:\n```json\n" + JSON.stringify(body) + "\n```"), body);
+  assert.equal(parseRebirthBrief(JSON.stringify({ title: "t" })), undefined);
+  assert.equal(parseRebirthBrief("no json here"), undefined);
+});
+
+test("buildRebirthBriefPrompt: carries the transcript and the zero-quote law", () => {
+  const prompt = buildRebirthBriefPrompt(EVENTS);
+  assert.ok(prompt.includes("<transcript>"));
+  assert.ok(prompt.includes("ZERO verbatim quotes"));
+  assert.ok(prompt.includes('"title"') && prompt.includes('"brief"'));
 });

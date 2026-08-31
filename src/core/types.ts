@@ -318,6 +318,15 @@ export interface RoomState {
   /** /teleport room-local gaiaport link flag. No parent/descendant inheritance:
    * each room owns exactly its own blue-glow state. */
   teleport?: boolean;
+  /** /love sanitize rebirth: set once when this room is retired because its
+   * LIVE topic keeps re-flagging fresh turns even after heals — no amount of
+   * history-healing outruns a present-tense trigger. Points to the fresh room
+   * that continues the work from a short neutral engineering brief. */
+  rebirth?: { to: string; at: string };
+  /** Count of auto-heal applies that landed in this room. A safety reroute
+   * arriving AFTER a heal means the trigger is live content, not history —
+   * maybeAutoHeal escalates the next automatic response to rebirth. */
+  autoHeals?: number;
   agentCursors: Record<string, number>;
   /** Per-agent active-context floor: the transcript line index below which
    * content is NOT in the agent's live context (never loaded via a context-gate

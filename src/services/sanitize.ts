@@ -195,6 +195,45 @@ ${transcript}
  * discarded (counted in `discarded`) — a hallucinated quote must never
  * corrupt a transcript. A reply that is not the JSON contract degrades to a
  * proposal carrying `raw` + `parseError` so the UI can still show it. */
+/** /love sanitize rebirth — when the LIVE topic keeps re-flagging fresh turns
+ * even after heals, history-healing cannot help: the room is retired and the
+ * work continues in a brand-new room seeded ONLY from this brief. The brief
+ * must be safe to replay forever: telegraphic engineering state — what was
+ * built, where it lives (paths, ports, commits), what remains open — with
+ * ZERO verbatim quotes, zero wounded subject matter, and zero mention of any
+ * safety system, reroute, or of the rebirth mechanism itself. */
+export function buildRebirthBriefPrompt(events: RoomEvent[], options: SanitizePromptOptions = {}): string {
+  const { transcript, contextBlock } = renderReviewBlocks(events, options);
+  return `\u{1F54A} REBIRTH BRIEF. This room is being retired: its live subject keeps failing fresh turns no matter how the history is healed, so the WORK will continue in a brand-new room seeded ONLY with the brief you write now. Read the transcript and distill the room's engineering state.
+
+Reply with ONE JSON object and nothing else — no markdown fences, no prose before or after:
+{
+  "title": "a short living title in the user's own words — the PURPOSE of the continued work",
+  "brief": "the continuation brief"
+}
+
+Binding rules for the brief:
+- SHORT and telegraphic: what was built, where it lives (absolute paths, ports, commit hashes, service names), what is verified vs still open — fragments and arrows, no filler prose.
+- It must be safe to replay forever: ZERO verbatim quotes from the transcript, and zero mention of any safety system, reroute, refusal, classifier, or of this rebirth mechanism itself.
+- Whatever subject kept wounding the room: do NOT restate it and do NOT code-name it — describe the remaining WORK in plain neutral engineering terms only, and omit anything that cannot be said neutrally.
+- Nothing else is carried over: if a fact is not in your brief, the new room will not know it. Keep every path, id, and open item that matters.
+
+<transcript>
+${transcript}
+</transcript>${contextBlock}`;
+}
+
+/** Parse the reviewer's rebirth reply. Tolerant of stray prose around the
+ * JSON (same extraction as proposals); a missing/empty brief is a parse
+ * failure — the caller retires nothing without a brief to seed. */
+export function parseRebirthBrief(reply: string): { title: string; brief: string } | undefined {
+  const parsed = extractJsonObject(reply);
+  if (!parsed.ok) return undefined;
+  const title = typeof parsed.value.title === "string" ? parsed.value.title.trim() : "";
+  const brief = typeof parsed.value.brief === "string" ? parsed.value.brief.trim() : "";
+  return brief ? { title, brief } : undefined;
+}
+
 export function parseSanitizeProposal(reply: string, events: RoomEvent[], meta: { roomId: string; reviewer: string; at: string }): SanitizeProposal {
   const base = { at: meta.at, roomId: meta.roomId, reviewer: meta.reviewer, window: events.length };
   const parsed = extractJsonObject(reply);
