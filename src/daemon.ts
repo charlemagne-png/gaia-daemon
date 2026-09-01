@@ -28,6 +28,7 @@ import { setAgentDefaultRole, trashGlobalAgent } from "./domain/agents.js";
 import { listAgentRoles } from "./domain/roles.js";
 import { ensureAccountsFile } from "./domain/accounts.js";
 import { RoomService, scanRoomActivity, type HomeWorkspaceRedirectRequest, type HomeWorkspaceRedirectResult } from "./services/room-service.js";
+import { playTurnCompletionSound } from "./services/turn-completion-sound.js";
 import { MemoryService } from "./services/memory-service.js";
 import { UsageService } from "./services/usage-service.js";
 import { EmbedSidecar } from "./services/embed-sidecar.js";
@@ -517,6 +518,9 @@ export class Daemon {
       // (single-writer rule) — same serviceFor the summon coordinator uses.
       roomPeer: (roomId) => this.serviceFor(workspaceId, roomId),
       homeWorkspaceRedirect: (request) => this.redirectHomeWorkspace(request),
+      // Every room uses this shared post-WAL callback: root, subroom, summon,
+      // scheduler, and future room kinds all notify without harness branches.
+      turnSettled: playTurnCompletionSound,
       // Same reload the settings-file save route uses: /model + /thinking
       // rewrite agent.json, and only a service rebuild reaches the runner
       // subprocesses (they snapshot the config at spawn).

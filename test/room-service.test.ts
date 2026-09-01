@@ -118,6 +118,7 @@ async function makeService(options: {
   workspaceId?: string;
   homeWorkspaceRedirect?: (request: HomeWorkspaceRedirectRequest) => Promise<HomeWorkspaceRedirectResult | undefined>;
   roomPeer?: (roomId: string) => Promise<RoomService>;
+  turnSettled?: (notice: { workspaceId: string; roomId: string; taskId: string; agentIds: string[]; status: "complete" | "error" | "cancelled"; settledAt: string }) => void;
 } = {}): Promise<{ service: RoomService; workspace: Workspace; root: string; events: UiEvent[]; runtimes: Map<string, ReturnType<typeof scriptedRuntime>> }> {
   const root = await mkdtemp(join(tmpdir(), "gaia-svc-"));
   const roomId = options.roomId ?? "default";
@@ -160,6 +161,7 @@ async function makeService(options: {
     ...(options.llm ? { llm: options.llm } : {}),
     ...(options.homeWorkspaceRedirect ? { homeWorkspaceRedirect: options.homeWorkspaceRedirect } : {}),
     ...(options.roomPeer ? { roomPeer: options.roomPeer } : {}),
+    ...(options.turnSettled ? { turnSettled: options.turnSettled } : {}),
     runtimeFactory: (agent) => {
       const runtime = options.runtimeFactory ? (options.runtimeFactory(agent, workspace) as ReturnType<typeof scriptedRuntime>) : scriptedRuntime(agent, script);
       runtimes.set(agent.id, runtime);
@@ -264,6 +266,26 @@ test("a plain message routes to the default agent and commits a detailed reply",
   // Streaming deltas carried the reserved eventId that the commit used.
   const delta = events.find((event) => event.type === "text-delta") as { eventId?: string } | undefined;
   assert.equal(delta?.eventId, reply["id" as keyof typeof reply]);
+});
+
+test("agent-turn notification fires after the reply and pending-turn clear are durable", async () => {
+  let notice: { workspaceId: string; roomId: string; taskId: string; agentIds: string[]; status: "complete" | "error" | "cancelled"; settledAt: string } | undefined;
+  const { service, root } = await makeService({
+    turnSettled: (value) => {
+      notice = value;
+    },
+  });
+
+  const task = await service.sendMessage("notify me");
+  await service.waitForIdle();
+
+  const room = await RoomHandle.open(root, "default");
+  assert.equal((await room.state()).pendingTurn, undefined);
+  assert.equal(notice?.workspaceId, "ws1");
+  assert.equal(notice?.roomId, "default");
+  assert.equal(notice?.taskId, task.id);
+  assert.deepEqual(notice?.agentIds, ["gaia"]);
+  assert.equal(notice?.status, "complete");
 });
 
 test("voice-origin turns receive a workspace room map; typed turns do not", async () => {

@@ -138,6 +138,9 @@ export interface RoomServiceOptions {
   /** Daemon-owned home-workspace redirect seam. RoomService never writes foreign
    * workspace files; the daemon resolves registry names/ids and forwards there. */
   homeWorkspaceRedirect?: (request: HomeWorkspaceRedirectRequest) => Promise<HomeWorkspaceRedirectResult | undefined>;
+  /** Agent-turn settlement seam. Callers reach it only after the reply/failure
+   * and pending-turn state are durable; production wires macOS audio. */
+  turnSettled?: (notice: { workspaceId: string; roomId: string; taskId: string; agentIds: string[]; status: "complete" | "error" | "cancelled"; settledAt: string }) => void;
 }
 
 /** What /schedule needs from the scheduler (daemon-provided, workspace-bound). */
@@ -4617,12 +4620,13 @@ export class RoomService {
   }
 
   private settleTask(task: Task, status: "complete" | "error" | "cancelled", error?: unknown): void {
+    const wasAgentTurn = this.activeAgentTurn?.id === task.id;
     task.status = status;
     task.endedAt = new Date().toISOString();
     if (error !== undefined) task.error = error instanceof Error ? error.message : String(error);
     this.recentTasks = [...this.recentTasks.slice(-9), task];
     if (this.activeTask?.id === task.id) this.activeTask = undefined;
-    if (this.activeAgentTurn?.id === task.id) this.activeAgentTurn = undefined;
+    if (wasAgentTurn) this.activeAgentTurn = undefined;
     // Close the settle->drain gap now, synchronously, in the SAME tick as the
     // activeTask clear above — see `draining`'s doc comment. `resolveDraining`
     // fires from inside drain() the instant it has decided (see onDecided).
@@ -4649,6 +4653,16 @@ export class RoomService {
     // Auto-heal fires on EVERY settle status — a refusal reroute can end a turn
     // complete (the fallback model answered) or error; both need the heal.
     this.maybeAutoHeal(task);
+    if (wasAgentTurn) {
+      this.options.turnSettled?.({
+        workspaceId: this.workspaceId,
+        roomId: this.roomId,
+        taskId: task.id,
+        agentIds: [...task.targets],
+        status,
+        settledAt: task.endedAt,
+      });
+    }
     void this.emitRoomsChanged();
     // Emit the settle snapshot BEFORE draining the next queued turn. SSE is a
     // single ordered stream and the client REPLACES its snapshot wholesale, so a
