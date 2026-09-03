@@ -70,7 +70,7 @@ import { SANITIZE_REVIEWER_ID, buildLoveSanitizePrompt, buildRebirthBriefPrompt,
 import { applyEventToDetails, finalizeInterruptedTools, runAgentTurn } from "./turns.js";
 import type { EpisodeCapture } from "./memory-service.js";
 import { formatDreamProposal } from "./consolidate.js";
-import type { ConsolidateLlm, ConsolidateResult } from "./consolidate.js";
+import type { ConsolidateLlm, ConsolidateLlmInput, ConsolidateResult } from "./consolidate.js";
 import { allowSummonForTurn, effectiveTrust, type SummonHost, type SummonResultDelivery } from "./summons.js";
 import { HOOK_TEXT_CAP, runHooks, type HookEvent } from "./hooks.js";
 import { MonadEngine } from "./monad.js";
@@ -120,6 +120,11 @@ export interface RoomServiceOptions {
    * "compact" option — summarizes the room to seed a new agent. Absent → the
    * compact choice degrades to a raw transcript slice. */
   llm?: ConsolidateLlm;
+  /** Named provider account for title/refine jobs. The daemon resolves this
+   * from ~/.gaia/accounts.json (GAIA_TITLE_ACCOUNT override, else first
+   * provider-capable account) and the LLM seam then authenticates through the
+   * same per-account credential store consolidation uses. */
+  titleLlmAccount?: (provider: string) => string | undefined;
   /** Workspace-scoped scheduler surface backing /schedule. */
   scheduler?: RoomSchedulerHooks;
   /** Daemon's settings-change reload (applySettingsChange): commands that
@@ -4887,6 +4892,12 @@ export class RoomService {
    * pass never touches them; auto/model titles stay living. */
   private static readonly TITLE_DRIFT_EVERY = 8;
 
+  private withTitleLlmAccount(input: ConsolidateLlmInput): ConsolidateLlmInput {
+    const provider = input.model?.provider ?? DEFAULTS.roomTitleModel.provider;
+    const account = this.options.titleLlmAccount?.(provider);
+    return account ? { ...input, account } : input;
+  }
+
   private async maybeRetitleOnDrift(): Promise<void> {
     if (this.incognito || !isAutoRoomId(this.roomId) || !this.options.llm) return;
     const state = await this.room.state();
@@ -4913,12 +4924,12 @@ export class RoomService {
           return text.length > 280 ? `${text.slice(0, 280)}…` : text;
         });
       if (userLines.length < 3) return;
-      const reply = await this.options.llm?.({
+      const reply = await this.options.llm?.(this.withTitleLlmAccount({
         system:
           "You keep chat-room titles honest. Given the current title and the room's recent user messages, decide whether the title still names the room's PURPOSE in the user's own words. If it still fits, return it UNCHANGED. If the room has drifted, return a new concise title, 2-6 words, no quotes, no period — generalize if the room broadened, specialize if it crystallized. Return ONLY the title.",
         user: `Current title: ${title}\n\nRecent user messages (oldest first):\n${userLines.map((line) => `- ${line}`).join("\n")}\n\nTitle:`,
         model: DEFAULTS.roomTitleModel,
-      });
+      }));
       const next = normalizeRoomTitle(reply ?? "");
       if (!next || next === title) return;
       let changed = false;
@@ -4938,7 +4949,7 @@ export class RoomService {
 
   private async refineAutoTitle(firstMessage: string, fallback: string): Promise<void> {
     try {
-      const reply = await this.options.llm?.({
+      const reply = await this.options.llm?.(this.withTitleLlmAccount({
         system:
           "You name chat rooms by PURPOSE, in the user's own words. Return ONLY a concise title, 2-6 words, no quotes, no period. Name what the room is FOR (the task or topic), never echo the sentence itself. Preserve key project or product names. Do not mention the assistant.",
         user: `First user message:
@@ -4946,7 +4957,7 @@ ${firstMessage}
 
 Title:`,
         model: DEFAULTS.roomTitleModel,
-      });
+      }));
       const title = normalizeRoomTitle(reply ?? "");
       if (!title || title === fallback) return;
       let changed = false;

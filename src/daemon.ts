@@ -29,6 +29,7 @@ import { listAgentRoles } from "./domain/roles.js";
 import { ensureAccountsFile } from "./domain/accounts.js";
 import { RoomService, scanRoomActivity, type HomeWorkspaceRedirectRequest, type HomeWorkspaceRedirectResult } from "./services/room-service.js";
 import { playTurnCompletionSound } from "./services/turn-completion-sound.js";
+import { resolveTitleLlmAccount } from "./services/title-auth.js";
 import { MemoryService } from "./services/memory-service.js";
 import { UsageService } from "./services/usage-service.js";
 import { EmbedSidecar } from "./services/embed-sidecar.js";
@@ -512,6 +513,7 @@ export class Daemon {
       memory: this.memoryServiceFor(workspaceId, workspace, record.path),
       // Same LLM caller consolidation uses — backs the context-gate compact.
       llm: consolidateLlm(),
+      titleLlmAccount: (provider) => resolveTitleLlmAccount(provider),
       summonHost: this.summonCoordinatorFor(workspaceId, workspace, record.path),
       setThinking: async (agentId, level) => (await this.applyThinking(workspaceId, resolvedRoom, agentId, level)).message,
       // /berserk's root-room write rides the ROOT room's resident service
@@ -1720,7 +1722,10 @@ function accountAuthPath(accountId: string | undefined): string | undefined {
   if (!accountId) return undefined;
   const record = findAccount(accountId);
   if (!record) return undefined;
-  const env = harnessSpecFor(record.harness).accounts?.env(record.credentials);
+  const accounts = harnessSpecFor(record.harness).accounts;
+  const explicit = accounts?.authStoragePath?.(record.credentials);
+  if (explicit) return explicit;
+  const env = accounts?.env(record.credentials);
   const dir = env?.PI_CODING_AGENT_DIR;
   return dir ? join(dir, "auth.json") : undefined;
 }

@@ -105,6 +105,7 @@ async function makeService(options: {
   summonHost?: SummonHost;
   config?: Partial<WorkspaceConfig>;
   llm?: ConsolidateLlm;
+  titleLlmAccount?: (provider: string) => string | undefined;
   /** Room id to open (default "default"). */
   roomId?: string;
   /** Seed the room's state.json as incognito before RoomService.open reads it. */
@@ -159,6 +160,7 @@ async function makeService(options: {
     ...(options.petLoader ? { petLoader: options.petLoader } : {}),
     ...(options.summonHost ? { summonHost: options.summonHost } : {}),
     ...(options.llm ? { llm: options.llm } : {}),
+    ...(options.titleLlmAccount ? { titleLlmAccount: options.titleLlmAccount } : {}),
     ...(options.homeWorkspaceRedirect ? { homeWorkspaceRedirect: options.homeWorkspaceRedirect } : {}),
     ...(options.roomPeer ? { roomPeer: options.roomPeer } : {}),
     ...(options.turnSettled ? { turnSettled: options.turnSettled } : {}),
@@ -610,10 +612,11 @@ test("bookmarks upsert by event id, round-trip through normalized state, and rem
   assert.equal(state.bookmarks, undefined);
 });
 
-test("auto title refinement uses the cheap DeepSeek flash model", async () => {
+test("auto title refinement uses the configured room-title model and account", async () => {
   const calls: Parameters<ConsolidateLlm>[0][] = [];
   const { service, root } = await makeService({
     roomId: "chat-title-flash",
+    titleLlmAccount: (provider) => (provider === DEFAULTS.roomTitleModel.provider ? "paloptic-pascal-cl1" : undefined),
     llm: async (input) => {
       calls.push(input);
       return "Room Rename Controls";
@@ -630,6 +633,7 @@ test("auto title refinement uses the cheap DeepSeek flash model", async () => {
 
   assert.equal(calls[0]?.model?.provider, DEFAULTS.roomTitleModel.provider);
   assert.equal(calls[0]?.model?.name, DEFAULTS.roomTitleModel.name);
+  assert.equal(calls[0]?.account, "paloptic-pascal-cl1");
   assert.equal(state.title, "Room Rename Controls");
   assert.equal(state.titleSource, "model");
 });
