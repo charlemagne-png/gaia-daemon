@@ -88,6 +88,11 @@ export async function openWindow({ mode, room = null, x = null, y = null, projec
   return invoke("open_window", { mode, room, x, y, projectId, viewId, artifactId });
 }
 
+/** Open an http(s) link in a separate native OS window. @param {string} url */
+export async function openWebWindow(url) {
+  return invoke("open_web_window", { url });
+}
+
 /** Merge this (torn) window's chat back into the main window; the shell then
  *  closes this window. No-op in the main window / a browser.
  *  @param {string} room */

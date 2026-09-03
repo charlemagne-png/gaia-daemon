@@ -239,6 +239,34 @@ mod webkit {
         Ok(label)
     }
 
+    /// Open an external web target in an actual native window. This bypasses
+    /// WKWebView's ambiguous `window.open` disposition (which can reuse the
+    /// current tab/surface). External pages receive neither GAIA's init script
+    /// nor a capability label, and only http(s) schemes are accepted.
+    #[tauri::command]
+    #[cfg(desktop)]
+    fn open_web_window(app: tauri::AppHandle, url: String) -> Result<String, String> {
+        let parsed: tauri::Url = url.parse().map_err(|e| format!("bad web url: {e}"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err("web window URL must use http or https".to_string());
+        }
+        let label = format!("web-{}", WINDOW_SEQ.fetch_add(1, Ordering::Relaxed));
+        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+            .title("GAIA — Link")
+            .inner_size(1180.0, 820.0)
+            .min_inner_size(560.0, 420.0)
+            .resizable(true)
+            .build()
+            .map_err(|e| e.to_string())?;
+        Ok(label)
+    }
+
+    #[tauri::command]
+    #[cfg(mobile)]
+    fn open_web_window(_app: tauri::AppHandle, _url: String) -> Result<String, String> {
+        Err("separate web windows are unavailable on mobile".to_string())
+    }
+
     fn valid_pet_package(name: &str) -> bool {
         let mut chars = name.chars();
         chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
@@ -570,6 +598,7 @@ mod webkit {
             .manage(PetWindows(Mutex::new(HashMap::new())))
             .invoke_handler(tauri::generate_handler![
                 open_window,
+                open_web_window,
                 redock,
                 set_badge,
                 notify,

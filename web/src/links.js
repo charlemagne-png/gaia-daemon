@@ -1,7 +1,8 @@
 // Cmd/Ctrl+click opens paths and URLs from anywhere in the UI: web targets in
-// a new tab, local paths through the daemon's /api/open-target.
+// a separate window, local paths through the daemon's /api/open-target.
 import { api } from "./api.js";
 import { h } from "./dom.js";
+import { isNative, openWebWindow } from "./native.js";
 import { setError } from "./render.js";
 import { state } from "./state.js";
 
@@ -73,10 +74,22 @@ function findLinkedSegments(text) {
 }
 
 /** @param {string} target */
+async function openWebTarget(target) {
+  const url = normalizeWebTarget(target);
+  if (isNative()) {
+    await openWebWindow(url);
+    return;
+  }
+  // Browsers may still apply the user's popup policy, but a non-empty popup
+  // feature requests a separate window instead of a tab where supported.
+  window.open(url, "_blank", "popup,noopener,noreferrer");
+}
+
+/** @param {string} target */
 async function openLinkedTarget(target) {
   try {
     if (isWebTarget(target)) {
-      window.open(normalizeWebTarget(target), "_blank", "noopener");
+      await openWebTarget(target);
       return;
     }
     await api("/api/open-target", {
@@ -85,6 +98,19 @@ async function openLinkedTarget(target) {
     });
   } catch (error) {
     setError(error);
+  }
+}
+
+/** @param {MouseEvent} event @returns {string|null} */
+function webAnchorTarget(event) {
+  const clicked = /** @type {Element|null} */ (event.target instanceof Element ? event.target : null);
+  const anchor = /** @type {HTMLAnchorElement|null} */ (clicked?.closest("a[href]") ?? null);
+  if (!anchor) return null;
+  try {
+    const url = new URL(anchor.href || anchor.getAttribute("href") || "", window.location.href);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
   }
 }
 
@@ -138,4 +164,21 @@ export function installOpenModifierTracking() {
     if (event.key === "Meta" || event.key === "Control") update(event.metaKey || event.ctrlKey);
   });
   window.addEventListener("blur", () => update(false));
+
+  // WKWebView does not reliably turn modifier-clicked anchors into separate OS
+  // windows. Capture real anchors (including transcript/markdown anchors) before
+  // their default navigation and route only the modified native-shell gesture.
+  // Plain clicks and all browser clicks retain their existing behavior.
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (!isNative() || !isOpenModifier(event)) return;
+      const target = webAnchorTarget(event);
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void openWebTarget(target);
+    },
+    true,
+  );
 }
