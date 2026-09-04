@@ -10,19 +10,21 @@
 // for the whole gesture and keep firing even when the pointer leaves the window,
 // so we get a trustworthy release point to place the torn-off window at.
 import { addRoom, closeRoomTab, selectRoom } from "./actions.js";
+import { UI } from "./glyphs.js";
 import { tearOff } from "./chrome.js";
-import { openKeymaker } from "./keymaker.js";
 import { $, h } from "./dom.js";
 import { isNative } from "./native.js";
+import { hapticArm, holdTouchScroll, isTouchPointer, LONG_PRESS_MS, releaseTouchScroll, TOUCH_SLOP } from "./press-drag.js";
 import { markDirty, registerRegion } from "./render.js";
 import { state } from "./state.js";
+import { openThemePalette } from "./statusbar.js";
 import { moveTabToIndex, visibleTabs } from "./tabs.js";
 
 /** @typedef {import("./types.js").RoomSummary} RoomSummary */
 
 // The live pointer-drag, or null. Module-scoped (one drag at a time) so the
 // element handlers, the render guard, and the drop indicator all share it.
-/** @type {null | { roomId: string, wsId: string, startX: number, startY: number, pointerId: number, el: HTMLElement, moved: boolean, tearing: boolean, dropIndex: number }} */
+/** @type {null | { roomId: string, wsId: string, startX: number, startY: number, pointerId: number, el: HTMLElement, moved: boolean, tearing: boolean, dropIndex: number, touch: boolean, armed: boolean, timer: ReturnType<typeof setTimeout>|null }} */
 let drag = null;
 
 // While a press is live the strip must NOT be rebuilt: the captured tab node, its
@@ -47,35 +49,47 @@ function renderTabs() {
   const wsId = snapshot?.workspace.id;
   const currentId = snapshot?.room?.id;
   const tabs = visibleTabs(snapshot);
+  const dictationChip = DictationChip();
   bar.replaceChildren(
-    h("button", {
-      class: "chrome-btn",
-      title: state.sidebarCollapsed ? "show sessions" : "hide sessions",
-      onclick: () => {
-        state.sidebarCollapsed = !state.sidebarCollapsed;
-        markDirty("layout", "tabs");
-      },
-      text: state.sidebarCollapsed ? "▸" : "◂",
-    }),
-    h("div", { class: "tab-brand" }, h("span", { class: "tab-logo", text: "◆" }), h("span", { text: "GAIA" })),
+    h("div", { class: "brand", "data-tauri-drag-region": "deep" }, h("span", { class: "tab-logo", text: "◆" }), h("span", { text: "GAIA" })),
     h(
       "div",
-      { class: "tab-strip" },
+      { class: "tab-strip", "data-tauri-drag-region": "deep" },
       tabs.map((room, index) => Tab(room, index + 1, room.id === currentId, wsId)),
-      snapshot ? h("button", { class: "tab-new", title: "new room (⌘T / ⌘⇧N) · ⌥-click = incognito 🕶", onclick: (/** @type {MouseEvent} */ e) => void addRoom({ incognito: e.altKey }), text: "+" }) : null,
+      snapshot ? h("button", { class: "tab-new", title: "new room (⌘T / ⌘⇧N) · ⌥-click = incognito ⊚", onclick: (/** @type {MouseEvent} */ e) => void addRoom({ incognito: e.altKey }), text: "+" }) : null,
     ),
-    h("div", { class: "tab-spacer" }),
-    h("button", { class: "chrome-btn white-rabbit-btn", title: "Keymaker · Follow the white rabbit", onclick: () => void openKeymaker(), text: "🐇" }),
+    h("div", { class: "tab-spacer", "data-tauri-drag-region": "deep" }),
+    // Only present while a recording is live (replaceChildren takes Nodes, so
+    // the idle case is wrapped away rather than passed as null).
+    ...(dictationChip ? [dictationChip] : []),
     h("button", {
-      class: "chrome-btn",
-      title: state.rightCollapsed ? "show room panel" : "hide room panel",
-      onclick: () => {
-        state.rightCollapsed = !state.rightCollapsed;
-        markDirty("layout", "tabs");
-      },
-      text: "▥",
+      class: "theme-btn",
+      title: "themes (Alt+T)",
+      "aria-label": "open theme palette",
+      onclick: openThemePalette,
+      text: "◈",
     }),
   );
+}
+
+/** App-wide "you are dictating, and it belongs THERE" indicator (v2 parity).
+ * The composer's own mic UI only exists in the room on screen; this chip is
+ * what tells you a recording is live after you switched away, and clicking it
+ * takes you back to the room the words are bound to.
+ * @returns {HTMLElement|null} */
+function DictationChip() {
+  const origin = state.dictationOrigin;
+  if ((!state.dictating && !state.dictationBusy) || !origin) return null;
+  const rooms = state.snapshot?.workspace.id === origin.workspaceId ? (state.snapshot?.rooms ?? []) : (state.workspaceRooms[origin.workspaceId] ?? []);
+  const room = rooms.find((entry) => entry.id === origin.roomId);
+  const here = state.snapshot?.room.id === origin.roomId && state.snapshot?.workspace.id === origin.workspaceId;
+  return h("button", {
+    class: "dictation-chip",
+    "aria-live": "polite",
+    title: here ? "recording into this room's composer" : "recording into another room — click to go back to it",
+    onclick: () => void selectRoom(origin.workspaceId, origin.roomId),
+    text: `${state.dictationBusy ? "◌" : "●"} dictating → ${room?.title ?? origin.roomId}`,
+  });
 }
 
 registerRegion("tabs", renderTabs);
@@ -91,6 +105,7 @@ function Tab(room, number, isActive, wsId) {
     "div",
     {
       class: `tab ${isActive ? "active" : ""} ${room.running ? "running" : ""}`,
+"data-tauri-drag-region": "false",
       title: room.title ? `${room.title} — ${room.id}` : room.id,
       onpointerdown: (event) => beginDrag(event, room.id, wsId),
       onpointermove: (event) => moveDrag(event),
@@ -99,8 +114,8 @@ function Tab(room, number, isActive, wsId) {
     },
     h("span", { class: "tab-num", text: String(number) }),
     room.running ? h("span", { class: "tab-dot" }) : null,
-    room.favorite ? h("span", { class: "room-star", title: "favorite", text: "★" }) : null,
-    room.incognito ? h("span", { class: "tab-incognito", title: "incognito — no memory", text: "🕶" }) : null,
+    room.favorite ? h("span", { class: "room-star", title: "favorite", text: UI.favorite }) : null,
+    room.incognito ? h("span", { class: "tab-incognito", title: "incognito — no memory", text: UI.incognito }) : null,
     h("span", { class: "tab-name", text: room.title ?? room.id }),
     h("button", {
       class: "tab-close",
@@ -120,7 +135,20 @@ function beginDrag(event, roomId, wsId) {
   // A press on the × is a close, not a drag — leave it to the button's onclick.
   if (/** @type {HTMLElement} */ (event.target).closest(".tab-close")) return;
   const el = /** @type {HTMLElement} */ (event.currentTarget);
-  drag = { roomId, wsId, startX: event.clientX, startY: event.clientY, pointerId: event.pointerId, el, moved: false, tearing: false, dropIndex: -1 };
+  const touch = isTouchPointer(event);
+  drag = { roomId, wsId, startX: event.clientX, startY: event.clientY, pointerId: event.pointerId, el, moved: false, tearing: false, dropIndex: -1, touch, armed: !touch, timer: null };
+  // Touch: the strip is also the scroll surface → the drag only arms after a
+  // still long press (see press-drag.js); until then a swipe must scroll.
+  if (touch) {
+    const d = drag;
+    d.timer = setTimeout(() => {
+      if (drag !== d) return;
+      d.armed = true;
+      d.timer = null;
+      holdTouchScroll();
+      hapticArm();
+    }, LONG_PRESS_MS);
+  }
   // Freeze the strip for the whole press so an unrelated re-render can't detach
   // the node we're about to capture (cleared in end/cancel).
   dragActive = true;
@@ -136,6 +164,11 @@ function beginDrag(event, roomId, wsId) {
 /** @param {PointerEvent} event */
 function moveDrag(event) {
   if (!drag || event.pointerId !== drag.pointerId) return;
+  if (!drag.armed) {
+    // Finger moved before the long press landed → this is a scroll, not a drag.
+    if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >= TOUCH_SLOP) abandonDrag();
+    return;
+  }
   if (!drag.moved) {
     if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < DRAG_THRESHOLD) return;
     drag.moved = true;
@@ -191,6 +224,8 @@ function endDrag(event) {
   if (!drag || event.pointerId !== drag.pointerId) return;
   const d = drag;
   drag = null;
+  if (d.timer) clearTimeout(d.timer);
+  releaseTouchScroll();
   try {
     d.el.releasePointerCapture(event.pointerId);
   } catch {
@@ -221,8 +256,23 @@ function endDrag(event) {
 /** @param {PointerEvent} event */
 function cancelDrag(event) {
   if (!drag || event.pointerId !== drag.pointerId) return;
+  abandonDrag();
+}
+
+/** Give the gesture back to the browser (touch scroll won, or pointercancel):
+ *  drop all drag state and let the list behave natively. */
+function abandonDrag() {
+  if (!drag) return;
   const el = drag.el;
+  const pointerId = drag.pointerId;
+  if (drag.timer) clearTimeout(drag.timer);
   drag = null;
+  releaseTouchScroll();
+  try {
+    el.releasePointerCapture(pointerId);
+  } catch {
+    // nothing captured — fine.
+  }
   cleanupDrag(el);
 }
 

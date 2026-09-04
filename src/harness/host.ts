@@ -8,17 +8,15 @@
 
 import type { ChildProcess } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { env } from "../core/env.js";
-import { workspacePaths } from "../core/paths.js";
+import { expandHome, workspacePaths } from "../core/paths.js";
 import { accountsPath, findAccount } from "../domain/accounts.js";
 import { NO_SESSION_TO_COMPACT, type AgentDef, type AgentEvent, type CompactProgressUpdate, type CompactResult, type MessageAttachment, type Workspace } from "../core/types.js";
 import type { MemoryStore } from "../domain/memory.js";
 import { CircuitBreaker, defaultBreaker } from "./breaker.js";
 import { createEventChannel, type EventChannel } from "./events.js";
 import { configuredModelLabel, liveModelLabel } from "./model-label.js";
-import { killProcessTree, selfRelaunchArgv, spawnLineReader } from "./proc.js";
+import { killProcessTree, selfRelaunchArgv, signalProcessTree, spawnLineReader } from "./proc.js";
 import { encodeFrame, parseRunnerMessage, RUNNER_ENV, type RunnerCommand, type RunnerMessage } from "./protocol.js";
 import { installMarkerArgs } from "./reaper.js";
 // Side-effect imports: the backends resolveSandboxLaunch picks from.
@@ -47,7 +45,6 @@ import {
 export const PROVIDER_KEY_ENV_VARS: readonly string[] = [
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_API_KEY",
-  "CLAUDE_CODE_OAUTH_TOKEN", // per-account subscription token (HarnessSpec.accounts)
   "COPILOT_GITHUB_TOKEN",
   "OPENAI_API_KEY",
   "AZURE_OPENAI_API_KEY",
@@ -80,13 +77,6 @@ export const PROVIDER_KEY_ENV_VARS: readonly string[] = [
 export function stripProviderKeys(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   for (const name of PROVIDER_KEY_ENV_VARS) delete environment[name];
   return environment;
-}
-
-/** Expand the `~` shorthand HarnessSpec.sandboxPaths declares in (a spec is
- *  static data — it can't know the home dir) to the real home dir. */
-function expandHome(path: string): string {
-  if (path === "~") return homedir();
-  return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
 }
 
 // --- the host ---------------------------------------------------------------------
@@ -362,7 +352,9 @@ export class RunnerHost implements AgentRuntime {
     if (!this.turnInFlight) return;
     if (await this.waitTurnIdle(ABORT_GRACE_MS)) return;
     process.stderr.write(`[runner ${this.agent.id}] abort not confirmed after ${ABORT_GRACE_MS}ms — killing wedged runner\n`);
-    this.child?.kill("SIGKILL");
+    // Preserve the immediate SIGKILL escalation while terminating the runner
+    // and every tool/bash descendant in its own process group.
+    if (this.child) signalProcessTree(this.child, "SIGKILL");
     await this.waitTurnIdle(ABORT_KILL_WAIT_MS);
     // Even if the exit event is somehow delayed, the lock must not outlive an
     // authoritative abort — the child is gone (or unspawned) either way.
@@ -404,6 +396,25 @@ export class RunnerHost implements AgentRuntime {
    * stream its progress frames to `onProgress`. */
   async compact(roomId: string, onProgress?: (update: CompactProgressUpdate) => void): Promise<CompactResult> {
     if (!this.capabilities.supportsCompact) throw new Error("this harness has no native compaction");
+    return this.runCompactRequest(roomId, { type: "compact", roomId }, onProgress);
+  }
+
+  async compactClean(roomId: string, onProgress?: (update: CompactProgressUpdate) => void): Promise<CompactResult> {
+    return this.runCompactRequest(roomId, { type: "compact-clean", roomId }, onProgress);
+  }
+
+  async compactDraft(roomId: string): Promise<{ compacted: boolean; message: string; summary?: string }> {
+    if (!this.capabilities.supportsCompactEdit) throw new Error("this harness has no native editable compaction");
+    return this.runCompactRequest(roomId, { type: "compact-draft", roomId });
+  }
+
+  async compactApply(roomId: string, editedSummary: string, onProgress?: (update: CompactProgressUpdate) => void): Promise<CompactResult> {
+    if (!this.capabilities.supportsCompactEdit) throw new Error("this harness has no native editable compaction");
+    return this.runCompactRequest(roomId, { type: "compact-apply", roomId, editedSummary }, onProgress);
+  }
+
+  /** One daemon↔runner result channel for all native compact variants. */
+  private async runCompactRequest(roomId: string, command: Extract<RunnerCommand, { type: "compact" | "compact-clean" | "compact-draft" | "compact-apply" }>, onProgress?: (update: CompactProgressUpdate) => void): Promise<CompactResult> {
     // A durable session on disk can be compacted even from a cold daemon (no
     // turn since restart): spawn the runner so its harness resumes the persisted
     // handle. Only when there's neither a live child NOR a durable session is
@@ -448,7 +459,7 @@ export class RunnerHost implements AgentRuntime {
         if (result.ok) resolve({ compacted: result.compacted, message: result.message, ...(result.summary ? { summary: result.summary } : {}) });
         else reject(new Error(result.message || "compaction failed"));
       };
-      this.write({ type: "compact", roomId });
+      this.write(command);
     });
   }
 
@@ -618,6 +629,10 @@ export class RunnerHost implements AgentRuntime {
       args: launch.args,
       cwd: workDir,
       env: this.buildEnv(roomId, launchCtx),
+      // Separate from the daemon's terminal group: terminal SIGTERM must not
+      // fan out into every active runner. This also lets killProcessTree stop
+      // the runner's complete descendant tree during an authoritative abort.
+      detached: true,
       onLine: (line) => this.onMessage(line),
     });
     const child = handle.proc;

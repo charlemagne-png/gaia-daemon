@@ -1,8 +1,8 @@
 // Cmd/Ctrl+click opens paths and URLs from anywhere in the UI: web targets in
-// a separate window, local paths through the daemon's /api/open-target.
+// a new tab, local paths through the daemon's /api/open-target.
 import { api } from "./api.js";
 import { h } from "./dom.js";
-import { isNative, openWebWindow } from "./native.js";
+import { isNative } from "./native.js";
 import { setError } from "./render.js";
 import { state } from "./state.js";
 
@@ -74,22 +74,18 @@ function findLinkedSegments(text) {
 }
 
 /** @param {string} target */
-async function openWebTarget(target) {
-  const url = normalizeWebTarget(target);
-  if (isNative()) {
-    await openWebWindow(url);
-    return;
-  }
-  // Browsers may still apply the user's popup policy, but a non-empty popup
-  // feature requests a separate window instead of a tab where supported.
-  window.open(url, "_blank", "popup,noopener,noreferrer");
-}
-
-/** @param {string} target */
 async function openLinkedTarget(target) {
   try {
     if (isWebTarget(target)) {
-      await openWebTarget(target);
+      const url = normalizeWebTarget(target);
+      if (isNative()) {
+        await api("/api/open-target", {
+          method: "POST",
+          body: JSON.stringify({ target: url, workspaceId: state.snapshot?.workspace.id }),
+        });
+      } else {
+        window.open(url, "_blank", "noopener");
+      }
       return;
     }
     await api("/api/open-target", {
@@ -101,31 +97,34 @@ async function openLinkedTarget(target) {
   }
 }
 
-/** @param {MouseEvent} event @returns {string|null} */
-function webAnchorTarget(event) {
-  const clicked = /** @type {Element|null} */ (event.target instanceof Element ? event.target : null);
-  const anchor = /** @type {HTMLAnchorElement|null} */ (clicked?.closest("a[href]") ?? null);
-  if (!anchor) return null;
-  try {
-    const url = new URL(anchor.href || anchor.getAttribute("href") || "", window.location.href);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
-  } catch {
-    return null;
-  }
-}
-
 /** @param {string} text @param {string} target */
 function linkToken(text, target) {
+  // WKWebView may consume the click following Cmd/Ctrl+mousedowns on plain
+  // (non-anchor) text for native lookup/selection. Open synchronously during
+  // that trusted mousedown instead of depending on the later click. The click
+  // path remains as a fallback for browsers that only deliver click.
+  let openedOnMouseDown = false;
   return h(
     "span",
     {
       class: "link-token",
       "data-target": target,
       title: target,
+      onmousedown: (event) => {
+        if (!isOpenModifier(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openedOnMouseDown = true;
+        void openLinkedTarget(target);
+      },
       onclick: (event) => {
         if (!isOpenModifier(event)) return;
         event.preventDefault();
         event.stopPropagation();
+        if (openedOnMouseDown) {
+          openedOnMouseDown = false;
+          return;
+        }
         void openLinkedTarget(target);
       },
     },
@@ -155,6 +154,24 @@ export function PathText(path) {
 }
 
 export function installOpenModifierTracking() {
+  // WKWebView drops target=_blank navigation without a WKUIDelegate. Catch real
+  // HTTP(S) anchors (for example sign-in links) before WebKit handles them, but
+  // leave relative attachment links and every plain-browser navigation alone.
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (!isNative()) return;
+      let element = /** @type {any} */ (event.target);
+      if (typeof element?.closest !== "function") element = element?.parentElement;
+      const anchor = element?.closest?.("a[href]");
+      const target = anchor?.getAttribute?.("href");
+      if (!target || !/^https?:\/\//i.test(target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void openLinkedTarget(target);
+    },
+    true,
+  );
   /** @param {boolean} active */
   const update = (active) => document.body.classList.toggle("open-link-mode", active);
   window.addEventListener("keydown", (event) => {
@@ -164,21 +181,4 @@ export function installOpenModifierTracking() {
     if (event.key === "Meta" || event.key === "Control") update(event.metaKey || event.ctrlKey);
   });
   window.addEventListener("blur", () => update(false));
-
-  // WKWebView does not reliably turn modifier-clicked anchors into separate OS
-  // windows. Capture real anchors (including transcript/markdown anchors) before
-  // their default navigation and route only the modified native-shell gesture.
-  // Plain clicks and all browser clicks retain their existing behavior.
-  document.addEventListener(
-    "click",
-    (event) => {
-      if (!isNative() || !isOpenModifier(event)) return;
-      const target = webAnchorTarget(event);
-      if (!target) return;
-      event.preventDefault();
-      event.stopPropagation();
-      void openWebTarget(target);
-    },
-    true,
-  );
 }

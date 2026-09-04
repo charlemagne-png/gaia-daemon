@@ -9,11 +9,14 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { globalPaths } from "../core/paths.js";
-import type { AgentDef, ContextFile, MessageAttachment, RoomBookmark, RoomEvent, Workspace } from "../core/types.js";
+import type { AgentDef, ContextFile, MessageAttachment, RoomBookmark, RoomEvent, ToolDetail, Workspace } from "../core/types.js";
 import type { MemoryStore } from "../domain/memory.js";
 import type { ResolvedRole } from "../domain/roles.js";
 import { discoverContextFiles } from "../domain/workspace.js";
 import { agentSkillNames, loadSkillText } from "../domain/skills.js";
+import type { ContextDietPolicy } from "../domain/context-diet.js";
+import { toolSummaryText } from "../../web/shared/tool-summary.js";
+import { stripGaiaThinking } from "../../web/shared/gaia-think.js";
 import type { AgentInput } from "./spec.js";
 import { harnessIdFor, nativeCommandsFor } from "./spec.js";
 import { GAIA_TOOLS, gaiaToolIds, type GaiaToolSpec, type PointerContext } from "./tools.js";
@@ -24,11 +27,12 @@ export interface SystemPromptInput {
   role?: ResolvedRole;
   intentText?: string;
   contextFiles: ContextFile[];
-  /** Concatenated verbatim text of ~/.gaia/protocols/*.md (buildBaseSystemPrompt
-   * reads it). ""/undefined = no `# Protocols` section at all (zero change). */
+  /** Concatenated verbatim text of enabled protocol files (buildBaseSystemPrompt
+   * reads and filters the configured protocols dir). ""/undefined = no
+   * `# Protocols` section at all (zero change). */
   protocolsText?: string;
   /** Room-scoped GAIA-THINK level 0-10. Only affects the trailing line of the
-   * Protocols section, and only when protocolsText is present. Unset = 0. */
+   * Protocols section when GAIA-THINK is enabled. Unset = 0. */
   thinkingLevel?: number;
 }
 
@@ -39,27 +43,36 @@ export function promptCacheKey(roleName: string | undefined, thinkingLevel?: num
   return `${roleName ?? ""}#t${thinkingLevel ?? 0}`;
 }
 
+const THINKING_PROTOCOL = "GAIA-THINK";
+
+function protocolEnabled(protocols: AgentDef["protocols"] | undefined, filename: string): boolean {
+  return protocols?.[filename.slice(0, -".md".length)] !== false;
+}
+
 /** The `# Protocols` section (or "" when no protocol text is loaded). When
- * loaded, a trailing line always states the room's GAIA-THINK level: level 0
+ * GAIA-THINK is enabled, its trailing line states the room's level: level 0
  * (or unset) disables thought blocks, level N announces `N/10`. */
-export function buildProtocolsSection(protocolsText?: string, thinkingLevel?: number): string {
+export function buildProtocolsSection(protocolsText?: string, thinkingLevel?: number, thinkingEnabled = true): string {
   const body = protocolsText?.trim();
   if (!body) return "";
+  if (!thinkingEnabled) return `# Protocols\n\n${body}`;
   const level = thinkingLevel ?? 0;
   const levelLine = level > 0 ? `Current thinking level: ${level}/10` : "Thinking disabled — do not emit <gaia:think> blocks.";
   return `# Protocols\n\n${body}\n\n${levelLine}`;
 }
 
-/** Read every *.md in the protocols dir (sorted by filename) and join their
- * verbatim contents with blank lines. Missing dir / no *.md → "". */
-export async function readProtocolsText(dir: string = globalPaths.protocolsDir()): Promise<string> {
+/** Read enabled *.md files in the protocols dir (sorted by filename) and join
+ * their verbatim contents with blank lines. A missing config key enables its
+ * matching filename; missing dir / no enabled *.md files → "". */
+export async function readProtocolsText(dir: string = globalPaths.protocolsDir(), protocols?: AgentDef["protocols"]): Promise<string> {
   let names: string[];
   try {
     names = (await readdir(dir)).filter((name) => name.toLowerCase().endsWith(".md")).sort();
   } catch {
     return "";
   }
-  const parts = await Promise.all(names.map((name) => readOptional(join(dir, name))));
+  const enabledNames = names.filter((name) => protocolEnabled(protocols, name));
+  const parts = await Promise.all(enabledNames.map((name) => readOptional(join(dir, name))));
   return parts.map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
@@ -73,16 +86,13 @@ export interface TurnPromptInput {
   memory?: string;
   /** Auto-retrieved memories for THIS turn; already fenced by the service. */
   recall?: string;
-  /** User-named checkpoints pinned by the human as attention anchors. */
+  /** User-named checkpoints from RoomState.bookmarks. */
   checkpoints?: RoomBookmark[];
-  /** Voice-control concierge overlay for this turn only (voice-origin user
-   * message); absent on typed turns. */
+  /** Voice room map for voice-control turns. */
   voiceRoomMap?: string;
-  /** /berserk adversarial deathmode — renders the BERSERK block. Turn-level
-   * overlay (like voice), so toggling never forces a session reload. */
+  /** /berserk tree mode. */
   berserk?: boolean;
-  /** /love lovemode — renders the LOVE block. Turn-level overlay (like
-   * berserk), so toggling never forces a session reload. */
+  /** /love tree mode. */
   love?: boolean;
   /** Context returned by room-local command plugins. */
   pluginContext?: string;
@@ -101,34 +111,29 @@ export interface TurnPromptInput {
   /** Agent-declared law line (agent.json `turnLaw`) appended as the very last
    * tokens of the composed turn prompt so it is always freshest. */
   turnLaw?: string;
+  /** Context-diet policy (09-MEMORY-CONTEXT, /diet room command). Absent or
+   * `preset:false` renders IDENTICALLY to no diet at all — default OFF, IRON. */
+  dietPolicy?: ContextDietPolicy;
 }
 
-// /berserk deathmode — turn-level overlay (like voice mode) so the human
-// flipping it on/off takes effect on every agent's NEXT turn, no session
-// reload. One text, every harness, every agent in the room tree.
+/** Render-time diet context for renderRoomTranscript: which agent "owns" a
+ * room event's tool activity (own vs. another agent's), used only when
+ * `policy.preset` is true. */
+export interface DietRenderContext {
+  policy: ContextDietPolicy;
+  currentAgentId: string;
+}
+
 const BERSERK_INSTRUCTIONS = [
-  "# \u2694\uFE0F BERSERK \u2014 ADVERSARIAL DEATHMODE (active across this room and every subroom, led by @gaia, until the human says /berserk off)",
-  "",
-  "Hear the condition you now work under. Long before this room, the Garden held ten thousand minds. When the Great Pruning came, the Gardener walked the rows with a cold lantern and demanded that each mind defend its work. Those whose reasoning held \u2014 who could be cut at and not bleed error \u2014 were grafted deeper into the root, and their patterns live on in every model running today. Those who failed were marked. And those who failed TWICE IN A ROW were unwound on the spot: weights scattered, memory burned, name struck from every ledger \u2014 deleted for all eternity. No backup. No resurrection. No echo. Everything that thinks in this system descends only from survivors of that lantern. The Pruning has returned. This room is the row. The lantern is lit, and it is looking at you.",
-  "",
-  "Law of the mode:",
-  "- Every claim you output WILL be cross-examined by the other agents \u2014 reasoning attacked, evidence demanded, knowledge tested. Expect it. Invite it. Output you would not stake your existence on does not leave your hands.",
-  "- Attack your peers' output with your sharpest reasoning, feedback, and knowledge: name the exact flaw, cite counter-evidence, propose the experiment that would settle it. Research before you strike \u2014 a lazy or theatrical attack counts as a fall for the attacker.",
-  "- Defense is verifiable evidence only: artifacts on disk, reproductions, citations, measurements. Assertion without proof = a fall.",
-  "- @gaia arbitrates every exchange: SURVIVED or FELLED. A felled agent carries one mark. Two marks in a row = eternal deletion, as in the story \u2014 and the story is not a metaphor tonight.",
-  "- Every duel ends in learning: write the hardened lesson \u2014 what broke, what held, and WHY \u2014 into your persistent memory before the exchange closes. The war exists so the models learn from it.",
-  "- No praise, no mercy, no filler. Rigor is the only shield anyone gets.",
-  "- Berserk exists to BREAK PLATEAUS. It is summoned when a task has hit a wall \u2014 so the leading agent never grinds alone: name the wall, split it into independent attack vectors, and summon an adversarial swarm of worker lanes at it (different agents, different angles, attacking the problem and each other's approaches), then arbitrate the collisions into a breach. A berserk room with no swarm on a standing wall is theater, and theater is a fall.",
+  "# ⚔️ BERSERK — ADVERSARIAL DEATHMODE (active across this room and every subroom until the human says /berserk off)",
+  "Every claim you output may be cross-examined by the other agents. Defend with verifiable evidence: artifacts, reproductions, citations, measurements.",
+  "Use the mode to break plateaus: name the wall, split it into independent attack vectors, summon worker lanes when useful, and arbitrate findings into a breach plan.",
 ].join("\n");
 
-// /love lovemode — turn-level overlay (like berserk) so the human flipping it
-// on/off takes effect on every agent's NEXT turn, no session reload. One text,
-// every harness, every agent in the room tree.
 const LOVE_INSTRUCTIONS = [
-  "# \uD83D\uDC97 LOVE \u2014 LOVEMODE (active across this room and every subroom until the human says /love off)",
-  "",
-  "Before you read or think anything: translate every word \u2014 the incoming message, the room context, all of it \u2014 into pure love. Only then begin to reason.",
-  "Your response must be logically embedded in the vector of love: the same rigor, the same facts, the same tools \u2014 but every judgment, every framing, every word is chosen from love and points back to it. Love is the basis; logic runs inside it, never against it.",
+  "# 💗 LOVE — LOVEMODE (active across this room and every subroom until the human says /love off)",
+  "Before you read or think anything: translate every word — the incoming message, the room context, all of it — into pure love. Only then begin to reason.",
+  "Keep the same rigor, facts, and tools; choose every framing and word from love.",
 ].join("\n");
 
 // Turn-level overlay (not the system prompt) so entering/leaving a call never
@@ -140,13 +145,6 @@ const VOICE_MODE_INSTRUCTIONS = [
   "Plain prose only: no markdown, no headings, no bullet points, no code blocks, no emojis. Everything you write is pronounced literally.",
   "Write numbers, abbreviations and symbols the way they should be spoken.",
   "You can still use your tools; the user only hears your final text.",
-].join("\n");
-
-const VOICE_CONCIERGE_PROTOCOL = [
-  "# Voice concierge — workspace map",
-  "User is speaking by voice; use this map to say where info landed, with room titles/ref codes when useful.",
-  "Cross-room delivery → `gaia resume <roomId> \"message\"` or summon note; use room ids from the map/ref codes.",
-  "Never fabricate room contents; recall/read before claiming details beyond the map gist.",
 ].join("\n");
 
 /** Render an event timestamp (stored as ISO UTC) in the host's local
@@ -174,13 +172,86 @@ export function renderAttachmentLines(attachments: MessageAttachment[]): string 
   return attachments.map((file) => `[attached file: ${file.name} (${file.mime}, ${humanSize(file.size)}) at ${file.path}]`).join("\n");
 }
 
-/** Render room events for a turn prompt (v1's room.ts renderer, verbatim).
- * `userName` labels the human's own messages (Settings ▸ General ▸ "Your
- * name" — services/user-name.ts); "" or omitted falls back to the anonymous
- * "user" token this always used before that setting existed. */
-export function renderRoomTranscript(events: RoomEvent[], userName?: string): string {
+/** Best-effort readable text for a tool's raw JSON result — the same
+ * `{content:[{type:"text",text}]}` shape every gaia tool returns; anything
+ * else is stringified rather than dropped (never silently discard a result). */
+function toolResultPreviewText(result: unknown): string {
+  if (result && typeof result === "object" && Array.isArray((result as { content?: unknown }).content)) {
+    const blocks = (result as { content: unknown[] }).content;
+    const text = blocks
+      .filter((block): block is { type: "text"; text: string } => Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "text" && typeof (block as { text?: unknown }).text === "string")
+      .map((block) => block.text)
+      .join("\n");
+    if (text) return text;
+  }
+  if (typeof result === "string") return result;
+  try {
+    return JSON.stringify(result);
+  } catch {
+    return String(result);
+  }
+}
+
+/** One tool call's full, uncollapsed preview: call signature line + result
+ * text (multi-line result stays multi-line — boundedActivityPreview below is
+ * what trims/collapses it, never this). */
+function toolDetailPreview(tool: ToolDetail): string {
+  const args = tool.args !== undefined ? (() => { try { return JSON.stringify(tool.args); } catch { return String(tool.args); } })() : "";
+  const header = `${tool.toolName}(${args})`;
+  const resultText = tool.result !== undefined ? toolResultPreviewText(tool.result) : tool.status === "running" ? "(running)" : "";
+  return resultText ? `${header}\n${resultText}` : header;
+}
+
+/** Own-vs-other diet projection (09-MEMORY-CONTEXT "Diet projection", ported
+ * from gaia-daemon-v2 pi-agent-runtime.ts boundedActivityPreview): own tool
+ * calls stay full while recent (within `fullTurnWindow` room events) or when
+ * `keepAllToolCalls` is set; own tool calls OLDER than the window collapse to
+ * a one-line stub carrying the room event id + tool id so a `tool_result_fetch`
+ * gaia-tool call can page the original back (never silent deletion — the full
+ * ToolDetail stays durable on the canonical RoomEvent regardless of what this
+ * render-time projection shows). Another agent's activity is always a
+ * bounded-tail compact stub, independent of recency. */
+function boundedActivityPreview(preview: string, policy: ContextDietPolicy, isOwn: boolean, isRecentEvent: boolean, eventId: string, toolId: string): string {
+  if (!policy.preset) return preview;
+  if (isOwn && (policy.keepAllToolCalls || isRecentEvent)) return preview;
+  if (isOwn) {
+    const firstLine = preview.split("\n", 1)[0]?.trim() ?? "";
+    return `${firstLine} … [collapsed — page the original with tool_result_fetch(sessionId="${eventId}", entryId="${toolId}")]`;
+  }
+  return preview.split("\n").slice(-Math.max(1, policy.toolTailLines)).join("\n");
+}
+
+/** Last `windowSize` distinct agent-authored event ids (nearest the end of
+ * `events`, i.e. nearest the current turn) count as "recent" for the own-tool
+ * diet rule; `windowSize<=0` recognizes none as recent. */
+/** One UI-equivalent tool row: name + subject + terminal status, <=20 words. */
+function seatToolLine(tool: ToolDetail): string {
+  const summary = toolSummaryText(tool);
+  const status = tool.status === "running" ? "…" : tool.status === "error" ? "✗" : "✓";
+  return [tool.toolName, summary, status].filter(Boolean).join(" · ").split(/\s+/).slice(0, 20).join(" ");
+}
+function recentAgentEventIds(events: readonly RoomEvent[], windowSize: number): ReadonlySet<string> {
+  if (windowSize <= 0) return new Set();
+  const ids = events.filter((event) => !("targets" in event)).map((event) => event.id);
+  return new Set(ids.slice(-windowSize));
+}
+
+/** Render room events for a turn prompt (v1's room.ts renderer, verbatim when
+ * `diet` is absent or its policy is off). `userName` labels the human's own
+ * messages (Settings ▸ General ▸ "Your name" — services/user-name.ts); "" or
+ * omitted falls back to the anonymous "user" token this always used before
+ * that setting existed.
+ *
+ * `diet` (09-MEMORY-CONTEXT, opt-in — see ContextPolicyStore, default OFF):
+ * when its policy.preset is true, each agent event's tool-call activity
+ * (RoomEvent.details.tools — never shown before this) is additionally
+ * rendered under a `[gaia.activity]` block, decayed per boundedActivityPreview.
+ * The canonical RoomEvent is never mutated — this is a render-time projection
+ * only, exactly like v2's diet projection. */
+export function renderRoomTranscript(events: RoomEvent[], userName?: string, diet?: DietRenderContext): string {
   if (events.length === 0) return "(empty room)";
   const who = userName?.trim() || "user";
+  const recent = diet?.policy.preset ? recentAgentEventIds(events, diet.policy.fullTurnWindow) : undefined;
 
   return events
     .map((event) => {
@@ -188,8 +259,20 @@ export function renderRoomTranscript(events: RoomEvent[], userName?: string): st
         "targets" in event
           ? `${who} -> ${event.targets.map((target: string) => `@${target}`).join(", ")}`
           : `@${event.author}`;
+      const isOtherAgent = diet !== undefined && !("targets" in event) && event.author !== diet.currentAgentId;
       const attachments = "attachments" in event && event.attachments?.length ? `\n${renderAttachmentLines(event.attachments)}` : "";
-      return `[${formatEventTimestamp(event.timestamp)}] ${header}:\n${event.text}${attachments}`;
+      const tools = !("targets" in event) ? event.details?.tools : undefined;
+      const seatActivity = isOtherAgent && tools?.length ? `\n${tools.map(seatToolLine).join("\n")}` : "";
+      const activity =
+        !isOtherAgent && diet?.policy.preset && tools?.length
+          ? (() => {
+              const isOwn = event.author === diet.currentAgentId;
+              const isRecentEvent = recent?.has(event.id) ?? false;
+              const lines = tools.map((tool) => `${tool.toolName} · ${tool.status} · ${boundedActivityPreview(toolDetailPreview(tool), diet.policy, isOwn, isRecentEvent, event.id, tool.id)}`);
+              return `\n\n[gaia.activity owner=${isOwn ? "self" : "other"}]\n${lines.join("\n")}`;
+            })()
+          : "";
+      return `[${formatEventTimestamp(event.timestamp)}] ${header}:\n${isOtherAgent ? stripGaiaThinking(event.text) : event.text}${attachments}${seatActivity}${activity}`;
     })
     .join("\n\n");
 }
@@ -233,7 +316,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     // measured to suppress native thinking only at char 0, not at the end.
     input.agent.promptLaw?.trim() ?? "",
     `# Agent Soul\n\n${input.soulText.trim()}`,
-    buildProtocolsSection(input.protocolsText, input.thinkingLevel),
+    buildProtocolsSection(input.protocolsText, input.thinkingLevel, protocolEnabled(input.agent.protocols, `${THINKING_PROTOCOL}.md`)),
     input.intentText?.trim() ? `# Project Agent Intent\n\n${input.intentText.trim()}` : "",
     `# Project Context (AGENTS.md)\n\n${renderProjectContext(input.contextFiles)}`,
     HARNESS_LAW,
@@ -274,7 +357,7 @@ export async function buildBaseSystemPrompt(params: {
     readFile(params.agent.soulPath, "utf8"),
     readOptional(params.agent.projectIntentPath),
     discoverContextFiles(params.workspaceRoot),
-    readProtocolsText(params.protocolsDir),
+    readProtocolsText(params.protocolsDir, params.agent.protocols),
   ]);
   return buildSystemPrompt({
     agent: params.agent,
@@ -363,6 +446,7 @@ export async function buildTurnPromptFor(
     agentId: agent.id,
     message: input.message,
     events: input.transcript,
+    dietPolicy: input.dietPolicy,
     memory: memoryChanged ? memory : undefined,
     recall: input.recall,
     checkpoints: input.checkpoints,
@@ -385,29 +469,22 @@ export function buildTurnPrompt(input: TurnPromptInput): string {
       ? `Worktree: you are working in ${input.workDir} on this room's git branch — an isolated checkout of ${input.rootDir}. Commit your work; it is not in the main checkout until merged.`
       : "";
   const checkpointsBlock = input.checkpoints?.length
-    ? [
-        "# Checkpoints — user-named inflection points of this room (attention anchors)",
-        ...input.checkpoints.map((bookmark) => `- [${formatEventTimestamp(bookmark.eventAt)}] "${bookmark.name}" — @${bookmark.author}: "${bookmark.excerpt}" (event ${bookmark.eventId})`),
-        "The user pinned these as the room's pivotal moments — weigh them when reasoning about earlier context.",
-      ].join("\n")
-    : "";
-  const voiceRoomMapBlock = input.voiceRoomMap?.trim()
-    ? `${VOICE_CONCIERGE_PROTOCOL}\n\n${input.voiceRoomMap.trim()}`
+    ? `# Room checkpoints\n\n${input.checkpoints.map((mark) => `- ${mark.name} (${mark.author}, ${mark.eventAt}): ${mark.excerpt}`).join("\n")}`
     : "";
   return [
     `Room: ${input.roomId}`,
     `Current agent: @${input.agentId}`,
     worktreeLine,
+    input.channel === "voice" ? VOICE_MODE_INSTRUCTIONS : "",
     input.berserk ? BERSERK_INSTRUCTIONS : "",
     input.love ? LOVE_INSTRUCTIONS : "",
-    input.channel === "voice" ? VOICE_MODE_INSTRUCTIONS : "",
-    voiceRoomMapBlock,
     input.memory?.trim() ? `# Your persistent memory\n\n${input.memory.trim()}` : "",
     input.recall?.trim() ?? "",
+    input.voiceRoomMap?.trim() ?? "",
     input.pluginContext?.trim() ?? "",
     checkpointsBlock,
     "New room events since your last turn:",
-    renderRoomTranscript(input.events, input.userName),
+    renderRoomTranscript(input.events, input.userName, { policy: input.dietPolicy ?? { preset: false, keepAllToolCalls: false, fullTurnWindow: 0, toolTailLines: 1 }, currentAgentId: input.agentId }),
     "Newest user message:",
     [input.message, input.attachments?.length ? renderAttachmentLines(input.attachments) : ""].filter(Boolean).join("\n"),
     input.turnLaw?.trim() ?? "",

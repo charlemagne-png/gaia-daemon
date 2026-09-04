@@ -15,12 +15,14 @@
 // server-side file after a crash/reload, with zero client-side storage.
 // A failed clip also stays in a module variable so the user can retry or
 // discard it without a round trip to the server.
+import { selectRoom } from "./actions.js";
+import { apiUrl } from "./api.js";
+import { transcriptionTimeoutMs } from "./dictation-timeout.js";
 import { markDirty, setError } from "./render.js";
 import { state } from "./state.js";
 
 const WAVE_BARS = 28;
 const METER_THROTTLE_MS = 100;
-const MAX_RECORD_MS = 5 * 60 * 1000;
 const FINISH_WATCHDOG_MS = 1500;
 // After stopping, how long to wait for the chunk-upload chain to flush before
 // giving up on the server-side clip file and uploading the full in-memory
@@ -28,41 +30,9 @@ const FINISH_WATCHDOG_MS = 1500;
 // has landed — otherwise the daemon reads a truncated file and the tail of
 // the recording is cut off.
 const UPLOAD_FLUSH_WATCHDOG_MS = 2000;
-// A dictation result must appear promptly, but STT latency scales with clip
-// length AND provider. ElevenLabs returned a real ~5min clip in ~17s
-// (2026-07-13), but Replicate Whisper regularly needs 60–90s for multi-MB
-// WebM clips even when healthy (observed 76s on 2026-08-02). 45s caused false
-// "Fetch is aborted" failures while Replicate later succeeded server-side.
-// Keep this above the daemon's 120s STT fetch window with enough margin for
-// upload + prediction polling, but still bounded so the composer never wedges.
-const TRANSCRIBE_TIMEOUT_MS = 180_000;
-// LIVE rendering (2026-08-26): while recording, the clip-so-far (already
-// streamed to the daemon chunk by chunk) is re-transcribed in a rolling loop
-// and the fresh transcript REPLACES the live region of the composer each
-// pass. Every pass re-reads the WHOLE utterance, so later words correct
-// earlier ones and punctuation settles as the sentence completes —
-// self-correcting with context, no partial-result plumbing needed. The loop
-// is chained (next pass starts only after the previous returns), so cadence
-// degrades gracefully as the clip grows. Truncated tails in a mid-recording
-// pass are fine: the next pass corrects them; only the FINAL pass (on stop /
-// Enter) requires the upload chain to be flushed.
-const LIVE_PASS_TIMEOUT_MS = 20_000;
-const LIVE_PASS_REST_MS = 350;
-const LIVE_POLL_MS = 150;
-// Canonical-commit rotation (Charles 08-26: "stay canonical and continue"):
-// a pause this long freezes the sentence-so-far — it is committed into the
-// canonical prefix (never rewritten again) and recording rotates onto a
-// FRESH clip. Live self-correction only ever touches the sentence currently
-// being spoken, so a weaker later read can never delete earlier text; and
-// live passes stay sentence-sized instead of growing with the recording.
-const COMMIT_SILENCE_MS = 1500;
-// Meter-derived VAD (voice-control's hard-won lessons: NO absolute
-// thresholds — calibrate this session's own ambient floor, gate by ratios
-// with a small scaled-unit margin, feed the floor only from quiet frames).
-const VAD_CALIBRATION_FRAMES = 30;
-const VAD_SPEAK_RATIO = 1.9;
-const VAD_SPEAK_MARGIN = 0.006;
-const VAD_FLOOR_EMA = 0.04;
+// The daemon owns the provider deadline (120s). Keep the browser budget past
+// it: otherwise a slow-but-valid provider becomes the misleading client-side
+// "Fetch is aborted" error before the daemon can return its result/error.
 
 /** @param {number} ms @returns {AbortSignal|undefined} */
 function fetchTimeout(ms) {
@@ -70,19 +40,9 @@ function fetchTimeout(ms) {
 }
 
 /**
- * @typedef {Object} DictationSegment one continuously-spoken stretch, backed
- *   by its own server-side clip; rotated out (committed) on a long pause
- * @property {MediaRecorder} recorder
- * @property {Blob[]} chunks
- * @property {string} clipId
- * @property {Promise<void>} uploadChain
- * @property {boolean} liveRendered
- */
-
-/**
  * @typedef {Object} DictationSession
  * @property {MediaStream} stream
- * @property {DictationSegment} seg the segment currently recording
+ * @property {MediaRecorder} recorder
  * @property {AudioContext|null} audioCtx
  * @property {AnalyserNode|null} analyser
  * @property {Uint8Array|null} analyserData
@@ -90,18 +50,9 @@ function fetchTimeout(ms) {
  * @property {number} startedAtMs
  * @property {number} timerId
  * @property {number} lastMeterMs
- * @property {string} prefix CANONICAL text: whatever the composer held at
- *   record-start plus every committed sentence — never rewritten afterwards
- * @property {string} pendingTail live text of a segment whose commit pass is
- *   still running (stays on screen until the commit replaces it)
- * @property {string} liveTail latest live transcript of the CURRENT segment
- * @property {Promise<void>} commitChain sentence commits, strictly in order
- * @property {boolean} rotating a commit is in flight (blocks re-rotation)
- * @property {boolean} committedAny
- * @property {number} noiseFloor
- * @property {number} calibrationFrames
- * @property {number} lastSpeechAtMs
- * @property {boolean} sawSpeech
+ * @property {Blob[]} chunks
+ * @property {string} clipId
+ * @property {Promise<void>} uploadChain
  */
 
 /** @type {DictationSession|null} */
@@ -137,12 +88,12 @@ async function startDictation() {
   }
   if (!navigator.mediaDevices?.getUserMedia) {
     state.dictationError = "microphone needs HTTPS or localhost";
-    markDirty("composer");
+    markDirty("composer", "tabs");
     return;
   }
   if (typeof MediaRecorder === "undefined") {
     state.dictationError = "this browser can't record audio";
-    markDirty("composer");
+    markDirty("composer", "tabs");
     return;
   }
 
@@ -157,14 +108,17 @@ async function startDictation() {
     });
   } catch {
     state.dictationError = "microphone permission denied or unavailable";
-    markDirty("composer");
+    markDirty("composer", "tabs");
     return;
   }
+
+  const mimeType = pickMimeType();
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
 
   /** @type {DictationSession} */
   const current = {
     stream,
-    seg: /** @type {DictationSegment} */ (/** @type {unknown} */ (null)), // set right below
+    recorder,
     audioCtx: null,
     analyser: null,
     analyserData: null,
@@ -172,227 +126,40 @@ async function startDictation() {
     startedAtMs: Date.now(),
     timerId: 0,
     lastMeterMs: 0,
-    prefix: state.composerText.replace(/\s+$/, ""),
-    pendingTail: "",
-    liveTail: "",
-    commitChain: Promise.resolve(),
-    rotating: false,
-    committedAny: false,
-    noiseFloor: 0,
-    calibrationFrames: 0,
-    lastSpeechAtMs: 0,
-    sawSpeech: false,
+    chunks: [],
+    clipId: newClipId(),
+    uploadChain: Promise.resolve(),
   };
-  try {
-    current.seg = newSegment(current);
-  } catch (error) {
-    stopStreamTracks(stream);
-    setError(error);
-    return;
-  }
   session = current;
   state.dictating = true;
+  // Bind the recording to the room it was started in (v2 parity). Everything
+  // downstream — the global chip, insertTranscript — reads this, never "the
+  // room that happens to be open when the transcript comes back".
+  state.dictationOrigin = state.snapshot ? { workspaceId: state.snapshot.workspace.id, roomId: state.snapshot.room.id } : null;
   state.dictationBusy = false;
   state.dictationBars = flatBars();
   state.dictationLevel = 0;
 
   startMeter(current);
-  current.timerId = window.setTimeout(() => void stopAndTranscribe(), MAX_RECORD_MS);
-  void liveLoop(current);
-  markDirty("composer");
-}
-
-/** @param {number} ms @returns {Promise<void>} */
-function sleep(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-/**
- * Create + start a recording segment on the session's stream. Each segment
- * owns its own server-side clip (1s timeslice chunk streaming = durability;
- * the in-memory chunks array stays the source of truth for the send path).
- * @param {DictationSession} current @returns {DictationSegment}
- */
-function newSegment(current) {
-  const mimeType = pickMimeType();
-  const recorder = new MediaRecorder(current.stream, mimeType ? { mimeType } : undefined);
-  /** @type {DictationSegment} */
-  const seg = { recorder, chunks: [], clipId: newClipId(), uploadChain: Promise.resolve(), liveRendered: false };
+  // 1s timeslice: each dataavailable chunk lands in the in-memory array —
+  // that's the only place recorded audio ever lives.
   recorder.ondataavailable = (event) => {
     if (!event.data || !event.data.size) return;
-    seg.chunks.push(event.data);
-    // Chained (not parallel) so appends land in order AND completeness is
-    // knowable; never awaited here; failures swallowed — memory is truth.
-    seg.uploadChain = seg.uploadChain
-      .then(() => fetch(`/api/voice/clip/${seg.clipId}/chunk`, { method: "POST", body: event.data }))
+    current.chunks.push(event.data);
+    // Durability: stream the chunk to disk server-side. Chained behind the
+    // previous chunk's upload (not fired in parallel) so the server's appends
+    // land in recording order AND so stopAndTranscribe can tell when the
+    // on-disk file is complete — parallel fire-and-forget uploads let the
+    // final chunk race the clip-transcribe call and cut off the recording's
+    // tail. Still never awaited here (recording/stop are never gated), and
+    // failures are swallowed: the in-memory chunks array remains the source
+    // of truth for the send path.
+    current.uploadChain = current.uploadChain
+      .then(() => fetch(apiUrl(`/api/voice/clip/${current.clipId}/chunk`), { method: "POST", body: event.data }))
       .then(() => undefined, () => undefined);
   };
   recorder.start(1000);
-  return seg;
-}
-
-/** Graceful watchdogged recorder stop — always resolves.
- * @param {MediaRecorder} recorder @returns {Promise<void>} */
-function stopRecorder(recorder) {
-  return new Promise((resolve) => {
-    const watchdog = window.setTimeout(() => resolve(undefined), FINISH_WATCHDOG_MS);
-    recorder.onstop = () => {
-      clearTimeout(watchdog);
-      resolve(undefined);
-    };
-    recorder.onerror = () => {
-      clearTimeout(watchdog);
-      resolve(undefined);
-    };
-    try {
-      if (recorder.state !== "inactive") {
-        recorder.requestData?.();
-        recorder.stop();
-      } else {
-        clearTimeout(watchdog);
-        resolve(undefined);
-      }
-    } catch {
-      clearTimeout(watchdog);
-      resolve(undefined);
-    }
-  });
-}
-
-/**
- * Meter-fed VAD: tracks this session's ambient floor and, after a
- * COMMIT_SILENCE_MS pause following real speech, rotates the segment —
- * committing the spoken sentence into the canonical prefix.
- * @param {DictationSession} current @param {number} level
- */
-function vadTick(current, level) {
-  if (current.calibrationFrames < VAD_CALIBRATION_FRAMES) {
-    current.calibrationFrames += 1;
-    current.noiseFloor = current.noiseFloor === 0 ? level : current.noiseFloor * 0.85 + level * 0.15;
-    return;
-  }
-  const speakAt = Math.max(current.noiseFloor * VAD_SPEAK_RATIO, current.noiseFloor + VAD_SPEAK_MARGIN);
-  if (level >= speakAt) {
-    current.lastSpeechAtMs = Date.now();
-    current.sawSpeech = true;
-    return;
-  }
-  // Only quiet frames feed the floor — speech never raises its own bar.
-  current.noiseFloor = Math.max(0.001, current.noiseFloor * (1 - VAD_FLOOR_EMA) + level * VAD_FLOOR_EMA);
-  if (
-    current.sawSpeech &&
-    !current.rotating &&
-    current.seg.chunks.length > 0 &&
-    Date.now() - current.lastSpeechAtMs >= COMMIT_SILENCE_MS
-  ) {
-    rotateSegment(current);
-  }
-}
-
-/**
- * Freeze the sentence-so-far and keep going: the current segment's live text
- * becomes pendingTail (stays visible), a fresh segment starts recording
- * immediately (we are mid-silence, so nothing is lost in the hand-off), and
- * the old segment's full-context commit runs in the background.
- * @param {DictationSession} current
- */
-function rotateSegment(current) {
-  /** @type {DictationSegment} */
-  let next;
-  try {
-    next = newSegment(current);
-  } catch {
-    return; // recorder refused another instance — stay single-segment
-  }
-  current.rotating = true;
-  current.sawSpeech = false;
-  const old = current.seg;
-  current.seg = next;
-  current.pendingTail = current.liveTail;
-  current.liveTail = "";
-  current.commitChain = current.commitChain
-    .then(() => commitSegment(current, old))
-    .catch(() => {})
-    .then(() => {
-      current.rotating = false;
-    });
-}
-
-/**
- * Finalize a rotated-out segment: full-context transcribe its clip and weld
- * the result into the canonical prefix. On ANY failure the pendingTail (the
- * last live read, already on screen) is committed instead — committed text
- * is never deleted, only ever refined once, here.
- * @param {DictationSession} current @param {DictationSegment} old
- */
-async function commitSegment(current, old) {
-  await stopRecorder(old.recorder);
-  const flushed = await Promise.race([
-    old.uploadChain.then(() => true),
-    /** @type {Promise<boolean>} */ (new Promise((resolve) => window.setTimeout(() => resolve(false), UPLOAD_FLUSH_WATCHDOG_MS))),
-  ]);
-  const mime = old.recorder.mimeType || old.chunks[0]?.type || "audio/webm";
-  let text = "";
-  if (flushed) {
-    // Non-live call: the daemon archives the clip on success (it is complete).
-    const viaClip = await postClipTranscribe(old.clipId, mime, fetchTimeout(LIVE_PASS_TIMEOUT_MS));
-    if (viaClip.ok) text = viaClip.text.trim();
-  }
-  if (!text && old.chunks.length) {
-    const result = await postClip(new Blob(old.chunks, { type: mime }), fetchTimeout(LIVE_PASS_TIMEOUT_MS));
-    if (result.ok) {
-      text = result.text.trim();
-      void fetch(`/api/voice/clip/${old.clipId}`, { method: "DELETE" }).catch(() => {});
-    }
-  }
-  if (!text) text = current.pendingTail;
-  if (text) {
-    current.prefix = joinText(current.prefix, text);
-    current.committedAny = true;
-  }
-  current.pendingTail = "";
-  if (session === current) renderLive(current);
-}
-
-/**
- * Rolling live transcription of the CURRENT segment only: whenever new audio
- * chunks exist, transcribe the segment's clip-so-far and render canonical
- * prefix + pending commit + fresh tail. Follows segment rotation; exits when
- * the session ends (the final stop/Enter pass owns the composer from then on).
- * @param {DictationSession} current
- */
-async function liveLoop(current) {
-  let seg = current.seg;
-  let transcribedChunks = 0;
-  while (session === current) {
-    if (current.seg !== seg) {
-      seg = current.seg;
-      transcribedChunks = 0;
-    }
-    if (seg.chunks.length <= transcribedChunks) {
-      await sleep(LIVE_POLL_MS);
-      continue;
-    }
-    const target = seg.chunks.length;
-    // Partially-flushed file is acceptable here — the next pass corrects it.
-    await seg.uploadChain.catch(() => {});
-    if (session !== current) return;
-    const mime = seg.recorder.mimeType || seg.chunks[0]?.type || "";
-    const result = await postClipTranscribe(seg.clipId, mime || undefined, fetchTimeout(LIVE_PASS_TIMEOUT_MS), true);
-    if (session !== current) return;
-    const text = result.ok ? result.text.trim() : "";
-    // Stale-segment result: the rotation's commit pass owns that text now.
-    if (current.seg === seg && text) {
-      // Shrink guard: a transient weaker read never eats a longer good tail.
-      if (text.length >= current.liveTail.length * 0.6) {
-        current.liveTail = text;
-        seg.liveRendered = true;
-        renderLive(current);
-      }
-    }
-    transcribedChunks = target;
-    await sleep(LIVE_PASS_REST_MS);
-  }
+  markDirty("composer", "tabs");
 }
 
 /** Stop recording and transcribe what was captured. @returns {Promise<boolean>} */
@@ -401,32 +168,44 @@ async function stopAndTranscribe() {
   if (!current) return false;
   session = null;
   state.dictating = false;
-  markDirty("composer");
+  markDirty("composer", "tabs");
 
   stopMeter(current);
   if (current.timerId) clearTimeout(current.timerId);
-  const seg = current.seg;
-  await stopRecorder(seg.recorder);
-  // Sentences already rotated out must land in the canonical prefix first.
-  await current.commitChain.catch(() => {});
+
+  try {
+    await new Promise((resolve, reject) => {
+      const watchdog = window.setTimeout(() => reject(new Error("watchdog")), FINISH_WATCHDOG_MS);
+      current.recorder.onstop = () => {
+        clearTimeout(watchdog);
+        resolve(undefined);
+      };
+      current.recorder.onerror = () => {
+        clearTimeout(watchdog);
+        reject(new Error("recording failed"));
+      };
+      try {
+        if (current.recorder.state !== "inactive") current.recorder.stop();
+        else resolve(undefined);
+      } catch {
+        reject(new Error("recording failed"));
+      }
+    });
+  } catch {
+    // Watchdog fired (or stop() threw): fall back to whatever chunks are
+    // already cached in memory instead of failing the recording outright.
+  }
 
   stopStreamTracks(current.stream);
   void current.audioCtx?.close().catch(() => {});
 
-  const mimeType = seg.recorder.mimeType || seg.chunks[0]?.type || "audio/webm";
-  const clip = seg.chunks.length ? new Blob(seg.chunks, { type: mimeType }) : null;
+  const mimeType = current.recorder.mimeType || current.chunks[0]?.type || "audio/webm";
+  const clip = current.chunks.length ? new Blob(current.chunks, { type: mimeType }) : null;
 
   if (!clip || !clip.size) {
-    if (current.committedAny) {
-      // Everything spoken already landed sentence by sentence.
-      renderComposerText(current.prefix);
-      state.dictationBusy = false;
-      markDirty("composer");
-      return true;
-    }
     state.dictationError = "no audio captured";
     state.dictationBusy = false;
-    markDirty("composer");
+    markDirty("composer", "tabs");
     return false;
   }
 
@@ -436,21 +215,10 @@ async function stopAndTranscribe() {
   // silently cut off. Watchdogged: if the chain hasn't flushed in time, the
   // full in-memory blob is uploaded instead, which always has the tail.
   const clipFileComplete = await Promise.race([
-    seg.uploadChain.then(() => true),
+    current.uploadChain.then(() => true),
     /** @type {Promise<boolean>} */ (new Promise((resolve) => window.setTimeout(() => resolve(false), UPLOAD_FLUSH_WATCHDOG_MS))),
   ]);
-  // Final pass replaces only the CURRENT sentence — the canonical prefix
-  // (earlier committed sentences) stands untouched.
-  const render = (/** @type {string} */ text) => renderComposerText(joinText(current.prefix, text));
-  const ok = await transcribe(clip, seg.clipId, clipFileComplete, render);
-  if (!ok && (seg.liveRendered || current.committedAny)) {
-    // The composer already holds canonical text + the last live tail —
-    // sendable. A failed final pass must not park an error chip over it.
-    discardFailedDictation();
-    renderLive(current);
-    return true;
-  }
-  return ok;
+  return await transcribe(clip, current.clipId, clipFileComplete);
 }
 
 /**
@@ -467,13 +235,10 @@ async function stopAndTranscribe() {
  * @param {boolean} [clipFileComplete] whether every chunk upload for clipId
  *   has landed on disk — the cheaper clip-transcribe path is only safe (and
  *   only tried) when true; otherwise the full blob is uploaded.
- * @param {(text: string) => void} [render] how the transcript reaches the
- *   composer — defaults to appending; the live-dictation final pass passes a
- *   replace-the-live-region renderer instead.
  * @returns {Promise<boolean>}
  */
-export async function transcribe(blob, clipId, clipFileComplete, render) {
-  const next = queueTail.catch(() => false).then(() => runTranscribe(blob, clipId, clipFileComplete, render));
+export async function transcribe(blob, clipId, clipFileComplete) {
+  const next = queueTail.catch(() => false).then(() => runTranscribe(blob, clipId, clipFileComplete));
   queueTail = next;
   activeTranscriptionPromise = next;
   try {
@@ -487,17 +252,15 @@ export async function transcribe(blob, clipId, clipFileComplete, render) {
  * @param {Blob} blob
  * @param {string} [clipId]
  * @param {boolean} [clipFileComplete]
- * @param {(text: string) => void} [render]
  * @returns {Promise<boolean>}
  */
-async function runTranscribe(blob, clipId, clipFileComplete, render) {
-  const insert = render ?? insertTranscript;
+async function runTranscribe(blob, clipId, clipFileComplete) {
   state.dictationBusy = true;
   state.dictating = false;
   state.dictationError = "";
-  markDirty("composer");
+  markDirty("composer", "tabs");
 
-  const { signal, settle } = requestSignal(TRANSCRIBE_TIMEOUT_MS);
+  const { signal, settle } = requestSignal(transcriptionTimeoutMs());
   try {
     // Prefer the clip already streamed to the daemon during recording (no
     // second upload of the audio) — but ONLY when the upload chain confirmed
@@ -510,20 +273,20 @@ async function runTranscribe(blob, clipId, clipFileComplete, render) {
     if (clipId && clipFileComplete) {
       const viaClip = await postClipTranscribe(clipId, blob?.type, signal);
       if (viaClip.ok) {
-        insert(viaClip.text);
+        insertTranscript(viaClip.text);
         lastFailedClip = null;
         state.dictationError = "";
         state.dictationBars = flatBars();
         state.dictationLevel = 0;
         state.dictationBusy = false;
-        markDirty("composer");
+        markDirty("composer", "tabs");
         return true;
       }
       if (viaClip.status !== 404 && viaClip.status !== 0) {
         lastFailedClip = blob;
         state.dictationError = viaClip.error;
         state.dictationBusy = false;
-        markDirty("composer");
+        markDirty("composer", "tabs");
         return false;
       }
     }
@@ -533,20 +296,20 @@ async function runTranscribe(blob, clipId, clipFileComplete, render) {
       // so the partially-streamed .bin is now redundant — discard it (the
       // server renames it to discarded-*, never deletes) so it can't
       // resurface as a ghost recovered-recording chip.
-      if (clipId) void fetch(`/api/voice/clip/${clipId}`, { method: "DELETE" }).catch(() => {});
-      insert(result.text);
+      if (clipId) void fetch(apiUrl(`/api/voice/clip/${clipId}`), { method: "DELETE" }).catch(() => {});
+      insertTranscript(result.text);
       lastFailedClip = null;
       state.dictationError = "";
       state.dictationBars = flatBars();
       state.dictationLevel = 0;
       state.dictationBusy = false;
-      markDirty("composer");
+      markDirty("composer", "tabs");
       return true;
     }
     lastFailedClip = blob;
     state.dictationError = result.error;
     state.dictationBusy = false;
-    markDirty("composer");
+    markDirty("composer", "tabs");
     return false;
   } finally {
     settle();
@@ -562,15 +325,10 @@ async function runTranscribe(blob, clipId, clipFileComplete, render) {
  * @param {AbortSignal} [signal]
  * @returns {Promise<{ok: boolean, text: string, engine: string, error: string, status: number}>}
  */
-async function postClipTranscribe(clipId, mimeType, signal, live = false) {
-  const params = new URLSearchParams();
-  if (mimeType) params.set("mime", mimeType);
-  // live passes must not archive the clip — the recording is still appending
-  // to it (see the daemon route: archive-on-success would orphan the stream).
-  if (live) params.set("live", "1");
-  const query = params.size ? `?${params}` : "";
+async function postClipTranscribe(clipId, mimeType, signal) {
+  const query = mimeType ? `?mime=${encodeURIComponent(mimeType)}` : "";
   try {
-    const response = await fetch(`/api/voice/clip/${clipId}/transcribe${query}`, { method: "POST", signal });
+    const response = await fetch(apiUrl(`/api/voice/clip/${clipId}/transcribe${query}`), { method: "POST", signal });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) return { ok: false, text: "", engine: "", error: String(data.error ?? `transcription failed: ${response.status}`), status: response.status };
     return { ok: true, text: String(data.text ?? ""), engine: String(data.engine ?? ""), error: "", status: response.status };
@@ -591,7 +349,7 @@ async function postClip(blob, signal) {
   try {
     // Not via api.js: the body is raw audio, not JSON, so the content-type
     // must be the clip's MIME.
-    const response = await fetch("/api/voice/transcribe", {
+    const response = await fetch(apiUrl("/api/voice/transcribe"), {
       method: "POST",
       headers: { "content-type": blob.type || "application/octet-stream" },
       body: blob,
@@ -650,7 +408,7 @@ export async function retryDictation() {
 export function discardFailedDictation() {
   lastFailedClip = null;
   state.dictationError = "";
-  markDirty("composer");
+  markDirty("composer", "tabs");
 }
 
 /** @returns {boolean} */
@@ -665,11 +423,11 @@ export function cancelDictation() {
   session = null;
   stopMeter(current);
   if (current.timerId) clearTimeout(current.timerId);
-  current.seg.recorder.ondataavailable = null;
-  current.seg.recorder.onstop = null;
-  current.seg.recorder.onerror = null;
+  current.recorder.ondataavailable = null;
+  current.recorder.onstop = null;
+  current.recorder.onerror = null;
   try {
-    if (current.seg.recorder.state !== "inactive") current.seg.recorder.stop();
+    if (current.recorder.state !== "inactive") current.recorder.stop();
   } catch {
     // Already stopped.
   }
@@ -679,7 +437,7 @@ export function cancelDictation() {
   state.dictationBusy = false;
   state.dictationBars = flatBars();
   state.dictationLevel = 0;
-  markDirty("composer");
+  markDirty("composer", "tabs");
 }
 
 /**
@@ -703,29 +461,17 @@ export async function finalizeDictationForSend() {
 
 export function installDictationLifecycle() {
   void refreshRecoveredClips();
-  // ⌃V anywhere = start dictation (press again or Enter to finish). Ctrl —
-  // not Cmd — so macOS paste (⌘V) is untouched; strict modifier match keeps
-  // Ctrl+Shift+V paste-without-formatting alive on other platforms.
-  window.addEventListener("keydown", (event) => {
-    if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-    if ((event.key || "").toLowerCase() !== "v") return;
-    event.preventDefault();
-    void toggleDictation().then(() => {
-      // Land the caret in the composer so a bare Enter sends the transcript.
-      if (state.dictating) void import("./composer.js").then((m) => m.focusComposer());
-    });
-  });
   window.addEventListener("pagehide", () => {
     if (!session) return;
     const current = session;
     session = null;
     stopMeter(current);
     if (current.timerId) clearTimeout(current.timerId);
-    current.seg.recorder.ondataavailable = null;
-    current.seg.recorder.onstop = null;
-    current.seg.recorder.onerror = null;
+    current.recorder.ondataavailable = null;
+    current.recorder.onstop = null;
+    current.recorder.onerror = null;
     try {
-      if (current.seg.recorder.state !== "inactive") current.seg.recorder.stop();
+      if (current.recorder.state !== "inactive") current.recorder.stop();
     } catch {
       // Already stopped.
     }
@@ -747,16 +493,16 @@ export function installDictationLifecycle() {
  */
 export async function refreshRecoveredClips() {
   try {
-    const response = await fetch("/api/voice/clips");
+    const response = await fetch(apiUrl("/api/voice/clips"));
     if (!response.ok) return;
     const data = await response.json().catch(() => ({}));
     /** @type {{id?: unknown, bytes?: unknown, mtimeMs?: unknown}[]} */
     const clips = Array.isArray(data.clips) ? data.clips : [];
-    const activeClipId = session?.seg.clipId;
+    const activeClipId = session?.clipId;
     state.dictationDrafts = clips
       .filter((clip) => typeof clip.id === "string" && clip.id !== activeClipId)
       .map((clip) => ({ id: /** @type {string} */ (clip.id), bytes: Number(clip.bytes) || 0, mtimeMs: Number(clip.mtimeMs) || 0 }));
-    markDirty("composer");
+    markDirty("composer", "tabs");
   } catch {
     // Offline / daemon restarting — keep whatever drafts were already shown.
   }
@@ -772,17 +518,17 @@ export async function refreshRecoveredClips() {
  * @returns {Promise<boolean>}
  */
 export async function transcribeRecoveredClip(id) {
-  const { signal, settle } = requestSignal(TRANSCRIBE_TIMEOUT_MS);
+  const { signal, settle } = requestSignal(transcriptionTimeoutMs());
   try {
     const result = await postClipTranscribe(id, undefined, signal);
     if (result.ok) {
       insertTranscript(result.text);
       state.dictationDrafts = state.dictationDrafts.filter((draft) => draft.id !== id);
-      markDirty("composer");
+      markDirty("composer", "tabs");
       return true;
     }
     state.dictationError = result.error;
-    markDirty("composer");
+    markDirty("composer", "tabs");
     return false;
   } finally {
     settle();
@@ -798,52 +544,40 @@ export async function transcribeRecoveredClip(id) {
  */
 export async function discardRecoveredClip(id) {
   try {
-    await fetch(`/api/voice/clip/${id}`, { method: "DELETE" });
+    await fetch(apiUrl(`/api/voice/clip/${id}`), { method: "DELETE" });
   } catch {
     // Offline — the server-side file just outlives this client's view of it.
   }
   state.dictationDrafts = state.dictationDrafts.filter((draft) => draft.id !== id);
-  markDirty("composer");
+  markDirty("composer", "tabs");
 }
 
 /**
  * Append the transcript to whatever is already in the composer (so dictation
  * augments a partially-typed message instead of clobbering it).
+ *
+ * Room-bound (v2 parity): if the user wandered to another room while the clip
+ * was transcribing, come BACK to the room the words were spoken into before
+ * inserting them — the composer is shared across rooms, so inserting in place
+ * would silently retarget the message at whoever is on screen now.
  * @param {string} text
  */
 function insertTranscript(text) {
+  const origin = state.dictationOrigin;
+  const snapshot = state.snapshot;
+  if (origin && snapshot && (snapshot.workspace.id !== origin.workspaceId || snapshot.room.id !== origin.roomId)) {
+    // Consume the binding BEFORE the hop so a room that no longer exists (or a
+    // failed switch) can't bounce this call forever — the retry inserts
+    // unconditionally.
+    state.dictationOrigin = null;
+    void selectRoom(origin.workspaceId, origin.roomId).finally(() => insertTranscript(text));
+    return;
+  }
+  state.dictationOrigin = null;
   const existing = state.composerText.replace(/\s+$/, "");
-  renderComposerText(existing ? `${existing} ${text}` : text);
-}
-
-/** Join two text pieces with a single space, tolerating empties.
- * @param {string} a @param {string} b @returns {string} */
-function joinText(a, b) {
-  const left = String(a ?? "").trim();
-  const right = String(b ?? "").trim();
-  return left && right ? `${left} ${right}` : left || right;
-}
-
-/**
- * Render the composer line: canonical prefix (frozen) + pending commit (a
- * rotated-out sentence whose refine pass is still running) + the live tail
- * of the sentence currently being spoken. Only the tail is ever replaced by
- * live passes; typing into the live region mid-recording is not preserved —
- * the composer belongs to the voice until the recording stops.
- * @param {DictationSession} current
- */
-function renderLive(current) {
-  const line = joinText(joinText(current.prefix, current.pendingTail), current.liveTail);
-  if (!line) return;
-  renderComposerText(line);
-}
-
-/** @param {string} value */
-function renderComposerText(value) {
-  state.composerText = value;
-  // Never let the autocomplete popup swallow the Enter that should send.
+  state.composerText = existing ? `${existing} ${text}` : text;
   state.completionHidden = true;
-  markDirty("composer");
+  markDirty("composer", "tabs");
   // Put the caret at the end so the user can keep typing / hit Enter.
   const textarea = document.querySelector(".command-input");
   if (textarea instanceof HTMLTextAreaElement) {
@@ -897,15 +631,13 @@ function pumpMeter(current) {
     sum += normalized * normalized;
   }
   const rms = Math.min(1, Math.sqrt(sum / current.analyserData.length) * 4.5);
-  // Every frame (unthrottled): the canonical-commit VAD needs real cadence.
-  vadTick(current, rms);
   // Throttle state writes: the meter runs at rAF but the UI only needs ~10fps.
   const now = Date.now();
   if (now - current.lastMeterMs >= METER_THROTTLE_MS) {
     current.lastMeterMs = now;
     state.dictationBars = [...state.dictationBars.slice(-WAVE_BARS + 1), Math.max(0.04, rms)];
     state.dictationLevel = rms;
-    markDirty("composer");
+    markDirty("composer", "tabs");
   }
   current.rafId = requestAnimationFrame(() => pumpMeter(current));
 }

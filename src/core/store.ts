@@ -2,7 +2,7 @@
 // (temp file + rename on the same volume), JSONL append/scan, and dir helpers.
 
 import { closeSync, existsSync, fsyncSync, openSync } from "node:fs";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export async function ensureDir(path: string): Promise<void> {
@@ -46,6 +46,94 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
 export async function appendJsonl(path: string, value: unknown): Promise<void> {
   await ensureDir(dirname(path));
   await appendFile(path, `${JSON.stringify(value)}\n`, "utf8");
+}
+
+/** Append one JSONL record and fsync before returning — for logs whose caller
+ * publishes a durable decision about them afterwards (the WAL: the transcript
+ * line must survive a power cut that the following state write also survives,
+ * or resume would replay a turn as if it had never committed). This is NOT a
+ * concurrent transcript protocol: callers must hold their room lock across
+ * check/append/rewrite/state pairing. It only makes this caller's completed
+ * append durable.
+ *
+ * A file whose last byte is not a newline is left EXACTLY as it is except for
+ * one inserted separator newline: the tail may be a valid legacy line written
+ * without a terminator, or torn bytes from a pre-fsync crash. Either way it is
+ * committed history — never repaired, never truncated — but the new record
+ * must not be glued onto it, which would corrupt a good line or hide the
+ * damaged one. Separator and record go out in ONE write: two writes let a
+ * concurrent O_APPEND writer land between them, which injects blank lines and
+ * breaks the "1 event = 1 JSON line" contract every cursor is counted in. */
+/** Minimal surface of node's FileHandle.write used by writeAll — kept local so
+ * fault injection can drive the short-write loop without a real fd. */
+export interface ByteWriter {
+  write(buffer: Uint8Array, offset: number, length: number): Promise<{ bytesWritten: number }>;
+}
+
+/** write(2) may write FEWER bytes than asked and still succeed. Unretried, the
+ * remainder is silently dropped, yet fsync then reports success and the caller
+ * publishes a truncated archive. Loop until the whole buffer is out; zero
+ * progress means the fd can no longer accept bytes and must not look durable. */
+export async function writeAll(handle: ByteWriter, text: string): Promise<void> {
+  const buf = Buffer.from(text, "utf8");
+  let off = 0;
+  while (off < buf.length) {
+    const { bytesWritten } = await handle.write(buf, off, buf.length - off);
+    if (!(bytesWritten > 0)) throw new Error(`short write: no progress at byte ${off}/${buf.length}`);
+    off += bytesWritten;
+  }
+}
+
+export async function appendJsonlDurable(path: string, value: unknown): Promise<void> {
+  await ensureDir(dirname(path));
+  const handle = await open(path, "a+");
+  try {
+    const { size } = await handle.stat();
+    let prefix = "";
+    if (size > 0) {
+      const tail = Buffer.alloc(1);
+      await handle.read(tail, 0, 1, size - 1);
+      if (tail[0] !== 0x0a) prefix = "\n";
+    }
+    await writeAll(handle, `${prefix}${JSON.stringify(value)}\n`);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Append MANY JSONL records with ONE write and ONE fsync — same durability
+ * contract and same separator-newline handling as appendJsonlDurable, but the
+ * cost is O(1) syncs instead of O(n). Archiving a rewrite's dropped events is
+ * done under the room lock, so a per-event fsync makes lock hold time grow
+ * linearly with history (5k events ≈ 0.9s, 30k ≈ the sqlite lock timeout) and
+ * concurrent appends start failing. Records are chunked only to bound memory;
+ * the single sync happens after the last chunk, which is what makes the whole
+ * batch durable before the caller publishes its rewrite. */
+export async function appendJsonlBatchDurable(path: string, values: readonly unknown[]): Promise<void> {
+  if (values.length === 0) return;
+  await ensureDir(dirname(path));
+  const handle = await open(path, "a+");
+  try {
+    const { size } = await handle.stat();
+    let pending = "";
+    if (size > 0) {
+      const tail = Buffer.alloc(1);
+      await handle.read(tail, 0, 1, size - 1);
+      if (tail[0] !== 0x0a) pending = "\n";
+    }
+    for (const value of values) {
+      pending += `${JSON.stringify(value)}\n`;
+      if (pending.length >= 1 << 20) {
+        await writeAll(handle, pending);
+        pending = "";
+      }
+    }
+    if (pending.length > 0) await writeAll(handle, pending);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Atomic full-file text write (tmp + fsync + rename) — for the rare case a
@@ -117,6 +205,23 @@ export async function readText(path: string): Promise<string | undefined> {
     return await readFile(path, "utf8");
   } catch {
     return undefined;
+  }
+}
+
+/** Create-if-missing, exclusively: the ONLY sanctioned way to seed a file that
+ * must never clobber bytes it does not own. `existsSync` + write is a TOCTOU —
+ * every concurrent seeder observes the gap and writes. `wx` lets the kernel
+ * pick one winner; every loser sees EEXIST and is a no-op. Returns whether
+ * THIS call created the file (first-winner semantics for callers that seed
+ * initial content). */
+export async function writeTextIfMissing(path: string, content: string): Promise<boolean> {
+  await ensureDir(dirname(path));
+  try {
+    await writeFile(path, content, { encoding: "utf8", flag: "wx" });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
   }
 }
 

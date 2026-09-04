@@ -1,26 +1,49 @@
 // Every value a fresh install falls back to, in one place, plus the parser
 // for .gaia/config.json. Anything env-overridable is a function.
 
-import type { AgentTtsConfig, CollabConfig, HookCommand, HooksConfig, McpServerConfig, MemoryConfig, MemoryConfigPatch, SandboxConfig, VoiceDispatchConfig, WorkspaceConfig } from "./types.js";
+import { readFileSync } from "node:fs";
+import type { AgentTtsConfig, CollabConfig, HookCommand, HooksConfig, McpServerConfig, MemoryConfig, MemoryConfigPatch, SandboxConfig, WorkspaceConfig } from "./types.js";
 import { env } from "./env.js";
+import { workspacePaths } from "./paths.js";
+import { canonicalHarnessId } from "./harness-id.js";
 
 export const DEFAULTS = {
   harness: "pi",
   model: { provider: "deepseek", name: "deepseek-v4-pro" },
-  // Titles ride the ambient login (no per-agent account) — this model MUST be
-  // reachable there. deepseek-v4-flash sat here for weeks with no deepseek
-  // credential installed: every refine threw, the catch ate it, and rooms kept
-  // the raw first-sentence fallback (living-titles law violated silently).
+  // Titles ride the ambient login; keep this reachable on Charles's default auth.
   roomTitleModel: { provider: "anthropic", name: "haiku" },
   defaultAgent: "gaia",
   room: "default",
   thinking: "medium",
   transcriptWindow: 20,
+  agentEndConversation: true,
   maxSummonsPerRoom: 8,
   /** Unified-tool gaiago formatting threshold; GAIA_TOOL_FORMAT_BYTES overrides. */
   toolCompressionBytes: 8_192,
+  /** gaia web fetch: extracted-text truncation cap; GAIA_WEB_FETCH_MAX_BYTES overrides. */
+  webFetchMaxBytes: 50_000,
+  /** gaia web fetch: per-request timeout; GAIA_WEB_FETCH_TIMEOUT_MS overrides. */
+  webFetchTimeoutMs: 15_000,
+  /** gaia web fetch: include video transcript by default when the url matches
+   * a known video provider; GAIA_WEB_FETCH_TRANSCRIPT overrides, {transcript}
+   * per-call arg overrides both. */
+  webFetchTranscriptDefault: true,
+  /** Preferred caption/transcript language (skill's original default); GAIA_VIDEO_TRANSCRIPT_LANG overrides. */
+  videoTranscriptLang: "en",
+  /** gaia web fetch: top-level video comments are opt-in (token-heavy) --
+   * {comments} defaults off; GAIA_WEB_FETCH_COMMENTS overrides. */
+  webFetchCommentsDefault: false,
+  /** Comment count when {comments: true} without an explicit number;
+   * GAIA_WEB_FETCH_COMMENTS_MAX overrides, {comments: N} always wins. */
+  webFetchCommentsMax: 20,
+  /** Progressive image renderer for the unified read verb; one-line native escape hatch. */
+  imageRead: "gaia",
   host: "127.0.0.1",
   port: 8787,
+  /** GraphQL test surface (/graphql): off by default, IRON localhost-bind only. GAIA_GRAPHQL_ENABLED toggles. */
+  graphqlEnabled: false,
+  /** GraphQL test surface port; GAIA_GRAPHQL_PORT overrides. */
+  graphqlPort: 4780,
   // Stable self-signed identity for macOS re-signing on /rebuild. Ad-hoc
   // ("-") signing keys the TCC designated requirement to the binary's
   // cdhash, which changes every build — orphaning every mic/camera grant.
@@ -56,12 +79,114 @@ export function gaiaToolCompressionBytes(): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : DEFAULTS.toolCompressionBytes;
 }
 
+/** Byte cap for `gaia web fetch` extracted text (and video transcript text);
+ * GAIA_WEB_FETCH_MAX_BYTES overrides, per-call {maxBytes} wins over both. */
+export function gaiaWebFetchMaxBytes(): number {
+  const parsed = Number.parseInt(env("GAIA_WEB_FETCH_MAX_BYTES") ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULTS.webFetchMaxBytes;
+}
+
+/** Request timeout for `gaia web fetch` (page fetch + video-transcript calls);
+ * GAIA_WEB_FETCH_TIMEOUT_MS overrides, per-call {timeoutMs} wins over both. */
+export function gaiaWebFetchTimeoutMs(): number {
+  const parsed = Number.parseInt(env("GAIA_WEB_FETCH_TIMEOUT_MS") ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULTS.webFetchTimeoutMs;
+}
+
+/** Whether `gaia web fetch` attaches a video transcript by default when the
+ * url matches a known video provider. GAIA_WEB_FETCH_TRANSCRIPT overrides;
+ * per-call {transcript: boolean} always wins. */
+export function gaiaWebFetchTranscriptDefault(): boolean {
+  const raw = env("GAIA_WEB_FETCH_TRANSCRIPT")?.trim().toLowerCase();
+  if (raw === "false" || raw === "0" || raw === "off") return false;
+  if (raw === "true" || raw === "1" || raw === "on") return true;
+  return DEFAULTS.webFetchTranscriptDefault;
+}
+
+/** Default caption/transcript language for video-transcript providers.
+ * GAIA_VIDEO_TRANSCRIPT_LANG overrides; per-call {lang} always wins. */
+export function gaiaVideoTranscriptDefaultLang(): string {
+  return env("GAIA_VIDEO_TRANSCRIPT_LANG")?.trim() || DEFAULTS.videoTranscriptLang;
+}
+
+/** Whether `gaia web fetch` attaches video comments by default (token-heavy --
+ * default OFF). GAIA_WEB_FETCH_COMMENTS overrides; per-call {comments} always wins. */
+export function gaiaWebFetchCommentsDefault(): boolean {
+  const raw = env("GAIA_WEB_FETCH_COMMENTS")?.trim().toLowerCase();
+  if (raw === "true" || raw === "1" || raw === "on") return true;
+  if (raw === "false" || raw === "0" || raw === "off") return false;
+  return DEFAULTS.webFetchCommentsDefault;
+}
+
+/** Comment count fetched when {comments: true} without an explicit number.
+ * GAIA_WEB_FETCH_COMMENTS_MAX overrides; per-call {comments: N} always wins. */
+export function gaiaWebFetchCommentsMax(): number {
+  const parsed = Number.parseInt(env("GAIA_WEB_FETCH_COMMENTS_MAX") ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULTS.webFetchCommentsMax;
+}
+
 /** GAIA_PORT overrides (0 = pick a free port). */
 export function gaiaPort(): number {
   const raw = env("GAIA_PORT");
   if (!raw) return DEFAULTS.port;
   const parsed = Number.parseInt(raw, 10);
   return Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535 ? parsed : DEFAULTS.port;
+}
+
+/** Off-by-default toggle for the /graphql test surface. Precedence:
+ * GAIA_GRAPHQL_ENABLED env ("true"/"1"/"on" enables, "false"/"0"/"off" disables)
+ * > `.gaia/config.json` { graphql: { enabled } } (parsed by parseGraphqlConfig)
+ * > DEFAULTS.graphqlEnabled (off). `cwd` defaults to process.cwd() — every
+ * caller today (cli.ts, graphql.ts) runs from the workspace root already. */
+export function gaiaGraphqlEnabled(cwd: string = process.cwd()): boolean {
+  const raw = env("GAIA_GRAPHQL_ENABLED")?.trim().toLowerCase();
+  if (raw === "true" || raw === "1" || raw === "on") return true;
+  if (raw === "false" || raw === "0" || raw === "off") return false;
+  const fileEnabled = readGraphqlConfigFile(cwd)?.enabled;
+  return fileEnabled ?? DEFAULTS.graphqlEnabled;
+}
+
+/** GAIA_GRAPHQL_PORT env overrides, then `.gaia/config.json` { graphql: { port } },
+ * then DEFAULTS.graphqlPort (0 = pick a free port). Kept separate from
+ * gaiaPort()/the main daemon port on purpose: a distinct admin/testing
+ * surface, never sharing a listener with the primary UI+API port. */
+export function gaiaGraphqlPort(cwd: string = process.cwd()): number {
+  const raw = env("GAIA_GRAPHQL_PORT");
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535) return parsed;
+  }
+  const filePort = readGraphqlConfigFile(cwd)?.port;
+  return filePort ?? DEFAULTS.graphqlPort;
+}
+
+/** Live sync read of the `graphql` section straight off `<cwd>/.gaia/config.json`
+ * (mirrors domain/workspace.ts's liveMaxSummonsPerRoom: hot-reloadable, no
+ * daemon restart, deliberately bypasses any cached Workspace). Sync because
+ * gaiaGraphqlEnabled/gaiaGraphqlPort are called from sync call sites; missing
+ * workspace, missing file, or bad JSON all resolve to undefined tolerantly. */
+function readGraphqlConfigFile(cwd: string): { enabled?: boolean; port?: number } | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(workspacePaths.config(cwd), "utf8")) as unknown;
+    return isRecord(raw) ? parseGraphqlConfig(raw.graphql) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** GAIA_BASE_PATH: URL prefix the web client is mounted under behind a
+ * reverse proxy that strips the prefix before forwarding upstream (e.g.
+ * Caddy `handle_path /gaia/*`). Empty by default (root-mounted, today's
+ * behavior — macOS app, mobile). Normalized: leading slash, no trailing
+ * slash, "" for unset/"/". Only affects HTML asset hrefs + a client-side
+ * global (serveStatic) — routes themselves are always registered unprefixed;
+ * the proxy is responsible for stripping the prefix before the daemon ever
+ * sees the request. */
+export function gaiaBasePath(): string {
+  const raw = (env("GAIA_BASE_PATH") ?? "").trim();
+  if (!raw || raw === "/") return "";
+  const withLeading = raw.startsWith("/") ? raw : `/${raw}`;
+  return withLeading.length > 1 && withLeading.endsWith("/") ? withLeading.slice(0, -1) : withLeading;
 }
 
 /**
@@ -99,6 +224,18 @@ export function parseSandboxConfig(raw: unknown): SandboxConfig | undefined {
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
+/** Parse the `graphql` section (config.json): { enabled?: boolean, port?: number }.
+ * Absent/garbage → undefined (env + DEFAULTS.graphqlEnabled/Port apply at the
+ * use site, gaiaGraphqlEnabled/gaiaGraphqlPort); unknown extra fields drop
+ * silently like every other section. */
+export function parseGraphqlConfig(raw: unknown): { enabled?: boolean; port?: number } | undefined {
+  if (!isRecord(raw)) return undefined;
+  const config: { enabled?: boolean; port?: number } = {};
+  if (typeof raw.enabled === "boolean") config.enabled = raw.enabled;
+  if (typeof raw.port === "number" && Number.isInteger(raw.port) && raw.port >= 0 && raw.port <= 65535) config.port = raw.port;
+  return Object.keys(config).length > 0 ? config : undefined;
+}
+
 /** Default branch namespace for room worktrees (collab.isolation "worktree"). */
 export const COLLAB_BRANCH_PREFIX = "gaia/";
 
@@ -118,21 +255,6 @@ export function parseCollabConfig(raw: unknown): CollabConfig | undefined {
   if (!isolation) return undefined;
   const branchPrefix = typeof raw.branchPrefix === "string" && raw.branchPrefix.trim() ? raw.branchPrefix.trim() : COLLAB_BRANCH_PREFIX;
   return { isolation, branchPrefix };
-}
-
-export function parseVoiceDispatchConfig(raw: unknown): VoiceDispatchConfig | undefined {
-  if (!isRecord(raw)) return undefined;
-  const config: VoiceDispatchConfig = {};
-  if (typeof raw.dispatcherAgentId === "string" && raw.dispatcherAgentId.trim()) config.dispatcherAgentId = raw.dispatcherAgentId.trim();
-  if (isRecord(raw.agentAliases)) {
-    const aliases = Object.fromEntries(
-      Object.entries(raw.agentAliases)
-        .filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[0].trim()) && Boolean(entry[1].trim()))
-        .map(([alias, target]) => [alias.trim(), target.trim()]),
-    );
-    if (Object.keys(aliases).length > 0) config.agentAliases = aliases;
-  }
-  return Object.keys(config).length > 0 ? config : undefined;
 }
 
 /** Parse an agent.json `tts` section: `{ engine, voice }` (both optional) or
@@ -200,12 +322,8 @@ export function parseMcpServers(raw: unknown): Record<string, McpServerConfig> |
   return Object.keys(servers).length > 0 ? servers : undefined;
 }
 
-/** Effective MCP servers for an agent: workspace set ∪ agent set (agent wins). */
-export function resolveMcpServers(
-  workspace: Pick<WorkspaceConfig, "mcpServers">,
-  agent: { mcpServers?: Record<string, McpServerConfig> },
-): Record<string, McpServerConfig> {
-  return { ...(workspace.mcpServers ?? {}), ...(agent.mcpServers ?? {}) };
+export function resolveMcpServers(workspace: WorkspaceConfig, agent?: { mcpServers?: Record<string, McpServerConfig> }): Record<string, McpServerConfig> {
+  return { ...(workspace.mcpServers ?? {}), ...(agent?.mcpServers ?? {}) };
 }
 
 /** Parse a `memory` patch (agent.json override or config.json section).
@@ -266,17 +384,20 @@ export function parseWorkspaceConfig(raw: unknown, validHarness: (id: string) =>
         ? obj.transcriptWindow
         : DEFAULTS.transcriptWindow,
     memory: resolveMemoryConfig(MEMORY_DEFAULTS, parseMemoryPatch(obj.memory)),
+    agentEndConversation: typeof obj.agentEndConversation === "boolean" ? obj.agentEndConversation : DEFAULTS.agentEndConversation,
   };
-  if (typeof obj.harness === "string" && validHarness(obj.harness)) config.harness = obj.harness;
+  if (typeof obj.harness === "string") {
+    const harness = canonicalHarnessId(obj.harness);
+    if (validHarness(harness)) config.harness = harness;
+  }
   if (typeof obj.maxSummonsPerRoom === "number" && Number.isInteger(obj.maxSummonsPerRoom) && obj.maxSummonsPerRoom > 0) {
     config.maxSummonsPerRoom = obj.maxSummonsPerRoom;
   }
+  config.imageRead = obj.imageRead === "native" ? "native" : DEFAULTS.imageRead;
   const sandbox = parseSandboxConfig(obj.sandbox);
   if (sandbox) config.sandbox = sandbox;
   const collab = parseCollabConfig(obj.collab);
   if (collab) config.collab = collab;
-  const voice = parseVoiceDispatchConfig(obj.voice);
-  if (voice) config.voice = voice;
   const mcpServers = parseMcpServers(obj.mcpServers);
   if (mcpServers) config.mcpServers = mcpServers;
   const hooks = parseHooksConfig(obj.hooks);

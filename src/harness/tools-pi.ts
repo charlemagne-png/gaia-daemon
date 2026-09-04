@@ -4,11 +4,11 @@
 
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
+import { Value } from "typebox/value";
 import { createBashToolDefinition, createEditToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool } from "@earendil-works/pi-coding-agent";
 import { gaiaToolCompressionBytes } from "../core/config.js";
-import { createArtifact, listArtifacts, readArtifact, updateArtifact } from "../services/artifacts.js";
-import { compressCaryll, expandCaryll } from "../services/caryll.js";
+import { readGaiaImage, type ImageReadDetail, type ImageReadRegion } from "./image-read.js";
 import { workspacePaths, workspaceRootFromRoomDir } from "../core/paths.js";
 import type { AgentDef, InsightLevel } from "../core/types.js";
 import { CORE_MEMORY_FILE, USER_MEMORY_FILE, type MemoryStore } from "../domain/memory.js";
@@ -288,25 +288,26 @@ function artifactParameters() {
 }
 
 async function runArtifactAction(
-  ctx: Pick<import("./tools.js").PiToolContext, "roomDir" | "roomId">,
+  ctx: Pick<import("./tools.js").PiToolContext, "roomDir" | "roomId" | "toolProviders">,
   params: ArtifactToolParams,
 ): Promise<{ text: string; details: unknown }> {
+  if (!ctx.toolProviders) throw new Error("artifact is unavailable for this room.");
   const location = { rootDir: workspaceRootFromRoomDir(ctx.roomDir), roomId: ctx.roomId };
   if (params.action === "list") {
-    const artifacts = await listArtifacts(location);
+    const artifacts = await ctx.toolProviders.artifacts.list(location);
     return { text: JSON.stringify(artifacts, null, 2), details: { artifacts } };
   }
   if (params.action === "read") {
     if (!params.artifact_id) throw new Error("artifact_id is required for read");
-    const artifact = await readArtifact(location, params.artifact_id);
-    const content = Buffer.from(artifact.payload).toString("utf8");
+    const artifact = await ctx.toolProviders.artifacts.read(location, params.artifact_id);
+    const content = artifact.payload;
     return { text: `${JSON.stringify(artifact.manifest, null, 2)}\n\n${content}`, details: { manifest: artifact.manifest } };
   }
   if (params.action === "create") {
     if (!params.name || !params.kind || !params.media_type || params.content === undefined) {
       throw new Error("name, kind, media_type, and content are required for create");
     }
-    const manifest = await createArtifact(location, {
+    const manifest = await ctx.toolProviders.artifacts.create(location, {
       name: params.name,
       kind: params.kind,
       mediaType: params.media_type,
@@ -315,7 +316,7 @@ async function runArtifactAction(
     return { text: JSON.stringify(manifest, null, 2), details: { manifest } };
   }
   if (!params.artifact_id) throw new Error("artifact_id is required for update");
-  const manifest = await updateArtifact(location, params.artifact_id, {
+  const manifest = await ctx.toolProviders.artifacts.update(location, params.artifact_id, {
     ...(params.name !== undefined ? { name: params.name } : {}),
     ...(params.kind !== undefined ? { kind: params.kind } : {}),
     ...(params.media_type !== undefined ? { mediaType: params.media_type } : {}),
@@ -324,7 +325,7 @@ async function runArtifactAction(
   return { text: JSON.stringify(manifest, null, 2), details: { manifest } };
 }
 
-export function createArtifactTool(ctx: Pick<import("./tools.js").PiToolContext, "roomDir" | "roomId">) {
+export function createArtifactTool(ctx: Pick<import("./tools.js").PiToolContext, "roomDir" | "roomId" | "toolProviders">) {
   return defineTool({
     name: "artifact",
     label: "Artifact",
@@ -342,9 +343,70 @@ export function createArtifactTool(ctx: Pick<import("./tools.js").PiToolContext,
   });
 }
 
-type GaiaVerb = "bash" | "read" | "write" | "edit" | "web" | "summon" | "resume" | "mem" | "recall" | "artifact" | "caryll";
-type GaiaResult = { content: Array<{ type: "text"; text: string }>; details: unknown };
+type GaiaVerb = "bash" | "read" | "write" | "edit" | "web" | "summon" | "resume" | "mem" | "recall" | "artifact" | "caryll" | "diet" | "tool_result_fetch" | "end_conversation";
+type GaiaResult = { content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>; details: unknown };
 type GaiaHandler = (args: Record<string, unknown>) => Promise<GaiaResult>;
+
+const ALL_GAIA_VERBS: readonly GaiaVerb[] = ["bash", "read", "write", "edit", "web", "summon", "resume", "mem", "recall", "artifact", "caryll", "diet", "tool_result_fetch", "end_conversation"];
+
+/** Verbs with a real, reusable per-verb `args` schema (mirrors the retired
+ * typed native tools exactly — read/write/edit/bash/summon/mem/recall come
+ * straight from the Pi tool factories' own `.parameters`, never re-typed by
+ * hand, so this can never drift from what `native.<verb>.execute` actually
+ * accepts). resume/artifact/caryll stay hand-validated below (§ANCHOR
+ * gaiaHandLoop) — small enough that a schema would just duplicate the checks
+ * already in their handlers. */
+function verbSchemaEntries(schemas: Partial<Record<GaiaVerb, TSchema>>): Array<[GaiaVerb, TSchema]> {
+  return ALL_GAIA_VERBS.map((verb) => [verb, schemas[verb]] as const).filter((entry): entry is [GaiaVerb, TSchema] => entry[1] !== undefined);
+}
+
+/** Precise, path-qualified corrective error for malformed verb args.
+ * The direct per-verb check remains authoritative because the transport-safe
+ * outer schema can describe every args shape but cannot discriminate by verb. */
+function formatArgErrors(verb: GaiaVerb, schema: TSchema, args: unknown): string {
+  const errors = [...Value.Errors(schema, args)].slice(0, 8);
+  const detail = errors.length
+    ? errors.map((error) => `${error.instancePath || "/"}: ${error.message}`).join("; ")
+    : "does not match the expected shape";
+  const readDetailHint = verb === "read" && typeof (args as Record<string, unknown>)?.detail === "string" ? "; detail must be low, med, high, or full" : "";
+  return `ERROR: gaia ${verb} args invalid — ${detail}${readDetailHint}`;
+}
+
+/** Transport-safe outer schema. Root properties stay flat for pi-ai's legacy
+ * Anthropic conversion. Per-verb shapes live under args.anyOf: Claude Code's
+ * MCP loader accepts nested anyOf, but silently drops tools containing
+ * if/then/const. execute() performs the discriminating per-verb validation. */
+function buildGaiaParameters(verbSchemas: Partial<Record<GaiaVerb, TSchema>>) {
+  const argVariants = verbSchemaEntries(verbSchemas).map(([verb, schema]) => {
+    const description = (schema as { description?: unknown }).description;
+    return {
+      ...schema,
+      description: `Arguments when verb is ${verb}.${typeof description === "string" ? ` ${description}` : ""}`,
+    };
+  });
+  return Type.Unsafe<{
+    verb: GaiaVerb;
+    args: Record<string, unknown>;
+    raw?: boolean;
+    compress_above_bytes?: number;
+    translator?: "deterministic" | "llm";
+  }>({
+    type: "object",
+    required: ["verb", "args"],
+    properties: {
+      verb: { type: "string", enum: [...ALL_GAIA_VERBS], description: "Which gaia operation to run." },
+      args: {
+        type: "object",
+        description:
+          "Verb-specific arguments. Match the anyOf variant labelled for the selected verb; execute-time validation returns a precise corrective error on mismatch.",
+        ...(argVariants.length ? { anyOf: argVariants } : {}),
+      },
+      raw: { type: "boolean", description: "Return native output unchanged." },
+      compress_above_bytes: { type: "number", minimum: 0, description: "Override configured gaiago formatting threshold in bytes." },
+      translator: { type: "string", enum: ["deterministic", "llm"], description: "llm reserved: translation hook is not wired yet." },
+    },
+  });
+}
 
 function resultText(result: GaiaResult): string {
   return result.content.filter((item) => item.type === "text").map((item) => item.text).join("\n");
@@ -366,7 +428,69 @@ export function formatGaiagoResult(verb: GaiaVerb, text: string, details: unknow
   return { text: `${status} ${verb} · 行=${nonblank} · 詳=${detailKind}\n${payload || "∅"}`, formatter: "deterministic" };
 }
 
-async function runCaryllVerb(args: Record<string, unknown>): Promise<GaiaResult> {
+async function runWebSearchVerb(args: Record<string, unknown>, providers: import("./protocol.js").ToolProviders | undefined): Promise<GaiaResult> {
+  if (!providers) return { content: [{ type: "text", text: "ERROR: web is unavailable for this room." }], details: { ok: false } };
+  const query = typeof args.query === "string" ? args.query : "";
+  const provider = args.provider;
+  if (provider !== undefined && provider !== "brave" && provider !== "tavily" && provider !== "serper") {
+    return { content: [{ type: "text", text: "ERROR: web provider must be brave, tavily, or serper." }], details: { ok: false } };
+  }
+  const maxResults = typeof args.maxResults === "number" ? args.maxResults : typeof args.max_results === "number" ? args.max_results : undefined;
+  const response = await providers.web.search({ query, ...(maxResults === undefined ? {} : { maxResults }), ...(provider === undefined ? {} : { provider }) });
+  const output = response.results.map((item, index) => `--- Result ${index + 1} ---\nTitle: ${item.title}\nLink: ${item.url}\nSnippet: ${item.snippet}`).join("\n\n");
+  return { content: [{ type: "text", text: `Provider: ${response.provider}\n${output}` }], details: response };
+}
+
+/** Clean extracted page text (title + main content, chrome stripped) instead
+ * of raw HTML -- the low-token alternative to curl. YouTube urls additionally
+ * get a transcript (default on) and, opt-in, top-level comments. */
+async function runWebFetchVerb(args: Record<string, unknown>, providers: import("./protocol.js").ToolProviders | undefined): Promise<GaiaResult> {
+  if (!providers) return { content: [{ type: "text", text: "ERROR: web is unavailable for this room." }], details: { ok: false } };
+  const url = typeof args.url === "string" ? args.url : "";
+  const maxBytes = typeof args.maxBytes === "number" ? args.maxBytes : typeof args.max_bytes === "number" ? args.max_bytes : undefined;
+  const transcript = typeof args.transcript === "boolean" ? args.transcript : undefined;
+  const lang = typeof args.lang === "string" ? args.lang : undefined;
+  const comments = typeof args.comments === "boolean" || typeof args.comments === "number" ? args.comments : undefined;
+  try {
+    const response = await providers.web.fetch({
+      url,
+      ...(maxBytes === undefined ? {} : { maxBytes }),
+      ...(transcript === undefined ? {} : { transcript }),
+      ...(lang === undefined ? {} : { lang }),
+      ...(comments === undefined ? {} : { comments }),
+    });
+    const lines = [`Title: ${response.title}`, `URL: ${response.url}`];
+    if (response.video) {
+      lines.push(`Video: ${response.video.provider} ${response.video.videoId} (${response.video.lang})`);
+      if (response.video.channel) lines.push(`Channel: ${response.video.channel}`);
+      if (response.video.description) lines.push(`Description: ${response.video.description}`);
+    }
+    lines.push("", response.text);
+    if (response.video) {
+      lines.push("", `--- Transcript (${response.video.entries} entries${response.video.truncated ? ", truncated" : ""}) ---`, response.video.transcript);
+      if (response.video.comments) {
+        lines.push("", `--- Comments (${response.video.comments.length}) ---`);
+        for (const c of response.video.comments) lines.push(`${c.author}${c.likes !== undefined ? ` (${c.likes} likes)` : ""}: ${c.text}`);
+      } else if (response.video.commentsUnavailable) {
+        lines.push("", `Comments unavailable: ${response.video.commentsUnavailable}`);
+      }
+    }
+    return { content: [{ type: "text", text: lines.join("\n") }], details: response };
+  } catch (error) {
+    return { content: [{ type: "text", text: `ERROR: ${error instanceof Error ? error.message : String(error)}` }], details: { ok: false } };
+  }
+}
+
+async function runWebVerb(args: Record<string, unknown>, bash: any, providers: import("./protocol.js").ToolProviders | undefined): Promise<GaiaResult> {
+  if (typeof args.url === "string" && args.url) return runWebFetchVerb(args, providers);
+  if (typeof args.query === "string" && args.query) return runWebSearchVerb(args, providers);
+  // Preserve the pre-existing command-shaped curl escape hatch for anything
+  // that is neither a search nor a fetch call.
+  return bash.execute("gaia", args, undefined, undefined, undefined) as Promise<GaiaResult>;
+}
+
+async function runCaryllVerb(args: Record<string, unknown>, providers: import("./protocol.js").ToolProviders | undefined): Promise<GaiaResult> {
+  if (!providers) return { content: [{ type: "text", text: "ERROR: caryll is unavailable for this room." }], details: { ok: false} };
   const action = args.action;
   const path = typeof args.path === "string" ? args.path : "";
   const output = typeof args.output === "string" ? args.output : path;
@@ -375,17 +499,67 @@ async function runCaryllVerb(args: Record<string, unknown>): Promise<GaiaResult>
   }
   const source = await readFile(path, "utf8");
   if (action === "compress") {
-    const result = compressCaryll(source);
+    const result = await providers.caryll.compress(source);
     await writeFile(output, result.output);
     return { content: [{ type: "text", text: `真 caryll.compress · ${path}→${output}` }], details: result.stats };
   }
   if (action === "expand") {
-    const result = expandCaryll(source);
+    const result = await providers.caryll.expand(source);
     await writeFile(output, result);
     return { content: [{ type: "text", text: `真 caryll.expand · ${path}→${output}` }], details: { bytes: Buffer.byteLength(result) } };
   }
-  const result = compressCaryll(source);
+  const result = await providers.caryll.compress(source);
   return { content: [{ type: "text", text: `真 caryll.stats · ${result.stats.tokensBefore}→${result.stats.tokensAfter} · legend=${result.stats.legendEntries}` }], details: result.stats };
+}
+
+/** `diet` verb (09-MEMORY-CONTEXT): read or patch the room's context-diet
+ * policy through `ctx.contextDiet` — the SAME daemon-side implementation the
+ * `/diet` room command uses (RoomService#dietView/dietSet), just reached from
+ * inside a turn instead of a slash command. */
+async function runDietVerb(args: Record<string, unknown>, ctx: import("./tools.js").PiToolContext): Promise<GaiaResult> {
+  if (!ctx.contextDiet) return { content: [{ type: "text", text: "ERROR: diet is unavailable for this room." }], details: { ok: false } };
+  const action = args.action === "set" ? "set" : "get";
+  try {
+    if (action === "get") {
+      const view = await ctx.contextDiet.get();
+      return { content: [{ type: "text", text: JSON.stringify(view) }], details: view };
+    }
+    const scope = args.scope === "workspace" ? "workspace" : "room";
+    const patch: Record<string, unknown> = {};
+    if (typeof args.preset === "boolean") patch.preset = args.preset;
+    if (typeof args.keepAllToolCalls === "boolean") patch.keepAllToolCalls = args.keepAllToolCalls;
+    if (typeof args.fullTurnWindow === "number") patch.fullTurnWindow = args.fullTurnWindow;
+    if (typeof args.toolTailLines === "number") patch.toolTailLines = args.toolTailLines;
+    if (Object.keys(patch).length === 0) {
+      return { content: [{ type: "text", text: "ERROR: diet set requires at least one of preset/keepAllToolCalls/fullTurnWindow/toolTailLines." }], details: { ok: false } };
+    }
+    const view = await ctx.contextDiet.set({ scope, patch });
+    return { content: [{ type: "text", text: JSON.stringify(view) }], details: view };
+  } catch (error) {
+    return { content: [{ type: "text", text: `ERROR: ${error instanceof Error ? error.message : String(error)}` }], details: { ok: false } };
+  }
+}
+
+/** `tool_result_fetch` verb (09-MEMORY-CONTEXT): pages the ORIGINAL,
+ * uncollapsed call/args/result for a diet-collapsed own tool-call stub back
+ * by (sessionId, entryId) — the ids named in the stub's own
+ * `[collapsed — ...]` marker (harness/prompt.ts renderRoomTranscript). */
+async function runToolResultFetchVerb(args: Record<string, unknown>, ctx: import("./tools.js").PiToolContext): Promise<GaiaResult> {
+  if (!ctx.toolResultFetch) return { content: [{ type: "text", text: "ERROR: tool_result_fetch is unavailable for this room." }], details: { ok: false } };
+  const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
+  const entryId = typeof args.entryId === "string" ? args.entryId : "";
+  const offset = typeof args.offset === "number" ? args.offset : 0;
+  const limit = typeof args.limit === "number" ? args.limit : 32_000;
+  if (!sessionId || !entryId) {
+    return { content: [{ type: "text", text: "ERROR: tool_result_fetch args require { sessionId, entryId }." }], details: { ok: false } };
+  }
+  try {
+    const slice = await ctx.toolResultFetch({ sessionId, entryId, offset, limit });
+    const suffix = slice.hasMore ? `\n\n[${slice.totalLength - offset - slice.text.length} more chars — call again with a higher offset]` : "";
+    return { content: [{ type: "text", text: `${slice.text}${suffix}` }], details: slice };
+  } catch (error) {
+    return { content: [{ type: "text", text: `ERROR: ${error instanceof Error ? error.message : String(error)}` }], details: { ok: false } };
+  }
 }
 
 /** One custom Pi tool: table-driven delegation to Pi native tools and the
@@ -398,24 +572,115 @@ export function createGaiaTool(ctx: import("./tools.js").PiToolContext) {
     write: createWriteToolDefinition(cwd),
     edit: createEditToolDefinition(cwd),
   };
+  // Deliberately hand-extended rather than mutating Pi's shared schema object:
+  // native:true preserves Pi exactly; all other image paths are rendered here.
+  const readArgsSchema = Type.Object({
+    path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
+    offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed); text files only." })),
+    limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read; text files only." })),
+    detail: Type.Optional(stringEnum(["low", "med", "high", "full"], "Image detail: low=768, med=1280, high=1568, full=original (provider byte cap still applies).")),
+    region: Type.Optional(Type.String({ pattern: "^[A-C][1-3]$", description: "Image grid cell to crop from original pixels, e.g. B2. A 768px full thumbnail is always also sent." })),
+    native: Type.Optional(Type.Boolean({ description: "Bypass GAIA image rendering and delegate unchanged to Pi native read." })),
+  });
   const memory = createMemoryTool(ctx.memoryStore, ctx.agent);
   const recall = createRecallTool(
     ctx.recallSearch ?? localRecallSearch(ctx.roomDir, ctx.roomId, { id: ctx.agent.id, memoryDir: ctx.agent.memoryDir, insight: ctx.agent.insight }),
     ctx.roomId,
   );
   const summon = ctx.summonCreate ? createSummonTool(ctx.summonCreate, ctx.roomId, ctx.availableAgents) : undefined;
+
+  // Web's args are a union of three shapes, told apart by which key is
+  // present (runWebVerb dispatches on that, not on this schema): the
+  // {query, provider?, maxResults?} SEARCH shape (Brave\u2192Tavily\u2192Serper,
+  // unchanged), the {url, maxBytes?, transcript?, lang?, comments?} FETCH shape
+  // (clean extracted page text -- title+main content, chrome stripped, NOT raw
+  // HTML; youtube urls also get a transcript by default and, opt-in, top-level
+  // comments), OR the bash-shaped {command, timeout?} curl escape hatch
+  // runWebVerb falls back to verbatim when neither `query` nor `url` is
+  // present -- reuses native.bash's own schema rather than re-typing "command"
+  // by hand.
+  const webArgsSchema = Type.Union([
+    native.bash.parameters as TSchema,
+    Type.Object({
+      query: Type.Optional(Type.String({ description: "Search query text." })),
+      provider: Type.Optional(stringEnum(["brave", "tavily", "serper"], "Explicit provider override; default falls back Brave \u2192 Tavily \u2192 Serper.")),
+      maxResults: Type.Optional(Type.Number({ description: "Max results to return." })),
+      max_results: Type.Optional(Type.Number({ description: "Snake_case alias for maxResults." })),
+    }),
+    Type.Object({
+      url: Type.String({ description: "Page url to fetch and extract clean readable content from (title + main text, chrome stripped) -- NOT raw HTML, no curl needed." }),
+      maxBytes: Type.Optional(Type.Number({ description: "Truncate extracted text to this many UTF-8 bytes. Default is deployment-configured (GAIA_WEB_FETCH_MAX_BYTES)." })),
+      max_bytes: Type.Optional(Type.Number({ description: "Snake_case alias for maxBytes." })),
+      transcript: Type.Optional(Type.Boolean({ description: "Attach a video transcript when the url is a known video provider (currently YouTube). Default true." })),
+      lang: Type.Optional(Type.String({ description: "Preferred caption/transcript language code, e.g. en, de. Default en." })),
+      comments: Type.Optional(Type.Union([Type.Boolean(), Type.Number()], { description: "Attach top-level video comments: true for the default count, or a number for an explicit count. Default off (token-heavy)." })),
+    }),
+  ]);
+
+  // Reused VERBATIM from the already-instantiated native/daemon tool objects
+  // — never hand-retyped — so this can't drift from what each verb's handler
+  // actually accepts (see verbSchemaEntries doc comment above).
+  const verbSchemas: Partial<Record<GaiaVerb, TSchema>> = {
+    bash: native.bash.parameters as TSchema,
+    read: readArgsSchema,
+    write: native.write.parameters as TSchema,
+    edit: native.edit.parameters as TSchema,
+    web: webArgsSchema,
+    mem: memory.parameters as TSchema,
+    recall: recall.parameters as TSchema,
+    ...(summon ? { summon: summon.parameters as TSchema } : {}),
+    resume: Type.Object({
+      roomId: Type.String({ description: "Room id to steer." }),
+      message: Type.String({ description: "Follow-up instruction." }),
+    }),
+    artifact: artifactParameters(),
+    caryll: Type.Object({
+      action: stringEnum(["compress", "expand", "stats"]),
+      path: Type.String({ description: "Input path." }),
+      output: Type.Optional(Type.String({ description: "Output path; defaults to input path." })),
+    }),
+    // 09-MEMORY-CONTEXT: diet's knobs mirror ContextDietPolicy's field names
+    // exactly (domain/context-diet.ts) — never re-named at this layer.
+    diet: Type.Object({
+      action: stringEnum(["get", "set"], "get reads the room's effective policy; set patches it (at least one knob required)."),
+      scope: Type.Optional(stringEnum(["room", "workspace"], "set only: patch this room's override (default), or the workspace-wide default every room without its own override inherits.")),
+      preset: Type.Optional(Type.Boolean({ description: "set only: diet on/off. Default OFF." })),
+      keepAllToolCalls: Type.Optional(Type.Boolean({ description: "set only: never collapse this agent's own tool calls, regardless of recency." })),
+      fullTurnWindow: Type.Optional(Type.Number({ minimum: 0, description: "set only: last N room events whose own tool calls stay full before collapsing." })),
+      toolTailLines: Type.Optional(Type.Number({ minimum: 1, description: "set only: another agent's tool activity is always trimmed to its last N lines." })),
+    }),
+    end_conversation: Type.Object({
+    farewell: Type.String({ minLength: 1, description: "Visible final message for the room. This ends your current conversation until a user writes again." }),
+  }),
+  tool_result_fetch: Type.Object({
+      sessionId: Type.String({ minLength: 1, description: "From the [collapsed — ...] stub's own tool_result_fetch(sessionId=\"...\", entryId=\"...\") marker." }),
+      entryId: Type.String({ minLength: 1, description: "From the same stub marker." }),
+      offset: Type.Optional(Type.Number({ minimum: 0, description: "Char offset into the original call/args/result JSON. Default 0." })),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 32_000, description: "Max chars to return, capped at 32000. Default 32000." })),
+    }),
+  };
+
   // Pi's exported tool definitions are the native implementations. The custom
   // wrapper deliberately calls their executor rather than copying filesystem or
   // shell semantics; they accept unused lifecycle arguments after call+params.
   const executeNative = (tool: any, args: Record<string, unknown>) => tool.execute("gaia", args, undefined, undefined, undefined) as Promise<GaiaResult>;
   const registry: Record<GaiaVerb, GaiaHandler> = {
     bash: (args) => executeNative(native.bash, args),
-    read: (args) => executeNative(native.read, args),
+    read: async (args) => {
+      if (args.native === true || ctx.imageRead === "native") return executeNative(native.read, args);
+      const path = typeof args.path === "string" ? args.path : "";
+      try {
+        const image = await readGaiaImage(path, cwd, { detail: args.detail as ImageReadDetail | undefined, region: args.region as ImageReadRegion | undefined });
+        if (image) return image;
+      } catch (error) {
+        // An image decoder/encoder failure must never turn a read into a dead end.
+        console.warn(`[gaia image-read] falling back to Pi native read for ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return executeNative(native.read, args);
+    },
     write: (args) => executeNative(native.write, args),
     edit: (args) => executeNative(native.edit, args),
-    // Pi's web path is the brave-search skill via bash; with only gaia active,
-    // use the same native bash backend as the explicit curl fallback.
-    web: (args) => executeNative(native.bash, args),
+    web: (args) => runWebVerb(args, native.bash, ctx.toolProviders),
     mem: (args) => executeNative(memory, args),
     recall: (args) => executeNative(recall, args),
     summon: (args) => (summon ? executeNative(summon, args) : Promise.resolve({ content: [{ type: "text", text: "ERROR: summon is unavailable for this room." }], details: { ok: false } })),
@@ -434,23 +699,33 @@ export function createGaiaTool(ctx: import("./tools.js").PiToolContext) {
       const result = await runArtifactAction(ctx, args as unknown as ArtifactToolParams);
       return { content: [{ type: "text", text: result.text || "[]" }], details: result.details };
     },
-    caryll: runCaryllVerb,
+    caryll: (args) => runCaryllVerb(args, ctx.toolProviders),
+    diet: (args) => runDietVerb(args, ctx),
+    tool_result_fetch: (args) => runToolResultFetchVerb(args, ctx),
+    end_conversation: async (args) => {
+      const farewell = typeof args.farewell === "string" ? args.farewell : "";
+      if (!ctx.endConversation) return { content: [{ type: "text", text: "ERROR: end_conversation is unavailable for this room." }], details: { ok: false } };
+      try {
+        return { content: [{ type: "text", text: await ctx.endConversation({ farewell }) }], details: { ok: true } };
+      } catch (error) {
+        return { content: [{ type: "text", text: `ERROR: ${error instanceof Error ? error.message : String(error)}` }], details: { ok: false } };
+      }
+    },
   };
 
   return defineTool({
     name: "gaia",
     label: "Gaia",
-    description: "Unified GAIA tool. verb dispatches to native bash/read/write/edit, web curl fallback, daemon memory/recall/summon/resume, room artifacts, or caryll. Results above compress_above_bytes use deterministic gaiago graph notation; raw:true bypasses it.",
-    promptSnippet: "gaia: unified { verb, args }; only tool needed for files, commands, web curl, memory, artifacts, worker summons, and room steering.",
-    parameters: Type.Object({
-      verb: stringEnum(["bash", "read", "write", "edit", "web", "summon", "resume", "mem", "recall", "artifact", "caryll"]),
-      args: Type.Record(Type.String(), Type.Unknown()),
-      raw: Type.Optional(Type.Boolean({ description: "Return native output unchanged." })),
-      compress_above_bytes: Type.Optional(Type.Number({ minimum: 0, description: "Override configured gaiago formatting threshold in bytes." })),
-      translator: Type.Optional(stringEnum(["deterministic", "llm"], "llm reserved: translation hook is not wired yet.")),
-    }),
+    description: "Unified GAIA tool. verb dispatches to native bash/read/write/edit, web search ({query, provider?}, Brave → Tavily → Serper), web fetch ({url, maxBytes?, transcript?, lang?, comments?} -- clean extracted page text, not raw HTML; youtube urls get a transcript by default + opt-in top-level comments) or curl fallback, daemon memory/recall/summon/resume/end_conversation, room artifacts, caryll, context-diet policy (diet: get|set render-time decay knobs), or tool_result_fetch (page back a diet-collapsed tool call by sessionId/entryId). Results above compress_above_bytes use deterministic gaiago graph notation; raw:true bypasses it.",
+    promptSnippet: "gaia: unified { verb, args }; web search {query, provider?, maxResults?} falls back Brave → Tavily → Serper; web fetch {url, maxBytes?, transcript?, comments?} returns clean extracted text (youtube: transcript on by default, comments opt-in); also files, commands, memory, artifacts, workers, steering, end_conversation, diet (context-diet on/off + knobs), tool_result_fetch (page back a collapsed tool call).",
+    parameters: buildGaiaParameters(verbSchemas),
     execute: async (_toolCallId: string, params: { verb: GaiaVerb; args: Record<string, unknown>; raw?: boolean; compress_above_bytes?: number; translator?: "deterministic" | "llm" }) => {
       try {
+        const schema = verbSchemas[params.verb];
+        if (schema && !Value.Check(schema, params.args)) {
+          const text = formatArgErrors(params.verb, schema, params.args);
+          return { content: [{ type: "text" as const, text }], details: { ok: false, verb: params.verb } };
+        }
         const result = await registry[params.verb](params.args);
         const text = resultText(result);
         const threshold = Number.isFinite(params.compress_above_bytes) && (params.compress_above_bytes ?? 0) >= 0 ? (params.compress_above_bytes as number) : gaiaToolCompressionBytes();

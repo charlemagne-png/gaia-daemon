@@ -3,17 +3,26 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  buildBaseSystemPrompt,
   buildProtocolsSection,
   buildSystemPrompt,
   buildTurnPrompt,
   promptCacheKey,
   readProtocolsText,
+  renderRoomTranscript,
   type SystemPromptInput,
 } from "../src/harness/prompt.js";
-import type { AgentDef } from "../src/core/types.js";
+import type { AgentDef, AgentRoomEvent, ToolDetail } from "../src/core/types.js";
+import { toolSummaryText } from "../web/shared/tool-summary.js";
+import { splitLeadingGaiaThink } from "../web/shared/gaia-think.js";
+import { DEFAULT_CONTEXT_DIET_POLICY, type ContextDietPolicy } from "../src/domain/context-diet.js";
 
 const AGENT = { id: "tester" } as unknown as AgentDef;
+const PROTOCOL_FIXTURE_DIR = fileURLToPath(new URL("./fixtures/protocols", import.meta.url));
+const PROTOCOL_FIXTURE_ROOT = fileURLToPath(new URL("./fixtures", import.meta.url));
+const PROTOCOL_FIXTURE_SOUL = fileURLToPath(new URL("./fixtures/protocol-soul.md", import.meta.url));
 
 function baseInput(overrides: Partial<SystemPromptInput> = {}): SystemPromptInput {
   return {
@@ -79,6 +88,40 @@ test("readProtocolsText: missing dir = empty; *.md sorted + concatenated verbati
   assert.equal(text, "FIRST\n\nSECOND"); // filename sort, .txt ignored
 });
 
+test("readProtocolsText: missing protocol config enables every file", async () => {
+  assert.equal(await readProtocolsText(PROTOCOL_FIXTURE_DIR), "ALWAYS-ON BODY\n\nGAIA-THINK BODY");
+});
+
+test("readProtocolsText: explicit true leaves a protocol enabled", async () => {
+  assert.equal(await readProtocolsText(PROTOCOL_FIXTURE_DIR, { "GAIA-THINK": true }), "ALWAYS-ON BODY\n\nGAIA-THINK BODY");
+});
+
+test("readProtocolsText: explicit false excludes its filename before concatenation", async () => {
+  assert.equal(await readProtocolsText(PROTOCOL_FIXTURE_DIR, { "GAIA-THINK": false }), "ALWAYS-ON BODY");
+});
+
+test("buildSystemPrompt: disabling GAIA-THINK also omits its thinking-level line", () => {
+  const prompt = buildSystemPrompt(baseInput({
+    agent: { id: "tester", protocols: { "GAIA-THINK": false } } as AgentDef,
+    protocolsText: "ALWAYS-ON BODY",
+    thinkingLevel: 3,
+  }));
+  assert.match(prompt, /# Protocols\n\nALWAYS-ON BODY/);
+  assert.doesNotMatch(prompt, /Current thinking level|Thinking disabled/);
+});
+
+test("buildBaseSystemPrompt: agent protocol opt-out filters files before assembly", async () => {
+  const prompt = await buildBaseSystemPrompt({
+    agent: { id: "tester", soulPath: PROTOCOL_FIXTURE_SOUL, protocols: { "GAIA-THINK": false } } as AgentDef,
+    role: undefined,
+    workspaceRoot: PROTOCOL_FIXTURE_ROOT,
+    protocolsDir: PROTOCOL_FIXTURE_DIR,
+    thinkingLevel: 3,
+  });
+  assert.match(prompt, /ALWAYS-ON BODY/);
+  assert.doesNotMatch(prompt, /GAIA-THINK BODY|Current thinking level|Thinking disabled/);
+});
+
 test("buildSystemPrompt: promptLaw is the very first tokens; absent when unset", () => {
   const withLaw = buildSystemPrompt(baseInput({ agent: { id: "tester", promptLaw: "TOP LAW" } as unknown as AgentDef }));
   assert.equal(withLaw.indexOf("TOP LAW"), 0);
@@ -102,19 +145,98 @@ test("buildTurnPrompt: turnLaw lands as the very last tokens", () => {
   assert.doesNotMatch(bare, /LAW LINE/);
 });
 
-test("buildTurnPrompt: voiceRoomMap renders concierge block only when supplied", () => {
-  const voice = buildTurnPrompt({
-    roomId: "room-1",
-    agentId: "gaia",
-    message: "@gaia where did that land?",
-    events: [],
-    voiceRoomMap: "Workspace room index (recent-active first; cap 60):\n- A01 · room-alpha · Voice Concierge · @gaia · 2m ago · user: route this · @gaia: landed in A01",
-  });
-  assert.match(voice, /# Voice concierge — workspace map/);
-  assert.match(voice, /Cross-room delivery → `gaia resume <roomId> "message"`/);
-  assert.match(voice, /- A01 · room-alpha · Voice Concierge · @gaia · 2m ago/);
+// --- context-diet render-time decay (09-MEMORY-CONTEXT, ported from v2) -----
 
-  const typed = buildTurnPrompt({ roomId: "room-1", agentId: "gaia", message: "typed", events: [] });
-  assert.doesNotMatch(typed, /# Voice concierge — workspace map/);
-  assert.doesNotMatch(typed, /Workspace room index/);
+const LONG_PREVIEW = ["line one", "line two", "line three", "line four", "line five (newest)"].join("\n");
+
+function toolResult(text: string): unknown {
+  return { content: [{ type: "text", text }] };
+}
+
+function toolCall(id: string, text = LONG_PREVIEW): ToolDetail {
+  return { id, toolName: "bash", status: "complete", args: { command: "x" }, result: toolResult(text) };
+}
+
+function agentEvent(id: string, author: string, timestamp: string, tools: ToolDetail[]): AgentRoomEvent {
+  return { id, timestamp, author, text: `${author}'s turn`, details: { tools } };
+}
+
+const DIET_POLICY: ContextDietPolicy = { preset: true, keepAllToolCalls: false, fullTurnWindow: 1, toolTailLines: 2 };
+
+test("renderRoomTranscript: diet absent/off renders IDENTICALLY to no [gaia.activity] block (default OFF, IRON)", () => {
+  const events = [agentEvent("e1", "gaia", "2026-07-20T00:00:00.000Z", [toolCall("tool_1")])];
+  const withoutDiet = renderRoomTranscript(events, undefined);
+  const withOffPolicy = renderRoomTranscript(events, undefined, { policy: { ...DEFAULT_CONTEXT_DIET_POLICY, preset: false }, currentAgentId: "gaia" });
+  assert.doesNotMatch(withoutDiet, /gaia\.activity/);
+  assert.equal(withOffPolicy, withoutDiet);
+});
+
+test("renderRoomTranscript diet projection: own tool calls stay full within fullTurnWindow, collapse when older; another agent's activity is always a bounded tail", () => {
+  const ownOld = agentEvent("e_own_old", "gaia", "2026-07-20T00:00:00.000Z", [toolCall("tool_own_old")]);
+  const otherRecent = agentEvent("e_other", "scribe", "2026-07-20T00:01:00.000Z", [toolCall("tool_other")]);
+  const ownRecent = agentEvent("e_own_recent", "gaia", "2026-07-20T00:02:00.000Z", [toolCall("tool_own_recent")]);
+  const rendered = renderRoomTranscript([ownOld, otherRecent, ownRecent], undefined, { policy: DIET_POLICY, currentAgentId: "gaia" });
+  // Each event's rendering starts with its own "[<timestamp>]" header — split there for a clean per-event block, in event order (ownOld, otherRecent, ownRecent).
+  const [oldBlock, otherBlock, ownRecentBlock] = rendered.split(/(?=\[2026)/);
+
+  // own + recent (last event, within fullTurnWindow=1): full preview, every line present verbatim.
+  assert.match(ownRecentBlock, /owner=self/);
+  assert.ok(ownRecentBlock.includes(LONG_PREVIEW), "full longPreview must appear verbatim for the recent own turn");
+
+  // Another agent is always seat-projected, independently of the diet tail policy.
+  assert.match(otherBlock, /bash · x · ✓/);
+  assert.doesNotMatch(otherBlock, /line one|line four|line five/);
+
+  // own + older than the window: collapsed to a one-line stub carrying (eventId, toolId) for tool_result_fetch — never silently deleted.
+  assert.match(oldBlock, /collapsed — page the original with tool_result_fetch\(sessionId="e_own_old", entryId="tool_own_old"\)/);
+  assert.doesNotMatch(oldBlock, /line two/);
+  assert.ok(!oldBlock.includes(LONG_PREVIEW));
+});
+
+test("renderRoomTranscript diet: keepAllToolCalls keeps own activity full regardless of recency", () => {
+  const ownOld = agentEvent("e_own_old", "gaia", "2026-07-20T00:00:00.000Z", [toolCall("tool_own_old")]);
+  const rendered = renderRoomTranscript([ownOld], undefined, { policy: { ...DIET_POLICY, fullTurnWindow: 0, keepAllToolCalls: true }, currentAgentId: "gaia" });
+  assert.doesNotMatch(rendered, /collapsed — page the original/);
+  assert.ok(rendered.includes(LONG_PREVIEW));
+});
+test("buildTurnPrompt: another agent's thought and payload never enter the recipient context", () => {
+  const event = agentEvent("e-seat", "author", "2026-07-20T00:00:00.000Z", [{
+    id: "tool-seat", toolName: "bash", status: "complete", args: { command: "secret-command" }, result: toolResult("SECRET RESULT PAYLOAD"),
+  }]);
+  event.text = "before <gaia:think>SECRET THOUGHT</gaia:think> after";
+  const prompt = buildTurnPrompt({ roomId: "room", agentId: "recipient", message: "go", events: [event] });
+  assert.match(prompt, /before\s+after/);
+  assert.match(prompt, /bash · secret-command · ✓/);
+  assert.doesNotMatch(prompt, /SECRET THOUGHT|SECRET RESULT PAYLOAD/);
+});
+test("buildTurnPrompt: an unclosed thought hides its entire unfinished tail", () => {
+  const event = agentEvent("e-seat", "author", "2026-07-20T00:00:00.000Z", []);
+  event.text = "visible <gaia:think>unfinished secret";
+  const prompt = buildTurnPrompt({ roomId: "room", agentId: "recipient", message: "go", events: [event] });
+  assert.match(prompt, /visible/);
+  assert.doesNotMatch(prompt, /unfinished secret/);
+});
+test("buildTurnPrompt: a recipient retains its own complete tool payload", () => {
+  const event = agentEvent("e-own", "recipient", "2026-07-20T00:00:00.000Z", [toolCall("tool-own", "OWN PAYLOAD")]);
+  const prompt = buildTurnPrompt({ roomId: "room", agentId: "recipient", message: "go", events: [event], dietPolicy: { ...DIET_POLICY, keepAllToolCalls: true } });
+  assert.match(prompt, /OWN PAYLOAD/);
+});
+
+test("buildTurnPrompt: other-agent tool summaries never derive from result payloads", () => {
+  const event = agentEvent("e-result", "author", "2026-07-20T00:00:00.000Z", [{ id: "tool-result", toolName: "read_secret", status: "complete", args: {}, result: toolResult("RAW_RESULT_PAYLOAD_MARKER") }]);
+  const prompt = buildTurnPrompt({ roomId: "room", agentId: "recipient", message: "go", events: [event] });
+  assert.match(prompt, /read_secret · ✓/);
+  assert.doesNotMatch(prompt, /RAW_RESULT_PAYLOAD_MARKER/);
+});
+
+test("seat projection is a subset of the same UI renderer fixture", () => {
+  const tool = { id: "tool-seat", toolName: "read_secret", status: "complete", args: { path: "/safe/target" }, result: toolResult("RAW_RESULT_PAYLOAD_MARKER") };
+  const event = agentEvent("event-seat", "author", "2026-08-22T00:00:00.000Z", [tool]);
+  event.text = "<gaia:think>SECRET_THOUGHT_MARKER</gaia:think>answer";
+  const context = buildTurnPrompt({ roomId: "room", agentId: "recipient", message: "go", events: [event] });
+  // These are precisely the shared functions used by web/src/transcript.js.
+  expect(splitLeadingGaiaThink(event.text)?.thought).toBe("SECRET_THOUGHT_MARKER");
+  expect(toolSummaryText(tool)).toBe("/safe/target");
+  assert.match(context, /read_secret · \/safe\/target · ✓/);
+  assert.doesNotMatch(context, /SECRET_THOUGHT_MARKER|RAW_RESULT_PAYLOAD_MARKER/);
 });

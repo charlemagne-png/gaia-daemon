@@ -6,8 +6,10 @@
 // and a settings edit must take effect on the next turn without a daemon
 // bounce. Missing file = no accounts; a MALFORMED file throws loudly — a torn
 // credential store must never quietly demote an agent to the shared login.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { globalPaths } from "../core/paths.js";
+import { canonicalHarnessId } from "../core/harness-id.js";
 
 export interface AccountRecord {
   /** Unique id (what AgentDef.account references). */
@@ -18,10 +20,9 @@ export interface AccountRecord {
   /** Email address shown in the account manager. It is inferred from a login
    * when that harness exposes it, or supplied by the person managing it. */
   email?: string;
-  /** Workspace/category for grouping accounts (e.g., "Fenyx", "Paloptic"). */
+  /** Optional workspace scope for imported interactive logins. */
   workspace?: string;
-  /** Provider ids this account grants access to (e.g. ["anthropic"], ["openai-codex"]).
-   * Drives model gating in agent config: only providers listed here are offered. */
+  /** Optional provider ids an account can satisfy. */
   providers?: string[];
   /** Opaque credential bag; field meaning is the owning spec's (accounts.fields). */
   credentials: Record<string, string>;
@@ -35,6 +36,7 @@ export function accountsPath(): string {
 export function ensureAccountsFile(): void {
   const path = accountsPath();
   if (existsSync(path)) return;
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({ accounts: [] }, null, 2) + "\n", { mode: 0o600 });
 }
 
@@ -43,14 +45,10 @@ export function listAccounts(): AccountRecord[] {
   if (!existsSync(path)) return [];
   const raw = JSON.parse(readFileSync(path, "utf8")) as { accounts?: unknown };
   const list = Array.isArray(raw.accounts) ? raw.accounts : [];
-  return list.flatMap((entry, i) => {
+  return list.flatMap((entry) => {
     const record = entry as Partial<AccountRecord>;
-    if (typeof record.id !== "string" || !record.id.trim()) {
-      throw new Error(`Account record missing 'id' field at index ${i}: ${JSON.stringify(entry).slice(0, 200)}`);
-    }
-    if (typeof record.harness !== "string" || !record.harness.trim()) {
-      throw new Error(`Account record missing 'harness' field for id '${record.id}': ${JSON.stringify(entry).slice(0, 200)}`);
-    }
+    if (typeof record.id !== "string" || !record.id.trim()) return [];
+    if (typeof record.harness !== "string" || !record.harness.trim()) return [];
     const credentials: Record<string, string> = {};
     for (const [key, value] of Object.entries(record.credentials ?? {})) {
       if (typeof value === "string") credentials[key] = value;
@@ -58,11 +56,11 @@ export function listAccounts(): AccountRecord[] {
     return [
       {
         id: record.id.trim(),
-        harness: record.harness.trim(),
+        harness: canonicalHarnessId(record.harness),
         ...(typeof record.label === "string" && record.label.trim() ? { label: record.label.trim() } : {}),
         ...(typeof record.email === "string" && record.email.trim() ? { email: record.email.trim() } : {}),
-        ...(typeof record.workspace === "string" && record.workspace.trim() ? { workspace: record.workspace.trim() } : {}),
-        ...(Array.isArray(record.providers) ? { providers: record.providers.filter((p): p is string => typeof p === "string") } : {}),
+        ...(typeof (record as { workspace?: unknown }).workspace === "string" && (record as { workspace?: string }).workspace?.trim() ? { workspace: (record as { workspace: string }).workspace.trim() } : {}),
+        ...(Array.isArray((record as { providers?: unknown }).providers) ? { providers: (record as { providers: unknown[] }).providers.filter((p): p is string => typeof p === "string") } : {}),
         credentials,
       },
     ];
@@ -75,13 +73,7 @@ export function findAccount(id: string): AccountRecord | undefined {
 
 /** Redacted view for clients — never includes the credential bag. */
 export function redactedAccounts(): Array<{ id: string; harness: string; label?: string; email?: string; workspace?: string; providers?: string[] }> {
-  return listAccounts().map(({ id, harness, label, email, workspace, providers }) => ({
-    id, harness,
-    ...(label ? { label } : {}),
-    ...(email ? { email } : {}),
-    ...(workspace ? { workspace } : {}),
-    ...(providers?.length ? { providers } : {}),
-  }));
+  return listAccounts().map(({ id, harness, label, email, workspace, providers }) => ({ id, harness, ...(label ? { label } : {}), ...(email ? { email } : {}), ...(workspace ? { workspace } : {}), ...(providers?.length ? { providers } : {}) }));
 }
 
 /** Update display-only account metadata without ever exposing or rewriting its
@@ -107,14 +99,11 @@ export function updateAccount(id: string, patch: { label?: string | null; email?
 }
 
 /** First free id: slugified label ("Work Account" -> "work-account") when given,
- * collision suffixed (`work-account-2`), else `${harness}-2`, `${harness}-3`, ... skipping taken ids. */
+ * collision suffixed, else `${harness}-2`, `${harness}-3`, ... skipping taken ids. */
 export function newAccountId(harness: string, label?: string): string {
   const taken = new Set(listAccounts().map((account) => account.id));
   if (label) {
-    const slug = label
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
     if (slug) {
       if (!taken.has(slug)) return slug;
       for (let n = 2; ; n++) {
@@ -134,9 +123,7 @@ export function addAccount(record: AccountRecord): void {
   const path = accountsPath();
   const raw = JSON.parse(readFileSync(path, "utf8")) as { accounts?: unknown };
   const list = Array.isArray(raw.accounts) ? (raw.accounts as unknown[]) : [];
-  if (list.some((entry) => (entry as Partial<AccountRecord>)?.id === record.id)) {
-    throw new Error(`account '${record.id}' already exists`);
-  }
+  if (list.some((entry) => (entry as Partial<AccountRecord>)?.id === record.id)) throw new Error(`account '${record.id}' already exists`);
   list.push(record);
   writeFileSync(path, JSON.stringify({ ...raw, accounts: list }, null, 2) + "\n", { mode: 0o600 });
 }

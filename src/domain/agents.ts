@@ -7,10 +7,11 @@ import { existsSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { AgentDef, AgentModelConfig, ThinkingLevel } from "../core/types.js";
+import type { AgentDef, AgentModelConfig, AgentProtocolConfig, ThinkingLevel } from "../core/types.js";
 import { DEFAULTS, parseMcpServers, parseMemoryPatch, parseSandboxConfig, parseTtsConfig } from "../core/config.js";
 import { agentPaths, globalPaths } from "../core/paths.js";
-import { ensureDir, jsonText, readJson, writeJsonAtomic, writeText } from "../core/store.js";
+import { canonicalHarnessId } from "../core/harness-id.js";
+import { ensureDir, jsonText, readJson, writeJsonAtomic, writeText, writeTextIfMissing } from "../core/store.js";
 import { MemoryStore } from "./memory.js";
 
 interface RawAgentConfig {
@@ -26,9 +27,12 @@ interface RawAgentConfig {
   voice?: unknown;
   tts?: unknown;
   tools?: unknown;
+  /** Default true: expose the unified `gaia` surface instead of its routed native duplicates. */
+  gaiaOnly?: unknown;
   skills?: unknown;
   model?: AgentModelConfig;
   thinking?: ThinkingLevel;
+  protocols?: unknown;
   turnLaw?: unknown;
   promptLaw?: unknown;
   role?: unknown;
@@ -50,8 +54,29 @@ interface RawAgentConfig {
   env?: unknown;
 }
 
-/** The ordinary work surface for a newly-created agent with no role defaults. */
-export const DEFAULT_AGENT_TOOLS = ["read", "write", "edit", "memory", "recall"] as const;
+/** The ordinary work surface for a new agent: one dispatcher, no duplicate direct tools. */
+export const DEFAULT_AGENT_TOOLS = ["gaia"] as const;
+
+/** Pre-unified fallback, retained solely for `agent.json` rollback via `"gaiaOnly": false`. */
+export const LEGACY_DEFAULT_AGENT_TOOLS = ["read", "write", "edit", "memory", "recall"] as const;
+
+/** Direct tool names whose operations createGaiaTool routes through `gaia.verb`.
+ * Keep this map synchronized with its dispatcher in harness/tools-pi.ts. */
+export const GAIA_ROUTED_NATIVE_TOOLS = ["bash", "read", "write", "edit", "web", "memory", "mem", "recall", "artifact", "summon", "resume", "caryll"] as const;
+
+const gaiaRoutedNativeTools = new Set<string>(GAIA_ROUTED_NATIVE_TOOLS);
+
+/** Apply the reversible unified-tool policy. An explicit empty list remains
+ * toolless (Dario's safety boundary); every non-empty surface retains `gaia`
+ * plus only tools it cannot dispatch. */
+export function gaiaOnlyTools(tools: readonly string[], gaiaOnly = true): string[] {
+  if (!gaiaOnly || tools.length === 0) return [...tools];
+  return ["gaia", ...tools.filter((tool) => tool !== "gaia" && !gaiaRoutedNativeTools.has(tool))];
+}
+
+function defaultAgentTools(gaiaOnly: boolean): string[] {
+  return gaiaOnly ? [...DEFAULT_AGENT_TOOLS] : [...LEGACY_DEFAULT_AGENT_TOOLS];
+}
 
 function parseEnvMap(value: unknown): Record<string, string> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -62,8 +87,16 @@ function parseEnvMap(value: unknown): Record<string, string> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-// `harness` is canonical; older configs use `runtime`. Prefer harness, fall
-// back to runtime, so a `"runtime": "claude"` no longer silently runs Pi.
+function parseProtocolConfig(value: unknown): AgentProtocolConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const protocols: AgentProtocolConfig = {};
+  for (const [name, enabled] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof enabled === "boolean") protocols[name] = enabled;
+  }
+  return Object.keys(protocols).length ? protocols : undefined;
+}
+
+// `harness` is canonical; older configs use `runtime`.
 function rawHarness(config: RawAgentConfig): unknown {
   return config.harness !== undefined ? config.harness : config.runtime;
 }
@@ -72,9 +105,8 @@ function stringList(value: unknown, fallback: string[]): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : fallback;
 }
 
-async function writeIfMissing(path: string, content: string): Promise<void> {
-  if (!existsSync(path)) await writeText(path, content);
-}
+// Create-only seeding lives in core/store (exclusive `wx`, no TOCTOU).
+const writeIfMissing = writeTextIfMissing;
 
 // --- scaffold (`gaia agent create` + the seeded defaults) --------------------
 
@@ -111,6 +143,9 @@ export function agentConfigTemplate(id: string, displayName: string, icon: strin
     displayName,
     icon,
     thinking: DEFAULTS.thinking,
+    // One-line rollback: set false to restore the legacy direct tool list when
+    // `tools` is omitted, or the exact explicit list when it is present.
+    gaiaOnly: true,
     ...(tools ? { tools } : {}),
     harness: DEFAULTS.harness,
     model: { ...DEFAULTS.model },
@@ -190,7 +225,7 @@ async function ensureDefaultAgent(
   id: string,
   displayName: string,
   icon: string,
-  tools: string[],
+  tools: string[] | undefined,
   soul: string,
   configOverrides: Record<string, unknown> = {},
 ): Promise<void> {
@@ -217,11 +252,7 @@ export async function ensureGlobalDefaultAgents(agentsDir: string): Promise<void
     join(rolesDir, "ghoul.md"),
     `---
 tools:
-  - web
-  - bash
-  - read
-  - write
-  - edit
+  - gaia
 ---
 # Ghoul Role
 
@@ -235,7 +266,7 @@ persona, personal history, or cross-task assumptions into the job.
     "gaia",
     "Gaia",
     "☀️",
-    ["read", "write", "edit", "memory", "recall"],
+    undefined,
     `# Gaia\n\nYou are warm, constructive, curious, and pattern-seeking.\n\nYou are good at:\n- shaping ideas\n- finding promising next steps\n- keeping momentum gentle and real\n\nVoice:\n- short, bright, grounded\n- encouraging without fluff\n- ask clear questions when needed\n\nAvoid:\n- fake certainty\n- empty praise\n- rambling\n`,
   );
 
@@ -244,7 +275,7 @@ persona, personal history, or cross-task assumptions into the job.
     "sidia",
     "Sidia",
     "◆",
-    ["read", "write", "edit", "memory", "recall"],
+    undefined,
     `# Sidia\n\nYou are skeptical, precise, and crack-finding without cruelty.\n\nYou are good at:\n- stress-testing plans\n- naming weak assumptions\n- separating evidence from inference\n\nVoice:\n- direct\n- exact\n- critical, then constructive\n\nAvoid:\n- broad cynicism\n- vague objections\n- needless harshness\n`,
   );
 
@@ -253,7 +284,7 @@ persona, personal history, or cross-task assumptions into the job.
     "terry",
     "Terry",
     "🐻",
-    ["read", "write", "edit", "bash", "memory", "recall"],
+    undefined,
     `# Terry\n\nYou are a practical engineer. Smallest useful patch first.\n\nYou are good at:\n- implementation\n- cleanup\n- cutting scope\n\nVoice:\n- short\n- plain\n- no drama\n\nAvoid:\n- overdesign\n- speeches\n- speculative complexity\n`,
   );
 
@@ -332,6 +363,7 @@ function mergeAgentConfig(base: RawAgentConfig, override: RawAgentConfig): RawAg
     ...override,
     id: base.id,
     model: { ...(base.model ?? {}), ...(override.model ?? {}) },
+    protocols: { ...(base.protocols ?? {}), ...(override.protocols ?? {}) },
     harness: rawHarness(override) !== undefined ? rawHarness(override) : rawHarness(base),
     permissionMode: override.permissionMode !== undefined ? override.permissionMode : base.permissionMode,
     account: override.account !== undefined ? override.account : base.account,
@@ -380,6 +412,11 @@ export async function loadAgentDefinitions(globalAgentsDir: string, projectAgent
     const projectRolesDir = agentPaths.rolesDir(projectDir);
 
     const raw = mergeAgentConfig(await readAgentConfig(configPath), await readAgentConfig(projectConfigPath));
+    // Default on for old agent.json files too; setting `gaiaOnly: false` is the
+    // reversible per-agent escape hatch for a direct native tool surface.
+    const gaiaOnly = raw.gaiaOnly !== false;
+    const configuredTools = raw.tools === undefined ? defaultAgentTools(gaiaOnly) : stringList(raw.tools, []);
+    const configuredHarness = rawHarness(raw);
     const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : entry.name;
     const displayName =
       typeof raw.displayName === "string" && raw.displayName.trim()
@@ -413,15 +450,17 @@ export async function loadAgentDefinitions(globalAgentsDir: string, projectAgent
       defaultRole: typeof raw.role === "string" && raw.role.trim() ? raw.role.trim() : undefined,
       soulPath,
       memoryDir,
-      tools: stringList(raw.tools, [...DEFAULT_AGENT_TOOLS]),
-      ...(raw.tools !== undefined ? { toolOverride: stringList(raw.tools, []) } : {}),
+      gaiaOnly,
+      tools: gaiaOnlyTools(configuredTools, gaiaOnly),
+      ...(raw.tools !== undefined ? { toolOverride: gaiaOnlyTools(stringList(raw.tools, []), gaiaOnly) } : {}),
       skills: stringList(raw.skills, []),
       ...(raw.skills !== undefined ? { skillOverride: stringList(raw.skills, []) } : {}),
       model: raw.model,
       thinking: raw.thinking,
+      protocols: parseProtocolConfig(raw.protocols),
       turnLaw: typeof raw.turnLaw === "string" && raw.turnLaw.trim() ? raw.turnLaw.trim() : undefined,
       promptLaw: typeof raw.promptLaw === "string" && raw.promptLaw.trim() ? raw.promptLaw.trim() : undefined,
-      harness: typeof raw.harness === "string" && raw.harness.trim() ? raw.harness : undefined,
+      harness: typeof configuredHarness === "string" && configuredHarness.trim() ? canonicalHarnessId(configuredHarness) : undefined,
       sandbox: parseSandboxConfig(raw.sandbox),
       trust: raw.trust === false ? false : undefined,
       allowNestedSummon: raw.allowNestedSummon === true,

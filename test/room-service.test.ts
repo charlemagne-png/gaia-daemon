@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile as readFileText } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AGENT_DIALOGUE_MAX_HOPS, RoomService, scanRoomActivity, type HomeWorkspaceRedirectRequest, type HomeWorkspaceRedirectResult, type RoomMemoryHooks } from "../src/services/room-service.js";
-import { RoomHandle, normalizeRoomState } from "../src/domain/rooms.js";
+import { AGENT_DIALOGUE_MAX_HOPS, RoomService, type RoomMemoryHooks } from "../src/services/room-service.js";
+import { RoomHandle } from "../src/domain/rooms.js";
 import { MemoryStore } from "../src/domain/memory.js";
 import { DEFAULTS } from "../src/core/config.js";
 import { readJson } from "../src/core/store.js";
 import { workspacePaths } from "../src/core/paths.js";
-import type { AgentDef, AgentEvent, QueuedMessage, SanitizeProposal, Snapshot, Task, UiEvent, Workspace, WorkspaceConfig } from "../src/core/types.js";
+import type { AgentDef, AgentEvent, QueuedMessage, RoomGoal, RoomState, SanitizeProposal, Snapshot, UiEvent, Workspace, WorkspaceConfig } from "../src/core/types.js";
 import "../src/harness/index.js"; // register Pi: its resolved SKILL.md commands are palette entries
 import { RunnerHost } from "../src/harness/host.js";
 import { registerHarness, type AgentInput, type AgentRuntime } from "../src/harness/spec.js";
@@ -105,28 +105,33 @@ async function makeService(options: {
   summonHost?: SummonHost;
   config?: Partial<WorkspaceConfig>;
   llm?: ConsolidateLlm;
-  titleLlmAccount?: (provider: string) => string | undefined;
   /** Room id to open (default "default"). */
   roomId?: string;
   /** Seed the room's state.json as incognito before RoomService.open reads it. */
   incognito?: boolean;
-  /** Seed the room as the hidden GaiaVoice dispatcher room. */
-  voiceSession?: boolean;
+  /** Seed a pinned goal before RoomService.open (restart recovery tests). */
+  goal?: RoomGoal;
   /** Tool ids granted to every test agent (default none). */
   tools?: string[];
   /** Durable queue entries to seed before RoomService.open() runs boot drain. */
   queued?: QueuedMessage[];
-  workspaceId?: string;
-  homeWorkspaceRedirect?: (request: HomeWorkspaceRedirectRequest) => Promise<HomeWorkspaceRedirectResult | undefined>;
-  roomPeer?: (roomId: string) => Promise<RoomService>;
-  turnSettled?: (notice: { workspaceId: string; roomId: string; taskId: string; agentIds: string[]; status: "complete" | "error" | "cancelled"; settledAt: string }) => void;
 } = {}): Promise<{ service: RoomService; workspace: Workspace; root: string; events: UiEvent[]; runtimes: Map<string, ReturnType<typeof scriptedRuntime>> }> {
   const root = await mkdtemp(join(tmpdir(), "gaia-svc-"));
   const roomId = options.roomId ?? "default";
   await mkdir(join(root, ".gaia", "rooms", roomId), { recursive: true });
   await writeFile(join(root, ".gaia", "config.json"), "{}", "utf8");
-  if (options.incognito || options.voiceSession) {
-    await writeFile(workspacePaths.roomState(root, roomId), JSON.stringify({ activeRoles: {}, agentCursors: {}, ...(options.incognito ? { incognito: true } : {}), ...(options.voiceSession ? { voiceSession: true } : {}) }), "utf8");
+  if (options.incognito || options.goal) {
+    await writeFile(
+      workspacePaths.roomState(root, roomId),
+      JSON.stringify({
+        activeRoles: {},
+        thinkingOverrides: {},
+        agentCursors: {},
+        ...(options.incognito ? { incognito: true } : {}),
+        ...(options.goal ? { goal: options.goal } : {}),
+      }),
+      "utf8",
+    );
   }
 
   const agentIds = options.agents ?? ["gaia", "terry"];
@@ -151,7 +156,7 @@ async function makeService(options: {
   const script = options.script ?? (() => [{ type: "text-delta", delta: "hello from agent" } as AgentEvent]);
   const runtimes = new Map<string, ReturnType<typeof scriptedRuntime>>();
   const service = await RoomService.open({
-    workspaceId: options.workspaceId ?? "ws1",
+    workspaceId: "ws1",
     workspace,
     roomId,
     memoryStore: new MemoryStore(),
@@ -160,10 +165,6 @@ async function makeService(options: {
     ...(options.petLoader ? { petLoader: options.petLoader } : {}),
     ...(options.summonHost ? { summonHost: options.summonHost } : {}),
     ...(options.llm ? { llm: options.llm } : {}),
-    ...(options.titleLlmAccount ? { titleLlmAccount: options.titleLlmAccount } : {}),
-    ...(options.homeWorkspaceRedirect ? { homeWorkspaceRedirect: options.homeWorkspaceRedirect } : {}),
-    ...(options.roomPeer ? { roomPeer: options.roomPeer } : {}),
-    ...(options.turnSettled ? { turnSettled: options.turnSettled } : {}),
     runtimeFactory: (agent) => {
       const runtime = options.runtimeFactory ? (options.runtimeFactory(agent, workspace) as ReturnType<typeof scriptedRuntime>) : scriptedRuntime(agent, script);
       runtimes.set(agent.id, runtime);
@@ -173,6 +174,17 @@ async function makeService(options: {
   const events: UiEvent[] = [];
   service.subscribe((event) => events.push(event));
   return { service, workspace, root, events, runtimes };
+}
+
+async function waitForState(root: string, predicate: (state: RoomState) => boolean, timeoutMs = 2_000): Promise<RoomState> {
+  const deadline = Date.now() + timeoutMs;
+  let last = await (await RoomHandle.open(root, "default")).state();
+  while (Date.now() < deadline) {
+    last = await (await RoomHandle.open(root, "default")).state();
+    if (predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for room state: ${JSON.stringify(last)}`);
 }
 
 /** Real RunnerHost child used by the durability regressions below. It speaks
@@ -227,16 +239,6 @@ function durabilityHost(agent: AgentDef, workspace: Workspace, runnerPath: strin
   });
 }
 
-test("snapshot carries agent descriptions and avatars for the room panel", async () => {
-  const { service, workspace } = await makeService();
-  workspace.agents.gaia.description = "Warm pattern shaper";
-  workspace.agents.gaia.avatarUrl = "https://api.dicebear.com/9.x/adventurer/svg?seed=gaia";
-  const snapshot = await service.getSnapshot();
-  const agent = snapshot.agents.find((candidate) => candidate.id === "gaia");
-  assert.equal(agent?.description, workspace.agents.gaia.description);
-  assert.equal(agent?.avatarUrl, workspace.agents.gaia.avatarUrl);
-});
-
 test("a plain message routes to the default agent and commits a detailed reply", async () => {
   const { service, root, events } = await makeService({
     script: () => [
@@ -268,193 +270,6 @@ test("a plain message routes to the default agent and commits a detailed reply",
   // Streaming deltas carried the reserved eventId that the commit used.
   const delta = events.find((event) => event.type === "text-delta") as { eventId?: string } | undefined;
   assert.equal(delta?.eventId, reply["id" as keyof typeof reply]);
-});
-
-test("agent-turn notification fires after the reply and pending-turn clear are durable", async () => {
-  let notice: { workspaceId: string; roomId: string; taskId: string; agentIds: string[]; status: "complete" | "error" | "cancelled"; settledAt: string } | undefined;
-  const { service, root } = await makeService({
-    turnSettled: (value) => {
-      notice = value;
-    },
-  });
-
-  const task = await service.sendMessage("notify me");
-  await service.waitForIdle();
-
-  const room = await RoomHandle.open(root, "default");
-  assert.equal((await room.state()).pendingTurn, undefined);
-  assert.equal(notice?.workspaceId, "ws1");
-  assert.equal(notice?.roomId, "default");
-  assert.equal(notice?.taskId, task.id);
-  assert.deepEqual(notice?.agentIds, ["gaia"]);
-  assert.equal(notice?.status, "complete");
-});
-
-test("voice-origin turns receive a workspace room map; typed turns do not", async () => {
-  const inputs: AgentInput[] = [];
-  const { service } = await makeService({
-    runtimeFactory: (agent) => ({
-      agent,
-      modelLabel: "test/model",
-      capabilities: { gaiaTools: [], granularTools: true, supportsPermissionMode: false },
-      async *send(input: AgentInput) {
-        inputs.push(input);
-        yield { type: "text-delta", delta: "ok" } as AgentEvent;
-      },
-      async abort() {},
-      dispose() {},
-    } as AgentRuntime),
-  });
-
-  await service.sendMessage("typed hello");
-  await service.waitForIdle();
-  await service.sendMessage("@gaia spoken route", { voice: true });
-  await service.waitForIdle();
-
-  assert.equal(inputs.length, 2);
-  assert.equal(inputs[0]?.voiceRoomMap, undefined);
-  assert.match(inputs[1]?.voiceRoomMap ?? "", /#?Workspace room index|Workspace room index/);
-  assert.match(inputs[1]?.voiceRoomMap ?? "", /A\d{2}/);
-  assert.match(inputs[1]?.voiceRoomMap ?? "", /default/);
-  assert.match(inputs[1]?.voiceRoomMap ?? "", /user: @gaia spoken route/);
-});
-
-test("voice tier-0 alias routes straight to the named agent and skips Hermes", async () => {
-  const { service, workspace, root, runtimes } = await makeService({ agents: ["gaia", "artus", "hermes"] });
-  workspace.agents.artus.aliases = ["Alice"];
-
-  const task = await service.sendMessage("Alice make this blue", { origin: "human", voice: true });
-  await service.waitForIdle();
-
-  assert.deepEqual(task.targets, ["artus"]);
-  assert.equal(runtimes.get("artus")?.sends, 1);
-  assert.equal(runtimes.get("hermes")?.sends ?? 0, 0);
-  const room = await RoomHandle.open(root, "default");
-  const state = await room.state();
-  assert.deepEqual(state.voiceDispatch?.lastTarget, "artus");
-  const { events: transcript } = await room.eventsFrom(0);
-  assert.equal(transcript[0]?.author, "user");
-  assert.deepEqual(transcript[0]?.targets, ["artus"]);
-  assert.equal(transcript[0]?.voice, true);
-});
-
-test("voice dispatcher stickiness routes follow-up turns until the window expires", async () => {
-  const previous = process.env.GAIA_VOICE_STICKY_SECS;
-  process.env.GAIA_VOICE_STICKY_SECS = "120";
-  try {
-    const { service, root, runtimes } = await makeService({
-      agents: ["gaia", "dieter", "hermes"],
-      runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: agent.id === "hermes" ? "Sent to Dieter." : `reply from ${agent.id}` }]),
-    });
-
-    await service.sendMessage("can someone polish this?", { origin: "human", voice: true });
-    await service.waitForIdle();
-    assert.equal(runtimes.get("hermes")?.sends, 1);
-    assert.equal((await (await RoomHandle.open(root, "default")).state()).voiceDispatch?.lastTarget, "dieter");
-
-    await service.sendMessage("yes, do it", { origin: "human", voice: true });
-    await service.waitForIdle();
-    assert.equal(runtimes.get("dieter")?.sends, 1);
-
-    process.env.GAIA_VOICE_STICKY_SECS = "0";
-    await service.sendMessage("another pass", { origin: "human", voice: true });
-    await service.waitForIdle();
-    assert.equal(runtimes.get("hermes")?.sends, 2);
-  } finally {
-    if (previous === undefined) delete process.env.GAIA_VOICE_STICKY_SECS;
-    else process.env.GAIA_VOICE_STICKY_SECS = previous;
-  }
-});
-
-test("voice dispatch falls back unchanged when Hermes is missing", async () => {
-  const { service, runtimes } = await makeService({ agents: ["gaia", "terry"] });
-
-  const task = await service.sendMessage("plain spoken hello", { origin: "human", voice: true });
-  await service.waitForIdle();
-
-  assert.deepEqual(task.targets, ["gaia"]);
-  assert.equal(runtimes.get("gaia")?.sends, 1);
-  assert.equal((await service.getSnapshot()).room.voiceDispatcherAvailable, false);
-});
-
-test("voice dispatch context estimate crosses the 20% rotation trigger", async () => {
-  const { service, root } = await makeService({ agents: ["gaia", "hermes"] });
-  const room = await RoomHandle.open(root, "default");
-  await room.appendEvent({ id: "u_big", timestamp: new Date().toISOString(), author: "user", text: "word ".repeat(90_000) });
-
-  const estimate = await service.estimateVoiceDispatchContext("next spoken turn");
-  assert.ok(estimate.usedTokens > estimate.maxTokens * 0.2);
-});
-
-test("voice forward sends to a visible room and writes a system note", async () => {
-  const calls: Array<{ text: string; options: { targets?: string[]; queue?: boolean; channel?: string } }> = [];
-  const fakePeer = {
-    roomId: "target-room",
-    sendMessage: async (text: string, options: { targets?: string[]; queue?: boolean; channel?: string }): Promise<Task> => {
-      calls.push({ text, options });
-      return { id: "task_forward", roomId: "target-room", text, targets: options.targets ?? [], status: "running", startedAt: new Date().toISOString() };
-    },
-  } as unknown as RoomService;
-  const { service, root } = await makeService({
-    roomId: "voice-room",
-    agents: ["gaia", "hermes"],
-    voiceSession: true,
-    llm: async () => "target-room",
-    roomPeer: async () => fakePeer,
-  });
-  await mkdir(join(root, ".gaia", "rooms", "target-room"), { recursive: true });
-  await writeFile(workspacePaths.transcript(root, "target-room"), JSON.stringify({ id: "u1", timestamp: new Date().toISOString(), author: "user", targets: ["gaia"], text: "launch plan" }) + "\n", "utf8");
-  await writeFile(workspacePaths.roomState(root, "target-room"), JSON.stringify({ activeRoles: {}, agentCursors: {}, title: "Launch Plan", activeAgent: "gaia" }), "utf8");
-
-  const task = await service.sendMessage("put this with launch", { origin: "human", voice: true });
-
-  assert.equal(task.status, "complete");
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.text, "put this with launch");
-  assert.deepEqual(calls[0]?.options.targets, ["gaia"]);
-  // NO channel:"voice" on the forward — init drops queued voice-channel
-  // survivors on restart, which would destroy an explicit "queue …" forward.
-  assert.equal(calls[0]?.options.channel, undefined);
-  assert.equal(calls[0]?.options.queue, undefined);
-  const { events: voiceEvents } = await RoomHandle.open(root, "voice-room").then((room) => room.eventsFrom(0));
-  assert.equal(voiceEvents.at(-1)?.author, "system");
-  assert.match(voiceEvents.at(-1)?.text ?? "", /voice forwarded to “Launch Plan” \(target-room\).*sent/);
-});
-
-test("voice forward queue law sets queue only for the explicit word queue", async () => {
-  const calls: Array<{ queue?: boolean }> = [];
-  const fakePeer = {
-    roomId: "target-room",
-    sendMessage: async (_text: string, options: { targets?: string[]; queue?: boolean }): Promise<Task> => {
-      calls.push({ queue: options.queue });
-      return { id: `task_forward_${calls.length}`, roomId: "target-room", text: "", targets: options.targets ?? [], status: options.queue ? "queued" : "running", startedAt: new Date().toISOString() };
-    },
-  } as unknown as RoomService;
-  const { service, root } = await makeService({
-    roomId: "voice-room",
-    agents: ["gaia", "hermes"],
-    voiceSession: true,
-    llm: async () => "target-room",
-    roomPeer: async () => fakePeer,
-  });
-  await mkdir(join(root, ".gaia", "rooms", "target-room"), { recursive: true });
-  await writeFile(workspacePaths.transcript(root, "target-room"), "", "utf8");
-  await writeFile(workspacePaths.roomState(root, "target-room"), JSON.stringify({ activeRoles: {}, agentCursors: {}, title: "Inbox", activeAgent: "gaia" }), "utf8");
-
-  await service.sendMessage("send this to inbox", { origin: "human", voice: true });
-  await service.sendMessage("queue this in inbox", { origin: "human", voice: true });
-
-  assert.deepEqual(calls.map((call) => call.queue), [undefined, true]);
-  const { events: voiceEvents } = await RoomHandle.open(root, "voice-room").then((room) => room.eventsFrom(0));
-  assert.match(voiceEvents.at(-1)?.text ?? "", /queued/);
-});
-
-test("snapshot exposes voice dispatcher availability from the dispatch fallback seam", async () => {
-  const present = await makeService({ agents: ["gaia", "hermes"] });
-  assert.equal((await present.service.getSnapshot()).room.voiceDispatcherAvailable, true);
-
-  const missing = await makeService({ agents: ["gaia", "terry"] });
-  assert.equal((await missing.service.getSnapshot()).room.voiceDispatcherAvailable, false);
 });
 
 test("background-task events persist, surface in snapshots, and cap at 20", async () => {
@@ -572,51 +387,12 @@ test("auto-created rooms get a fallback title and manual rename locks it", async
   state = await RoomHandle.open(root, "chat-test123").then((room) => room.state());
   assert.equal(state.title, "Readable room titles");
   assert.equal(state.titleSource, "manual");
-
-  await service.setTitle("voice control — 08/26 08:50", "auto");
-  state = await RoomHandle.open(root, "chat-test123").then((room) => room.state());
-  assert.equal(state.title, "voice control — 08/26 08:50");
-  assert.equal(state.titleSource, "auto");
 });
 
-test("bookmarks upsert by event id, round-trip through normalized state, and remove idempotently", async () => {
-  const { service, root } = await makeService();
-  await service.sendMessage("pin this warm inflection point");
-  await service.waitForIdle();
-  const [anchor] = (await service.room.eventsFrom(0)).events;
-  assert.ok(anchor);
-
-  const observer = await RoomHandle.open(root, "default");
-  await observer.state(); // seed cache: cross-handle assertions below must invalidate before reading service writes.
-
-  const first = await service.setBookmark(anchor.id, "  First   pin  ");
-  assert.equal(first.eventId, anchor.id);
-  assert.equal(first.name, "First pin");
-  assert.equal(first.author, "user");
-  assert.equal(first.excerpt, "pin this warm inflection point");
-
-  const renamed = await service.setBookmark(anchor.id, "Renamed pin");
-  assert.equal(renamed.id, first.id);
-  assert.equal(renamed.name, "Renamed pin");
-
-  observer.invalidate();
-  let state = await observer.state();
-  assert.deepEqual(state.bookmarks?.map((bookmark) => bookmark.id), [first.id]);
-  assert.deepEqual(normalizeRoomState({ bookmarks: state.bookmarks }).bookmarks, state.bookmarks);
-  assert.deepEqual((await scanRoomActivity(root)).find((room) => room.id === "default")?.bookmarks, state.bookmarks);
-
-  await service.removeBookmark(first.id);
-  await service.removeBookmark(first.id);
-  observer.invalidate();
-  state = await observer.state();
-  assert.equal(state.bookmarks, undefined);
-});
-
-test("auto title refinement uses the configured room-title model and account", async () => {
+test("auto title refinement uses the cheap DeepSeek flash model", async () => {
   const calls: Parameters<ConsolidateLlm>[0][] = [];
   const { service, root } = await makeService({
     roomId: "chat-title-flash",
-    titleLlmAccount: (provider) => (provider === DEFAULTS.roomTitleModel.provider ? "paloptic-pascal-cl1" : undefined),
     llm: async (input) => {
       calls.push(input);
       return "Room Rename Controls";
@@ -633,7 +409,6 @@ test("auto title refinement uses the configured room-title model and account", a
 
   assert.equal(calls[0]?.model?.provider, DEFAULTS.roomTitleModel.provider);
   assert.equal(calls[0]?.model?.name, DEFAULTS.roomTitleModel.name);
-  assert.equal(calls[0]?.account, "paloptic-pascal-cl1");
   assert.equal(state.title, "Room Rename Controls");
   assert.equal(state.titleSource, "model");
 });
@@ -650,93 +425,6 @@ test("@mentions route to multiple agents in order; unknown mentions fail at send
     transcript.map((event) => event.author),
     ["user", "terry", "gaia"],
   );
-});
-
-test("human messages to a pinned foreign-home agent redirect instead of running locally", async () => {
-  const redirects: HomeWorkspaceRedirectRequest[] = [];
-  const { service, workspace, events, runtimes, root } = await makeService({
-    agents: ["gaia", "artus"],
-    homeWorkspaceRedirect: async (request) => {
-      redirects.push(request);
-      return { workspaceId: "fenyx", roomId: "chat-fenyx", workspaceName: "FENYX", roomRef: "FX1" };
-    },
-  });
-  workspace.agents.artus.homeWorkspace = "FENYX";
-
-  const task = await service.sendMessage("@artus chase this lead", { origin: "human" });
-
-  assert.equal(task.status, "complete");
-  assert.equal(redirects.length, 1);
-  assert.equal(redirects[0]?.agent.id, "artus");
-  assert.equal(redirects[0]?.forwardMessage, true);
-  assert.equal(runtimes.get("artus")?.sends, 0);
-  assert.ok(events.some((event) => event.type === "room-redirect" && event.workspaceId === "fenyx" && event.roomId === "chat-fenyx"));
-  const transcript = (await RoomHandle.open(root, "default")).eventsFrom(0);
-  assert.match((await transcript).events.at(-1)?.text ?? "", /Artus is homed in FENYX → continuing in #FX1/);
-});
-
-test("home-workspace redirect does not fire inside the agent home workspace", async () => {
-  const { service, workspace, events, runtimes } = await makeService({
-    agents: ["gaia", "artus"],
-    workspaceId: "fenyx",
-    homeWorkspaceRedirect: async () => undefined,
-  });
-  workspace.agents.artus.homeWorkspace = "FENYX";
-
-  await service.sendMessage("@artus chase this lead", { origin: "human" });
-  await service.waitForIdle();
-
-  assert.equal(runtimes.get("artus")?.sends, 1);
-  assert.equal(events.some((event) => event.type === "room-redirect"), false);
-});
-
-test("home-workspace redirect does not fire for summon-origin targeted messages", async () => {
-  const { service, workspace, events, runtimes } = await makeService({
-    agents: ["gaia", "artus"],
-    homeWorkspaceRedirect: async () => {
-      throw new Error("summon-origin turn must not invoke home redirect");
-    },
-  });
-  workspace.agents.artus.homeWorkspace = "FENYX";
-
-  await service.sendMessage("summon task", { targets: ["artus"], bypassContextGate: true });
-  await service.waitForIdle();
-
-  assert.equal(runtimes.get("artus")?.sends, 1);
-  assert.equal(events.some((event) => event.type === "room-redirect"), false);
-});
-
-test("voice navigation redirect is workspace-scoped", async () => {
-  const { service, events } = await makeService({ roomId: "voice-room", voiceSession: true });
-
-  service.emitVoiceNavigationRedirect("chat-target", "voice-room");
-
-  assert.deepEqual(events.at(-1), {
-    type: "room-redirect",
-    workspaceId: "ws1",
-    roomId: "chat-target",
-    fromWorkspaceId: "ws1",
-    fromRoomId: "voice-room",
-    scope: "workspace",
-  });
-});
-
-test("selecting a pinned foreign-home agent redirects without changing local active agent", async () => {
-  const { service, workspace, events, root } = await makeService({
-    agents: ["gaia", "artus"],
-    homeWorkspaceRedirect: async (request) => {
-      assert.equal(request.forwardMessage, false);
-      return { workspaceId: "fenyx", roomId: "chat-fenyx", workspaceName: "FENYX" };
-    },
-  });
-  workspace.agents.artus.homeWorkspace = "FENYX";
-
-  const redirect = await service.setActiveAgent("artus", { origin: "human" });
-  const state = await RoomHandle.open(root, "default").then((room) => room.state());
-
-  assert.deepEqual(redirect, { workspaceId: "fenyx", roomId: "chat-fenyx", workspaceName: "FENYX" });
-  assert.equal(state.activeAgent, undefined);
-  assert.ok(events.some((event) => event.type === "room-redirect" && event.workspaceId === "fenyx"));
 });
 
 test("@system is a reserved author, not an agent mention: routes as the room default instead of erroring", async () => {
@@ -1338,6 +1026,112 @@ test("slash commands emit a system room-event and settle synchronously", async (
   // regression below verifies their asynchronous command turn.
 });
 
+test("/goal starts immediately, continues durably, and stops only on GOAL-COMPLETE", async () => {
+  let sends = 0;
+  const { service, root } = await makeService({
+    agents: ["gaia"],
+    script: () => {
+      sends += 1;
+      return [{ type: "text-delta", delta: sends === 1 ? "first autonomous step" : "finished\nGOAL-COMPLETE" } as AgentEvent];
+    },
+  });
+
+  const command = await service.sendMessage("/goal ship the release");
+  assert.equal(command.status, "complete");
+  const state = await waitForState(root, (current) => current.goal?.status === "done");
+  assert.equal(sends, 2, "the command starts one turn and a missing marker schedules the next");
+  assert.equal(state.goal?.iterations, 2);
+  assert.equal(state.goal?.stoppedReason, "completed by @gaia");
+  assert.equal(state.queue, undefined, "completion leaves no successor queued");
+});
+
+test("an active /goal with no queue recovers its owed continuation on daemon open", async () => {
+  let sends = 0;
+  const startedAt = "2026-08-05T12:00:00.000Z";
+  const { service, root } = await makeService({
+    agents: ["gaia"],
+    goal: {
+      objective: "survive the restart",
+      agentId: "gaia",
+      status: "active",
+      tokensUsed: 10,
+      iterations: 1,
+      startedAt,
+      updatedAt: startedAt,
+    },
+    script: () => {
+      sends += 1;
+      return [{ type: "text-delta", delta: "recovered\nGOAL-COMPLETE" } as AgentEvent];
+    },
+  });
+
+  await service.getSnapshot(); // first real daemon use runs init/recovery
+  const state = await waitForState(root, (current) => current.goal?.status === "done");
+  assert.equal(sends, 1);
+  assert.equal(state.goal?.iterations, 2);
+  assert.equal(state.queue, undefined);
+});
+
+test("/goal pause invalidates an already-owed continuation; resume starts exactly one fresh turn", async () => {
+  let sends = 0;
+  let started!: () => void;
+  let release!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+  const firstRelease = new Promise<void>((resolve) => { release = resolve; });
+  const { service, root } = await makeService({
+    agents: ["gaia"],
+    runtimeFactory: (agent) => {
+      const runtime = scriptedRuntime(agent, () => []);
+      runtime.send = async function* () {
+        sends += 1;
+        if (sends === 1) {
+          started();
+          await firstRelease;
+          yield { type: "text-delta", delta: "not done yet" } as AgentEvent;
+        } else {
+          yield { type: "text-delta", delta: "done\nGOAL-COMPLETE" } as AgentEvent;
+        }
+      };
+      return runtime;
+    },
+  });
+
+  await service.sendMessage("/goal investigate the issue");
+  await firstStarted;
+  const pause = await service.sendMessage("/goal pause");
+  assert.equal(pause.status, "queued", "pause waits behind the in-flight goal turn");
+  release();
+  const paused = await waitForState(root, (state) => state.goal?.status === "paused" && !state.pendingTurn && !state.queue);
+  assert.equal(paused.goal?.iterations, 1);
+  assert.equal(sends, 1, "the stale continuation behind pause was discarded");
+
+  await service.sendMessage("/goal resume");
+  const done = await waitForState(root, (state) => state.goal?.status === "done");
+  assert.equal(done.goal?.iterations, 2);
+  assert.equal(sends, 2, "resume created one fresh goal-owned turn");
+});
+
+test("/goal token budget pauses after the first over-budget turn without another dispatch", async () => {
+  let sends = 0;
+  const { service, root } = await makeService({
+    agents: ["gaia"],
+    script: () => {
+      sends += 1;
+      return [
+        { type: "context-usage", usedTokens: 75, maxTokens: 1_000 } as AgentEvent,
+        { type: "text-delta", delta: "work remains" } as AgentEvent,
+      ];
+    },
+  });
+
+  await service.sendMessage("/goal --tokens 50 bounded work");
+  const paused = await waitForState(root, (state) => state.goal?.status === "paused");
+  assert.equal(paused.goal?.tokensUsed, 75);
+  assert.match(paused.goal?.stoppedReason ?? "", /token budget exhausted/);
+  assert.equal(paused.queue, undefined);
+  assert.equal(sends, 1);
+});
+
 test("unclaimed slash commands defer verbatim to the active native harness", async () => {
   let received: AgentInput | undefined;
   const { service, root, events } = await makeService({
@@ -1485,6 +1279,41 @@ test("/compact runs on an idle room (does not self-block), shows a compacting st
   assert.equal(compactEvent.kind, "compact-complete", "compaction completion is persisted with a structured transcript marker");
 });
 
+test("/compact --edit shows a non-evicting draft, then persists the owner-edited summary on apply", async () => {
+  let draftCalls = 0;
+  let appliedSummary: string | undefined;
+  const factory = (agent: AgentDef) => {
+    const runtime = scriptedRuntime(agent, () => [{ type: "text-delta", delta: "hi" } as AgentEvent]);
+    runtime.capabilities = { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsCompact: true, supportsCompactEdit: true };
+    (runtime as unknown as {
+      compactDraft: () => Promise<{ compacted: false; message: string; summary: string }>;
+      compactApply: (_roomId: string, summary: string) => Promise<{ compacted: boolean; message: string; summary: string }>;
+    }).compactDraft = async () => {
+      draftCalls += 1;
+      return { compacted: false, message: "draft ready", summary: "LLM-DRAFT-DO-NOT-PERSIST" };
+    };
+    (runtime as unknown as { compactApply: (_roomId: string, summary: string) => Promise<{ compacted: boolean; message: string; summary: string }> }).compactApply = async (_roomId, summary) => {
+      appliedSummary = summary;
+      return { compacted: true, message: "session compacted.", summary };
+    };
+    return runtime as unknown as AgentRuntime;
+  };
+  const { service, root } = await makeService({ runtimeFactory: factory });
+  await service.sendMessage("/compact --edit");
+  assert.equal(draftCalls, 1);
+  const room = await RoomHandle.open(root, "default");
+  assert.equal((await room.readCompaction("gaia")), undefined, "reviewing a draft writes no durable compaction");
+  assert.equal((await room.state()).contextFloors?.gaia, undefined, "reviewing a draft leaves the live context floor unchanged");
+  await service.sendMessage("/compact --edit OWNER-EDITED-SUMMARY");
+  assert.equal(appliedSummary, "OWNER-EDITED-SUMMARY");
+  assert.equal((await room.readCompaction("gaia"))?.summary, "OWNER-EDITED-SUMMARY");
+});
+test("/compact --edit reports a clean capability error for a harness without editable compaction", async () => {
+  const { service, root } = await makeService();
+  await service.sendMessage("/compact --edit");
+  const { events } = await (await RoomHandle.open(root, "default")).eventsFrom(0);
+  assert.ok(events.some((event) => event.author === "system" && /no native editable session compaction/.test(event.text)));
+});
 test("/compact streams live progress (token counts + start time) into the snapshot", async () => {
   let serviceRef: RoomService | undefined;
   let midPass: Snapshot | undefined;
@@ -1593,10 +1422,6 @@ test("/cancel aborts a running compaction — the pass is killed and the reply s
 });
 
 test("a successful compact refreshes the stale ctx chip: streamed summary size, else dropped", async () => {
-  // Auto-compaction would fire its own /compact at 50% usage and eat the
-  // scripted passes this test counts — disable it; it has its own test below.
-  process.env.GAIA_AUTO_COMPACT_PERCENT = "0";
-  try {
   // Before the fix the chip sat on the pre-compact % until the next turn.
   let compactCalls = 0;
   const factory = (agent: AgentDef) => {
@@ -1631,117 +1456,6 @@ test("a successful compact refreshes the stale ctx chip: streamed summary size, 
   await service.sendMessage("/compact");
   const dropped = (await service.getSnapshot()).agents.find((agent) => agent.id === "gaia")?.context;
   assert.equal(dropped, undefined, "stale usage dropped when the harness streamed no post-compact figure");
-  } finally {
-    delete process.env.GAIA_AUTO_COMPACT_PERCENT;
-  }
-});
-
-test("auto-compact: a turn ending above the context threshold queues a /compact automatically, once", async () => {
-  let compactCalls = 0;
-  const factory = (agent: AgentDef) => {
-    const runtime = scriptedRuntime(agent, () => [
-      { type: "context-usage", usedTokens: 100_000, maxTokens: 200_000 } as AgentEvent, // 50% > 15%
-      { type: "text-delta", delta: "hi" } as AgentEvent,
-    ]);
-    runtime.capabilities = { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsCompact: true };
-    (runtime as unknown as { compact: () => Promise<{ compacted: boolean; message: string }> }).compact = async () => {
-      compactCalls += 1;
-      return { compacted: true, message: "session compacted." };
-    };
-    return runtime as unknown as AgentRuntime;
-  };
-  const { service, root } = await makeService({ runtimeFactory: factory });
-
-  await service.sendMessage("hello");
-  await service.waitForIdle();
-  // The auto /compact rides the durable queue behind the settle — poll it in.
-  const deadline = Date.now() + 5_000;
-  while (compactCalls < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(compactCalls, 1, "auto-compact fired the harness compaction exactly once");
-
-  await service.waitForIdle();
-  const room = await RoomHandle.open(root, "default");
-  const { events: transcript } = await room.eventsFrom(0);
-  assert.ok(
-    transcript.some((event) => event.author === "system" && /auto-compact: @gaia context at 50%/.test(event.text)),
-    "auto-compact announcement persisted",
-  );
-  assert.ok(
-    transcript.some((event) => event.author === "system" && /session compacted\./.test(event.text)),
-    "compact reply persisted",
-  );
-  // No streamed post-compact figure → usage entry dropped → no re-fire loop.
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(compactCalls, 1, "no auto-compact loop after the pass");
-});
-
-test("deliver:note wakes the parent's active steward once through the durable callback queue", async () => {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  const factory = (agent: AgentDef): AgentRuntime => {
-    const runtime = scriptedRuntime(agent, () => []);
-    runtime.send = async function* () {
-      runtime.sends += 1;
-      await gate;
-      yield { type: "text-delta", delta: "triaged" } as AgentEvent;
-    };
-    runtime.abort = async () => { release(); };
-    return runtime;
-  };
-  const { service, root } = await makeService({ runtimeFactory: factory });
-  const room = service.room;
-  await room.updateState((state) => { state.activeAgent = "gaia"; });
-
-  const delivery = { childRoomId: "child-lane-1", failed: false };
-  await service.deliverAgentResult("terry", "worker result", delivery);
-  await service.deliverAgentResult("terry", "worker result retry", delivery);
-
-  const state = await room.state();
-  assert.ok(state.pendingTurn?.agentId === "gaia" || state.queue?.some((entry) => entry.targets.includes("gaia")), "active steward turn is durable");
-  const { events } = await room.eventsFrom(0);
-  assert.equal(events.filter((event) => event.author === "system" && event.text.includes("child-lane wake:")).length, 1);
-  release();
-  await service.waitForIdle();
-});
-
-test("stuck-turn watchdog preserves partial progress, clears stale WAL, and re-queues the turn", async () => {
-  let release!: () => void;
-  let started!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  const began = new Promise<void>((resolve) => { started = resolve; });
-  const factory = (agent: AgentDef): AgentRuntime => {
-    const runtime = scriptedRuntime(agent, () => []);
-    runtime.send = async function* () {
-      runtime.sends += 1;
-      started();
-      await gate;
-      yield { type: "text-delta", delta: " resumed" } as AgentEvent;
-    };
-    runtime.abort = async () => { release(); };
-    return runtime;
-  };
-  const { service, root } = await makeService({ runtimeFactory: factory });
-  await service.init();
-  const room = service.room;
-  const now = Date.now();
-  await room.markPendingTurn({
-    id: "stale-task",
-    eventId: "reserved-reply",
-    prompt: "finish this",
-    targets: ["gaia"],
-    agentId: "gaia",
-    partialReply: "saved partial",
-    startedAt: new Date(now - 11 * 60_000).toISOString(),
-  });
-
-  assert.equal(await service.recoverStuckTurn(now), true);
-  await began;
-  const state = await room.state();
-  assert.notEqual(state.pendingTurn?.id, "stale-task", "stale WAL marker retired");
-  const { events } = await room.eventsFrom(0);
-  assert.ok(events.some((event) => event.id === "reserved-reply" && event.text === "saved partial"), "flushed partial committed under reserved id");
-  release();
-  await service.waitForIdle();
 });
 
 test("durable compaction: a compacted agent that LOSES its session reloads [summary + tail], not the full raw transcript", async () => {
@@ -1907,15 +1621,7 @@ test("steer-by-default: a plain message to the busy agent injects; @other and qu
   assert.equal(steered.status, "complete", "steer settles while the turn still runs");
   assert.deepEqual(steerCalls, ["also check the logs"]);
 
-  // Voice-control follow-ups steer too — never wait in the hidden GaiaVoice
-  // session queue, even if the utterance would route to another agent.
-  const voiceSteered = await service.sendMessage("voice follow-up", { voice: true });
-  assert.equal(voiceSteered.status, "complete", "voice follow-up steers while the turn still runs");
-  const voiceCrossTarget = await service.sendMessage("@terry voice take", { voice: true });
-  assert.equal(voiceCrossTarget.status, "complete", "voice cross-target follow-up still steers the live turn");
-  assert.deepEqual(steerCalls, ["also check the logs", "voice follow-up", "@terry voice take"]);
-
-  // An explicit typed @other isn't for the running agent → durable queue.
+  // An explicit @other isn't for the running agent → durable queue.
   const toOther = await service.sendMessage("@terry take a look");
   assert.equal(toOther.status, "queued");
 
@@ -1938,14 +1644,6 @@ test("steer-by-default: a plain message to the busy agent injects; @other and qu
   assert.ok(
     transcript.some((event) => event.text === "also check the logs" && event.author === "user"),
     "steered message recorded for history",
-  );
-  assert.ok(
-    transcript.some((event) => event.text === "voice follow-up" && event.author === "user" && event.voice === true),
-    "voice steered message recorded for history",
-  );
-  assert.ok(
-    transcript.some((event) => event.text === "@terry voice take" && event.author === "user" && event.voice === true && event.targets?.[0] === "gaia"),
-    "voice cross-target steer records against the live runner, not the queue target",
   );
 });
 
@@ -2794,7 +2492,7 @@ test("/thanks-dario on|off persists the room flag and surfaces it on the snapsho
   assert.equal((await service.getSnapshot()).room.thanksDario, undefined);
 });
 
-test("sanitize preview runs the reviewer through the summon host; apply rewrites, preserves, drops sessions", async () => {
+test("sanitize preview runs the reviewer through the summon host; apply rewrites, preserves, resets", async () => {
   // The fake reviewer reads the event id out of the prompt it was given —
   // proving the prompt labels events the way apply expects them back.
   const host = fakeSummonHost((_agentId, task) => {
@@ -2837,12 +2535,11 @@ test("sanitize preview runs the reviewer through the summon host; apply rewrites
   // Original preserved beside the transcript.
   const preserved = (await readFileText(join(root, ".gaia", "rooms", "default", "redactions.jsonl"), "utf8")).trim();
   assert.match(preserved, /please discuss IDA Pro internals/);
-  // Every harness-side room session drops through the same neutral seam as
-  // /clear: raw provider/session files can hold the original text even when an
-  // agent cursor does not prove involvement.
+  // The agent whose session read the original text got a fresh session and a
+  // capped cursor; agents that never spoke have no session holding the
+  // original, so they are untouched (resetting them was always a no-op).
   assert.ok((runtimes.get("gaia")?.resets ?? 0) >= 1, "the exposed session resets");
-  assert.ok((runtimes.get("terry")?.resets ?? 0) >= 1, "uninvolved room sessions drop too");
-  assert.ok((runtimes.get("dario")?.resets ?? 0) >= 1, "reviewer room session drops too");
+  assert.equal(runtimes.get("terry")?.resets ?? 0, 0, "uninvolved agents keep their sessions");
   const state = await room.state();
   assert.equal(state.agentCursors.gaia, 0);
   // The saved proposal is stamped applied (popup shows the ✂ state).
@@ -3465,275 +3162,251 @@ test("resume: a message that arrives while the target room is mid-turn STEERS it
   assert.equal(finalState.queue ?? undefined, undefined, "resume-as-steer never lands in the durable queue");
 });
 
-test("/queue: parks mid-turn instead of steering; pause holds it through settle, resume drains it", async () => {
-  let releaseFirst: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    releaseFirst = resolve;
-  });
-  let first = true;
-  const steeredWith: string[] = [];
+// A persisted cursor that points PAST the end of the transcript (an
+// out-of-band rewrite, a restored older backup, a transcript copied in from
+// elsewhere) is silent amnesia: reading from it yields nothing, forever, with
+// no error. The service must clamp and replay instead.
+test("a cursor beyond the transcript's physical lines replays from 0 instead of feeding the agent nothing", async () => {
+  const seen: number[] = [];
+  const script = () => [{ type: "text-delta", delta: "reply" } as AgentEvent];
   const { service, root } = await makeService({
-    roomId: "queue-room",
+    agents: ["gaia"],
     runtimeFactory: (agent) => {
-      const runtime = {
-        agent,
-        modelLabel: "test/model",
-        capabilities: { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsSteer: true },
-        async *send(): AsyncIterable<AgentEvent> {
-          if (first) {
-            first = false;
-            await gate;
-          }
-          yield { type: "text-delta", delta: "done" };
-        },
-        async abort() {},
-        dispose() {},
-        async steer(_roomId: string, text: string): Promise<boolean> {
-          steeredWith.push(text);
-          return true;
-        },
-      };
-      return runtime as unknown as AgentRuntime;
-    },
-  });
-
-  const first_ = service.sendMessage("start the task");
-  await sleep(20); // let the turn become active
-
-  // /queue while the SAME agent is mid-turn: never steered, durably parked.
-  const queued = await service.sendMessage("/queue also check the edge case");
-  assert.equal(queued.status, "queued");
-  assert.deepEqual(steeredWith, [], "/queue must not inject into the running turn");
-  const room = await RoomHandle.open(root, "queue-room");
-  assert.equal((await room.state()).queue?.[0]?.text, "also check the edge case", "the idea text (without /queue) is what's parked");
-
-  // Pause: the settled turn's drain must skip it.
-  const pausedTask = await service.setQueuedPaused(queued.id, true);
-  assert.equal(pausedTask?.status, "paused");
-  releaseFirst();
-  await first_;
-  await service.waitForIdle();
-  await sleep(30); // give a (wrong) drain a chance to run it
-  room.invalidate(); // observe the service handle's writes, not this handle's cache
-  assert.equal((await room.state()).queue?.[0]?.paused, true, "paused entry survives the settle-drain");
-  let { events: transcript } = await room.eventsFrom(0);
-  assert.equal(transcript.filter((event) => event.author === "user" && event.text === "also check the edge case").length, 0);
-
-  // Resume: it drains and runs as its own turn.
-  const resumedTask = await service.setQueuedPaused(queued.id, false);
-  assert.equal(resumedTask?.status === "queued" || resumedTask?.status === "running", true);
-  await sleep(30);
-  await service.waitForIdle();
-  room.invalidate();
-  assert.equal((await room.state()).queue ?? undefined, undefined, "resume drained the entry");
-  ({ events: transcript } = await room.eventsFrom(0));
-  assert.equal(transcript.filter((event) => event.author === "user" && event.text === "also check the edge case").length, 1);
-  assert.equal(transcript.filter((event) => event.author === "gaia").length, 2, "the parked idea ran as its own second turn");
-});
-
-test("/berserk: flag lives on the ROOT ancestor; subroom inherits via the walk; off from the child stands the whole tree down", async () => {
-  const { service: rootService, workspace, root } = await makeService();
-  await rootService.init();
-  // Seed a subroom of "default" before its service opens (parentRoomId chain).
-  await mkdir(join(root, ".gaia", "rooms", "child"), { recursive: true });
-  await writeFile(
-    workspacePaths.roomState(root, "child"),
-    JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, parentRoomId: "default", subroom: true }),
-    "utf8",
-  );
-  const child = await RoomService.open({
-    workspaceId: "ws1",
-    workspace,
-    roomId: "child",
-    memoryStore: new MemoryStore(),
-    runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: "hi" } as AgentEvent]),
-    // The peer hook must be asked for the ROOT room — its resident service does the write.
-    roomPeer: async (roomId) => {
-      assert.equal(roomId, "default");
-      return rootService;
-    },
-  });
-  await child.init();
-
-  // ON from the CHILD: the flag lands on the root's state, never the child's.
-  const onReply = await child.runBerserkCommand();
-  assert.match(onReply, /BERSERK/);
-  const rootState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
-  assert.equal(rootState.berserk, true, "flag lives on the root ancestor");
-  const childState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "child")));
-  assert.equal(childState.berserk, undefined, "descendants inherit, never carry the flag");
-
-  // Both rooms are effectively berserk (snapshot resolves the walk).
-  assert.equal((await rootService.getSnapshot()).room.berserk, true);
-  assert.equal((await child.getSnapshot()).room.berserk, true);
-  // The rooms list paints every room of the tree, not just the root.
-  const rooms = await scanRoomActivity(root);
-  assert.equal(rooms.find((room) => room.id === "default")?.berserk, true);
-  assert.equal(rooms.find((room) => room.id === "child")?.berserk, true);
-
-  // OFF from the CHILD clears the root — "until I say /berserk off in any of the chats".
-  const offReply = await child.runBerserkCommand(true);
-  assert.match(offReply, /OFF/);
-  const clearedRoot = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
-  assert.equal(clearedRoot.berserk, undefined);
-  assert.equal((await child.getSnapshot()).room.berserk, undefined);
-  assert.equal((await rootService.getSnapshot()).room.berserk, undefined);
-});
-
-test("/love: same tree semantics as berserk — root flag, child inherits, off from the child clears the tree", async () => {
-  const { service: rootService, workspace, root } = await makeService();
-  await rootService.init();
-  await mkdir(join(root, ".gaia", "rooms", "child"), { recursive: true });
-  await writeFile(
-    workspacePaths.roomState(root, "child"),
-    JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, parentRoomId: "default", subroom: true }),
-    "utf8",
-  );
-  const child = await RoomService.open({
-    workspaceId: "ws1",
-    workspace,
-    roomId: "child",
-    memoryStore: new MemoryStore(),
-    runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: "hi" } as AgentEvent]),
-    roomPeer: async (roomId) => {
-      assert.equal(roomId, "default");
-      return rootService;
-    },
-  });
-  await child.init();
-
-  const onReply = await child.runLoveCommand();
-  assert.match(onReply, /LOVEMODE/);
-  const rootState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
-  assert.equal(rootState.love, true, "flag lives on the root ancestor");
-  const childState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "child")));
-  assert.equal(childState.love, undefined, "descendants inherit, never carry the flag");
-
-  assert.equal((await rootService.getSnapshot()).room.love, true);
-  assert.equal((await child.getSnapshot()).room.love, true);
-  const rooms = await scanRoomActivity(root);
-  assert.equal(rooms.find((room) => room.id === "default")?.love, true);
-  assert.equal(rooms.find((room) => room.id === "child")?.love, true);
-
-  const offReply = await child.runLoveCommand(true);
-  assert.match(offReply, /OFF/);
-  const clearedRoot = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
-  assert.equal(clearedRoot.love, undefined);
-  assert.equal((await child.getSnapshot()).room.love, undefined);
-  assert.equal((await rootService.getSnapshot()).room.love, undefined);
-});
-
-test("/scaffold: steward subroom — first-class (subroom:true) under the origin, titled from the task, steward seeded and running the task as its first message; origin gets the durable note", async () => {
-  // roomPeer opens the SUBROOM's own resident service (single-writer rule);
-  // the workspace ref is filled after makeService returns — the peer hook only
-  // fires later, inside sendMessage.
-  let workspaceRef: Workspace | undefined;
-  const opened: string[] = [];
-  const children: RoomService[] = [];
-  const { service, workspace, root } = await makeService({
-    roomPeer: async (roomId) => {
-      opened.push(roomId);
-      const child = await RoomService.open({
-        workspaceId: "ws1",
-        workspace: workspaceRef!,
-        roomId,
-        memoryStore: new MemoryStore(),
-        runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: "on it" } as AgentEvent]),
-      });
-      await child.init();
-      children.push(child);
-      return child;
-    },
-  });
-  workspaceRef = workspace;
-  await service.init();
-
-  const task = await service.sendMessage("/scaffold ship the vault UI");
-  assert.equal(task.status, "complete", "synchronous command task settles");
-  assert.equal(opened.length, 1, "exactly one steward subroom minted");
-  const childId = opened[0];
-
-  // Subroom state: nested under the origin, FIRST-CLASS (not a summon lane),
-  // steward active, titled from the task in the human's words (auto — living).
-  const childState = normalizeRoomState(await readJson(workspacePaths.roomState(root, childId)));
-  assert.equal(childState.parentRoomId, "default", "nests under the origin room");
-  assert.equal(childState.subroom, true, "subroom:true — isSummonRoom stays parentRoomId && !subroom");
-  assert.equal(childState.activeAgent, "gaia", "steward is the active agent");
-  assert.equal(childState.title, "ship the vault UI");
-  assert.equal(childState.titleSource, "auto");
-
-  // The task ran as the subroom's FIRST message and the steward took the turn.
-  await children[0].waitForIdle();
-  const childTranscript = await (await RoomHandle.open(root, childId)).recentEvents(20);
-  assert.equal(childTranscript.find((event) => event.author === "user")?.text, "ship the vault UI", "task forwarded verbatim as the first message");
-  assert.ok(childTranscript.some((event) => event.author === "gaia"), "steward turn ran immediately");
-
-  // Origin room: durable system note naming the subroom.
-  const originTranscript = await (await RoomHandle.open(root, "default")).recentEvents(20);
-  const note = originTranscript.find((event) => event.author === "system" && event.text.includes(childId));
-  assert.ok(note, "origin system note carries the subroom id");
-  assert.ok(note!.text.includes("ship the vault UI"), "note names the task title");
-
-  // Origin room untouched otherwise: no queue slot, no flag.
-  const originState = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
-  assert.equal(originState.queue, undefined, "/scaffold never queues in the origin");
-});
-
-test("/teleport on|off flips a durable room-local flag synchronously and commits a system note", async () => {
-  let release!: () => void;
-  let markStarted!: () => void;
-  const started = new Promise<void>((resolve) => (markStarted = resolve));
-  const hold = new Promise<void>((resolve) => (release = resolve));
-  const { service, root } = await makeService({
-    runtimeFactory: (agent) => {
-      const runtime = scriptedRuntime(agent, () => []);
-      runtime.send = async function* () {
-        markStarted();
-        yield { type: "text-delta", delta: "still " } as AgentEvent;
-        await hold;
-        yield { type: "text-delta", delta: "running" } as AgentEvent;
+      const runtime = scriptedRuntime(agent, script);
+      const send = runtime.send.bind(runtime);
+      runtime.send = (input) => {
+        seen.push(input.transcript.length);
+        return send(input);
       };
       return runtime;
     },
   });
-  await service.init();
-  const turn = await service.sendMessage("hold the lane");
-  await started;
-
-  const toggle = await service.sendMessage("/teleport on");
-  assert.equal(toggle.status, "complete");
-  let state = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
-  assert.equal(state.teleport, true);
-  assert.equal((await service.getSnapshot()).room.teleport, true);
-  assert.equal(state.queue, undefined, "toggle did not queue behind the running turn");
-  let transcript = await (await RoomHandle.open(root, "default")).recentEvents(20);
-  assert.ok(transcript.some((event) => event.author === "system" && event.text === "teleport on — gaiaport link active"));
-
-  release();
+  await service.sendMessage("first question");
   await service.waitForIdle();
-  assert.equal(turn.status, "complete");
 
-  await service.sendMessage("/teleport off");
-  state = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
-  assert.equal(state.teleport, false);
-  assert.equal((await service.getSnapshot()).room.teleport, false);
-  transcript = await (await RoomHandle.open(root, "default")).recentEvents(20);
-  assert.ok(transcript.some((event) => event.author === "system" && event.text === "teleport off — gaiaport link inactive"));
+  // Shrink the transcript behind the cursor, exactly as an external rewrite
+  // would, leaving agentCursors.gaia pointing past EOF.
+  const room = await RoomHandle.open(root, "default");
+  const before = (await room.eventsFrom(0)).events;
+  assert.ok((await room.state()).agentCursors.gaia > 1, "precondition: cursor advanced past the first line");
+  await writeFile(workspacePaths.transcript(root, "default"), `${JSON.stringify(before[0])}\n`, "utf8");
+
+  seen.length = 0;
+  await service.sendMessage("second question");
+  await service.waitForIdle();
+
+  assert.ok(seen[0] >= 2, `agent got ${seen[0]} events — a stale cursor silently emptied its context`);
+  assert.equal((await room.state()).agentCursors.gaia, 3, "the impossible cursor was not reset");
 });
 
-test("/berserk is the plateau-breaker: flag lands synchronously, proclamation committed, and the command rewrites into a berserker-charge agent turn", async () => {
-  const { service, root } = await makeService();
-  await service.init();
-  await service.sendMessage("/berserk");
+// A cursor that equals EOF is the HEALTHY steady state, not corruption: a
+// continuation turn that records no new user event (goal continuations, agent
+// hand-offs, resume — recordUserMessage:false) legitimately starts with zero
+// new events. Treating "empty page" as a stale cursor replayed the entire
+// history into the model and reset the stored cursor to 0 forever.
+test("a continuation turn whose cursor sits exactly at EOF replays nothing and keeps its cursor", async () => {
+  const seen: number[] = [];
+  const { service, root } = await makeService({
+    agents: ["gaia"],
+    runtimeFactory: (agent) => {
+      const runtime = scriptedRuntime(agent, () => [{ type: "text-delta", delta: "reply" } as AgentEvent]);
+      const send = runtime.send.bind(runtime);
+      runtime.send = (input) => {
+        seen.push(input.transcript.length);
+        return send(input);
+      };
+      return runtime;
+    },
+  });
+  await service.sendMessage("first question");
   await service.waitForIdle();
 
-  const state = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
-  assert.equal(state.berserk, true, "deathmode flag set durably");
+  const room = await RoomHandle.open(root, "default");
+  const eof = (await room.eventsFrom(0)).nextCursor;
+  await room.updateState((state) => {
+    state.agentCursors.gaia = eof;
+  });
 
-  const transcript = await (await RoomHandle.open(root, "default")).recentEvents(20);
-  const system = transcript.find((event) => event.author === "system" && /BERSERK/.test(event.text));
-  assert.ok(system, "proclamation committed to the transcript");
-  const charge = transcript.find((event) => event.author === "user" && /berserker is summoned/.test(event.text));
-  assert.ok(charge, "the command rewrote into the berserker-charge turn");
-  assert.ok(transcript.some((event) => event.author === "gaia"), "the leading agent actually took the charge turn");
+  // Continuation: nothing new is recorded, so the page IS legitimately empty.
+  seen.length = 0;
+  await service.sendMessage("continue", { recordUserMessage: false });
+  await service.waitForIdle();
+
+  assert.equal(seen[0], 0, `continuation replayed ${seen[0]} events — cursor==EOF was mistaken for corruption`);
+  assert.ok((await room.state()).agentCursors.gaia >= eof, "the healthy cursor was rewritten backwards");
+});
+
+// The genuine corruption must still clamp: a cursor PAST EOF (transcript
+// shrank out of band) replays from 0 rather than feeding the agent nothing.
+test("a cursor past EOF still clamps to a full replay", async () => {
+  const seen: number[] = [];
+  const { service, root } = await makeService({
+    agents: ["gaia"],
+    runtimeFactory: (agent) => {
+      const runtime = scriptedRuntime(agent, () => [{ type: "text-delta", delta: "reply" } as AgentEvent]);
+      const send = runtime.send.bind(runtime);
+      runtime.send = (input) => {
+        seen.push(input.transcript.length);
+        return send(input);
+      };
+      return runtime;
+    },
+  });
+  await service.sendMessage("first question");
+  await service.waitForIdle();
+
+  const room = await RoomHandle.open(root, "default");
+  await room.updateState((state) => {
+    state.agentCursors.gaia = 9999;
+  });
+  seen.length = 0;
+  await service.sendMessage("second question");
+  await service.waitForIdle();
+
+  assert.ok(seen[0]! >= 3, `agent got ${seen[0]} events — the impossible cursor was not clamped`);
+  assert.equal((await room.state()).agentCursors.gaia, (await room.eventsFrom(0)).events.length, "cursor left impossible");
+});
+
+// --- context-diet (09-MEMORY-CONTEXT): /diet room command + dietView/dietSet/toolResultSlice ---
+
+test("/diet status: OFF by default (IRON), on/off toggles the room override, --workspace toggles the workspace default", async () => {
+  const { service } = await makeService();
+  assert.match(await service.runDietCommand("status", "room"), /preset=off/);
+
+  const onMsg = await service.runDietCommand("on", "room");
+  assert.match(onMsg, /enabled for this room/);
+  assert.match(onMsg, /preset=on/);
+  assert.match(await service.runDietCommand("status", "room"), /preset=on/);
+
+  const offMsg = await service.runDietCommand("off", "room");
+  assert.match(offMsg, /disabled for this room/);
+  assert.match(await service.runDietCommand("status", "room"), /preset=off/);
+
+  // A workspace-default toggle only reaches rooms with NO room-level override
+  // of their own — this room already has one (from the /diet off above), so
+  // its own override still wins, exactly like a real config layering.
+  const workspaceMsg = await service.runDietCommand("on", "workspace");
+  assert.match(workspaceMsg, /enabled for this workspace/);
+  assert.match(await service.runDietCommand("status", "room"), /preset=off/);
+});
+
+test("/diet on --workspace: reaches a room with no override of its own", async () => {
+  const { service } = await makeService();
+  assert.match(await service.runDietCommand("status", "room"), /preset=off/);
+  await service.runDietCommand("on", "workspace");
+  assert.match(await service.runDietCommand("status", "room"), /preset=on/);
+});
+
+test("dietView/dietSet: room override wins over the workspace default, and is visible in the view", async () => {
+  const { service } = await makeService();
+  await service.dietSet({ scope: "workspace", patch: { preset: false, toolTailLines: 12 } });
+  const view = await service.dietSet({ scope: "room", patch: { preset: true } });
+  assert.equal(view.effective.preset, true);
+  assert.equal(view.effective.toolTailLines, 12); // inherited from the workspace default
+  assert.deepEqual(view.roomOverrides, { preset: true });
+});
+
+test("a turn only carries dietPolicy on AgentInput once /diet on has run for this room (default OFF sends nothing)", async () => {
+  const seen: Array<AgentInput["dietPolicy"]> = [];
+  const { service } = await makeService({
+    agents: ["gaia"],
+    runtimeFactory: (agent) => {
+      const runtime = scriptedRuntime(agent, () => [{ type: "text-delta", delta: "reply" } as AgentEvent]);
+      const send = runtime.send.bind(runtime);
+      runtime.send = (input) => {
+        seen.push(input.dietPolicy);
+        return send(input);
+      };
+      return runtime;
+    },
+  });
+  await service.sendMessage("first");
+  await service.waitForIdle();
+  assert.equal(seen[0], undefined, "diet is OFF by default — AgentInput.dietPolicy is absent, zero behavior change");
+
+  await service.runDietCommand("on", "room");
+  await service.sendMessage("second");
+  await service.waitForIdle();
+  assert.equal(seen[1]?.preset, true);
+});
+
+test("toolResultSlice: pages back the original call/args/result for a tool call recorded on a committed agent event", async () => {
+  const { service } = await makeService({
+    agents: ["gaia"],
+    script: () => [
+      { type: "tool-start", toolCallId: "tool-1", toolName: "bash", args: { command: "ls" } },
+      { type: "tool-end", toolCallId: "tool-1", toolName: "bash", result: { content: [{ type: "text", text: "file-a\nfile-b" }] }, isError: false },
+      { type: "text-delta", delta: "done" },
+    ],
+  });
+  await service.sendMessage("list files");
+  await service.waitForIdle();
+
+  const { events } = await service.room.eventsFrom(0);
+  const reply = events[1] as { id: string };
+
+  const full = await service.toolResultSlice("gaia", reply.id, "tool-1", 0, 10_000);
+  assert.ok(full);
+  assert.match(full!.text, /"call": "bash"/);
+  assert.match(full!.text, /file-a\\nfile-b/);
+  assert.equal(full!.hasMore, false);
+  assert.equal(await service.toolResultSlice("other-agent", reply.id, "tool-1", 0, 100), undefined);
+
+  const paged = await service.toolResultSlice("gaia", reply.id, "tool-1", 0, 5);
+  assert.equal(paged?.text.length, 5);
+  assert.equal(paged?.hasMore, true);
+
+  assert.equal(await service.toolResultSlice("gaia", reply.id, "no-such-tool", 0, 100), undefined);
+  assert.equal(await service.toolResultSlice("gaia", "no-such-event", "tool-1", 0, 100), undefined);
+});
+
+test("agent conversation ending is visible, suppresses automatic turns, and a user message reactivates it", async () => {
+  const { service, runtimes } = await makeService({ script: () => [{ type: "text-delta", delta: "reply" } as AgentEvent] });
+  const farewell = "All set — goodbye for now.";
+  await service.endConversation("gaia", farewell);
+  assert.equal((await service.room.state()).conversationEndedAgents?.gaia !== undefined, true);
+  assert.equal((await service.room.eventsFrom(0)).events.at(-1)?.text, farewell, "farewell is a durable visible room event");
+
+  // This is agent-originated work, not a human callback: it must be discarded.
+  await service.room.enqueue({ taskId: "automatic-gaia", text: "continue", targets: ["gaia"], fromAgentDialogue: true, queuedAt: new Date().toISOString() });
+  await service.sendMessage("@terry carry on");
+  await service.waitForIdle();
+  assert.equal(runtimes.get("gaia")?.sends, 0, "ended agent receives no automatic turn");
+
+  await service.sendMessage("@gaia please come back");
+  await service.waitForIdle();
+  assert.equal(runtimes.get("gaia")?.sends, 1, "a user message reactivates the agent");
+  assert.equal((await service.room.state()).conversationEndedAgents?.gaia, undefined);
+});
+
+test("agent conversation ending honors the workspace feature flag", async () => {
+  const { service } = await makeService({ config: { agentEndConversation: false } });
+  await assert.rejects(() => service.endConversation("gaia", "Goodbye."), /disabled by workspace config/);
+  assert.equal((await service.room.eventsFrom(0)).events.length, 0);
+});
+
+test("/stt and /tts switch the global dictation engine without erasing voice settings", async () => {
+  const { service } = await makeService();
+  const voicePath = join(process.env.GAIA_HOME!, "voice.json");
+  const seeded = {
+    sttEngine: "elevenlabs",
+    elevenLabsApiKey: "fake-eleven-secret",
+    sttReplicateApiKey: "fake-replicate-secret",
+    futureVoiceSetting: { version: 7 },
+  };
+  await writeFile(voicePath, JSON.stringify(seeded), "utf8");
+
+  assert.match(await service.runSttCommand(), /Speech-to-text engine: elevenlabs/);
+  const switched = await service.runSttCommand("replicate", "tts");
+  assert.match(switched, /switched to replicate/);
+  assert.match(switched, /\/tts.*voice input/);
+  assert.deepEqual(JSON.parse(await readFileText(voicePath, "utf8")), { ...seeded, sttEngine: "replicate" });
+
+  const beforeUnknown = await readFileText(voicePath, "utf8");
+  assert.match(await service.runSttCommand("ghost"), /Unknown STT engine/);
+  assert.equal(await readFileText(voicePath, "utf8"), beforeUnknown, "unknown engine never rewrites voice.json");
+
+  await writeFile(voicePath, "{malformed", "utf8");
+  assert.match(await service.runSttCommand("openai"), /voice\.json is malformed/);
+  assert.equal(await readFileText(voicePath, "utf8"), "{malformed", "malformed settings remain untouched");
 });

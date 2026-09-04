@@ -7,7 +7,7 @@ import { focusComposerFromBackground, initComposer, installComposerRouting } fro
 import { $ } from "./dom.js";
 import { installKeybindings } from "./keys.js";
 import { installOpenModifierTracking } from "./links.js";
-import { launchIntent, onNativeEvent } from "./native.js";
+import { installMacTitlebar, launchIntent, onNativeEvent } from "./native.js";
 import { markDirty, mountApp } from "./render.js";
 import { loadStudioProject } from "./studio/actions.js";
 import { studio } from "./studio/state.js";
@@ -35,6 +35,7 @@ import { initCanvas } from "./canvas.js";
 // paint so there is no flash.
 initTheme();
 initStatusbarPref();
+installMacTitlebar();
 restoreColumnWidths();
 
 mountApp();

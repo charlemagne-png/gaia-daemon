@@ -20,13 +20,13 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SqliteDatabase as DatabaseSync } from "../core/sqlite.js";
 import { openSqlite } from "../core/sqlite.js";
 import { workspacePaths } from "../core/paths.js";
 import type { Episode, EpisodeOutcome } from "./episodes.js";
 import { readEpisodesFrom } from "./episodes.js";
+import { readTranscriptRecordsFrom } from "./rooms.js";
 import type { FactSource } from "./facts.js";
 import { readFactOpsFrom, sharedFactsDir, WORKSPACE_FACTS_AGENT } from "./facts.js";
 
@@ -191,16 +191,29 @@ export function sharedMemorySource(workspaceRoot: string): AgentMemoryRef {
 }
 
 /** True when a room's state.json marks it incognito — such rooms are invisible
- * to recall, so their transcripts are never indexed. Best-effort: a room whose
- * state can't be read (missing, mid-write, corrupt) is treated as NON-incognito,
- * i.e. indexed — failing open keeps normal rooms recallable, and an incognito
- * room's state is written once at creation before any turn exists to index. */
+ * to recall, so their transcripts are never indexed. FAIL-CLOSED on unreadable
+ * bytes: a state document that exists but cannot be parsed (corrupt, torn
+ * mid-write) may be an incognito room, and treating it as public would leak a
+ * private transcript into recall — privacy loss is unrecoverable, a skipped
+ * index entry is not. A MISSING state file is not a room at all (nothing was
+ * ever created here), so it stays indexable. */
 function roomIsIncognito(workspaceRoot: string, roomId: string): boolean {
+  let raw: string;
   try {
-    const raw = readFileSync(workspacePaths.roomState(workspaceRoot, roomId), "utf8");
-    return (JSON.parse(raw) as { incognito?: unknown }).incognito === true;
+    raw = readFileSync(workspacePaths.roomState(workspaceRoot, roomId), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    return true;
+  }
+  try {
+    const state = JSON.parse(raw) as unknown;
+    // A present malformed privacy bit is not evidence of public visibility.
+    // Keep it private even though the room normalizer would drop that value.
+    if (!state || typeof state !== "object" || Array.isArray(state)) return true;
+    const fields = state as Record<string, unknown>;
+    return ("incognito" in fields && typeof fields.incognito !== "boolean") || fields.incognito === true;
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -345,12 +358,12 @@ async function syncRoomChunks(db: DatabaseSync, room: RoomRef): Promise<boolean>
     | undefined;
   if (cursor && cursor.mtime_ms === stat.mtimeMs && cursor.size_bytes === stat.size) return false;
 
-  const raw = await readFile(room.transcriptPath, "utf8").catch(() => "");
-  const lines = raw.split("\n").filter((line) => line.trim());
+  const transcript = await readTranscriptRecordsFrom(room.transcriptPath).catch(() => ({ items: [], nextCursor: 0 }));
+  const lineCount = transcript.nextCursor;
   let from = cursor?.closed_lines ?? 0;
   // Fewer lines than indexed ⇒ the transcript was replaced, hand-edited, or
   // /rewind-truncated: rebuild this room from scratch for consistency.
-  if (lines.length < (cursor?.total_lines ?? 0)) {
+  if (lineCount < (cursor?.total_lines ?? 0)) {
     deleteRoomChunks(db, room.roomId, 0);
     from = 0;
   } else {
@@ -359,13 +372,9 @@ async function syncRoomChunks(db: DatabaseSync, room: RoomRef): Promise<boolean>
   }
 
   const events: ChunkEvent[] = [];
-  for (let idx = from; idx < lines.length; idx += 1) {
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(lines[idx]) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
+  for (const parsed of transcript.items) {
+    const idx = parsed.lineIndex;
+    if (idx < from) continue;
     if (typeof parsed.text !== "string" || typeof parsed.author !== "string" || !parsed.text.trim()) continue;
     // System events are room chrome (slash-command replies), never conversation.
     if (parsed.author === "system") continue;
@@ -400,10 +409,10 @@ async function syncRoomChunks(db: DatabaseSync, room: RoomRef): Promise<boolean>
   }
 
   const openChunk = chunks.find((chunk) => chunk.open);
-  const closedLines = openChunk ? openChunk.firstIdx : lines.length;
+  const closedLines = openChunk ? openChunk.firstIdx : lineCount;
   db.prepare(
     "INSERT INTO rooms (room_id, closed_lines, total_lines, mtime_ms, size_bytes) VALUES (?, ?, ?, ?, ?) ON CONFLICT(room_id) DO UPDATE SET closed_lines = excluded.closed_lines, total_lines = excluded.total_lines, mtime_ms = excluded.mtime_ms, size_bytes = excluded.size_bytes",
-  ).run(room.roomId, closedLines, lines.length, stat.mtimeMs, stat.size);
+  ).run(room.roomId, closedLines, lineCount, stat.mtimeMs, stat.size);
   return true;
 }
 
@@ -1164,20 +1173,15 @@ export async function scrollTranscriptWindow(
   }
   if (!row) return undefined;
   const transcriptPath = workspacePaths.transcript(workspaceRoot, row.room_id);
-  const raw = await readFile(transcriptPath, "utf8").catch(() => "");
-  if (!raw) return undefined;
-  const lines = raw.split("\n").filter((line) => line.trim());
+  const transcript = await readTranscriptRecordsFrom(transcriptPath).catch(() => ({ items: [], nextCursor: 0 }));
+  if (transcript.nextCursor === 0) return undefined;
   const center = Math.floor((row.first_idx + row.last_idx) / 2) + (options.offset ?? 0);
   const from = Math.max(0, center - span);
-  const to = Math.min(lines.length - 1, center + span);
-  const out: string[] = [`room ${row.room_id} · events ${from}–${to} of ${lines.length} (hit ${chunkId} at ${row.first_idx}–${row.last_idx})`];
-  for (let idx = from; idx <= to; idx += 1) {
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(lines[idx]) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
+  const to = Math.min(transcript.nextCursor - 1, center + span);
+  const out: string[] = [`room ${row.room_id} · events ${from}–${to} of ${transcript.nextCursor} (hit ${chunkId} at ${row.first_idx}–${row.last_idx})`];
+  for (const parsed of transcript.items) {
+    const idx = parsed.lineIndex;
+    if (idx < from || idx > to) continue;
     if (typeof parsed.text !== "string" || typeof parsed.author !== "string") continue;
     const marker = idx >= row.first_idx && idx <= row.last_idx ? "▶" : " ";
     const text = parsed.text.length > 500 ? `${parsed.text.slice(0, 500)}…` : parsed.text;

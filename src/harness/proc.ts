@@ -80,22 +80,25 @@ export function spawnLineReader(options: SpawnLineReaderOptions): SpawnLineReade
  * guaranteed to stop the agent. Requires the child to have been spawned
  * `detached`. No-op once the child is gone.
  */
-export function killProcessTree(proc: ChildProcess): void {
+/** Signal `proc`'s complete process group. Falls back to the direct child when
+ * no separate group exists or the group already exited. */
+export function signalProcessTree(proc: ChildProcess, signal: NodeJS.Signals): void {
   const pid = proc.pid;
   if (pid === undefined) return;
-  const signalGroup = (signal: NodeJS.Signals) => {
+  try {
+    process.kill(-pid, signal);
+  } catch {
     try {
-      process.kill(-pid, signal);
+      proc.kill(signal);
     } catch {
-      try {
-        proc.kill(signal);
-      } catch {
-        // Already gone.
-      }
+      // Already gone.
     }
-  };
-  signalGroup("SIGTERM");
-  const grace = setTimeout(() => signalGroup("SIGKILL"), 2000);
+  }
+}
+
+export function killProcessTree(proc: ChildProcess): void {
+  signalProcessTree(proc, "SIGTERM");
+  const grace = setTimeout(() => signalProcessTree(proc, "SIGKILL"), 2000);
   grace.unref?.();
   proc.once("exit", () => clearTimeout(grace));
 }
@@ -110,19 +113,10 @@ export function isMissingBinary(error: unknown): boolean {
   );
 }
 
-/**
- * A uniform "<label> is unavailable" startup error. On ENOENT it names the
- * missing `binary`; otherwise it carries the underlying message plus any
- * captured stderr. `binary`/`label` are data so this never branches on which
- * harness called it (AGENTS.md §RULE #0).
- */
 export function missingBinaryError(binary: string, label: string, error: unknown, stderr?: string): Error {
-  if (isMissingBinary(error)) {
-    return new Error(`${label} is unavailable: the \`${binary}\` CLI was not found in PATH.`);
-  }
+  if (isMissingBinary(error)) return new Error(`${label} binary not found: ${binary}`);
   const message = error instanceof Error ? error.message : String(error);
-  const details = stderr?.trim();
-  return new Error(`${label} is unavailable: ${message}${details ? `\n\n${binary} stderr:\n${details}` : ""}`);
+  return new Error(stderr?.trim() ? `${label} failed: ${message}\n${stderr.trim()}` : `${label} failed: ${message}`);
 }
 
 /**

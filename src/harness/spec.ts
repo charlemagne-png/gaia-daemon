@@ -7,11 +7,14 @@
 // (AGENTS.md §RULE #0).
 
 import { DEFAULTS } from "../core/config.js";
+import { canonicalHarnessId } from "../core/harness-id.js";
 import type { AgentDef, AgentEvent, BackgroundTaskInfo, CompactProgressUpdate, CompactResult, MessageAttachment, RoomBookmark, RoomEvent, UsageProbeResult, Workspace } from "../core/types.js";
 import { listAccounts, type AccountRecord } from "../domain/accounts.js";
 import type { MemoryStore } from "../domain/memory.js";
 import type { MemorySearchHit } from "../domain/workspace-index.js";
 import type { ResolvedRole } from "../domain/roles.js";
+import type { ContextDietOverrides, ContextDietPolicy } from "../domain/context-diet.js";
+import type { ToolProviders } from "./protocol.js";
 
 // --- what a runtime consumes and produces ------------------------------------
 
@@ -37,22 +40,16 @@ export interface AgentInput {
   /** Room-wide GAIA-THINK protocol level (0-10) from RoomState.thinkingLevel;
    * rides into the `# Protocols` section of the system prompt. Unset = 0. */
   protocolThinkingLevel?: number;
-  /** /berserk adversarial deathmode is active for this room's tree (resolved
-   * by RoomService via the parentRoomId walk). Rides into the turn prompt's
-   * BERSERK block through the shared seam — uniform for every harness. */
+  /** /berserk tree mode is active for this room. */
   berserk?: boolean;
-  /** /love lovemode is active for this room's tree (resolved by RoomService
-   * via the parentRoomId walk). Rides into the turn prompt's LOVE block
-   * through the shared seam — uniform for every harness. */
+  /** /love tree mode is active for this room. */
   love?: boolean;
   /** Auto-retrieved memory block for this turn ("" / absent = nothing cleared
    * the relevance gate). Turn-level overlay, never part of the session. */
   recall?: string;
-  /** User-named checkpoints from RoomState.bookmarks, rendered by the shared prompt seam. */
+  /** User-named checkpoints from RoomState.bookmarks. */
   checkpoints?: RoomBookmark[];
-  /** Voice-control concierge overlay: workspace room index for this turn only.
-   * Present only when the triggering user message carried the durable
-   * voice-origin tag. */
+  /** Voice-control concierge overlay: room index for this turn only. */
   voiceRoomMap?: string;
   /** Room-local context supplied by installed command plugins. Resolved once in
    * RoomService and threaded through every harness by the shared prompt seam. */
@@ -68,6 +65,10 @@ export interface AgentInput {
    * shared transcript renderer uses for the human's own messages, in place of
    * the anonymous "user" token. "" / absent keeps that default. */
   userName?: string;
+  /** Context-diet policy for this turn (09-MEMORY-CONTEXT, /diet room command
+   * — services/context-policy-store.ts). Absent, or `preset:false`, renders
+   * the turn prompt IDENTICALLY to no diet at all: default OFF, IRON. */
+  dietPolicy?: ContextDietPolicy;
 }
 
 export interface AgentRuntime {
@@ -80,11 +81,6 @@ export interface AgentRuntime {
    * any queued events, so the uniform runner sends `turn-error` and the room
    * can commit the accumulated partial instead of mistaking it for success. */
   send(input: AgentInput): AsyncIterable<AgentEvent>;
-  /** Shared runner liveness seam: true only while this runtime owns a living
-   * subprocess turn for `roomId`. Watchdogs use it without learning a harness
-   * id; absent on in-process/test runtimes means the room's task state is the
-   * conservative source of truth. */
-  hasLiveTurn?(roomId: string): boolean;
   abort(): Promise<void>;
   /** Inject guidance into the room's RUNNING turn (backs /steer). Resolves
    * false when there is nothing to steer. Only present when
@@ -108,6 +104,15 @@ export interface AgentRuntime {
    * receives whatever token counts the harness can report as the pass runs
    * (best-effort). Only present when capabilities.supportsCompact. */
   compact?(roomId: string, onProgress?: (update: CompactProgressUpdate) => void): Promise<CompactResult>;
+  /** Native compaction that drops prior compaction summaries instead of
+   * chaining them ("clean" pass). Optional: harnesses without it reject. */
+  compactClean?(roomId: string, onProgress?: (update: CompactProgressUpdate) => void): Promise<CompactResult>;
+  /** Prepare a native compaction summary without evicting the live session.
+   * Only present when capabilities.supportsCompactEdit. */
+  compactDraft?(roomId: string): Promise<{ compacted: boolean; message: string; summary?: string }>;
+  /** Commit a previously prepared native compaction with user-edited summary
+   * text. Only present when capabilities.supportsCompactEdit. */
+  compactApply?(roomId: string, editedSummary: string, onProgress?: (update: CompactProgressUpdate) => void): Promise<CompactResult>;
   /** Fork the harness's OWN durable session to the point of a prior user
    * message (backs edit/retry — /compact's exact sibling). Only present when
    * capabilities.supportsForkAtMessage: a harness with no native fork
@@ -182,6 +187,9 @@ export interface HarnessCapabilities {
    * session.compact, claude /compact, codex thread compaction)? Backs
    * /compact. */
   readonly supportsCompact: boolean;
+  /** Can prepare a native compaction draft for review, then apply an edited
+   * summary without re-running the LLM. */
+  readonly supportsCompactEdit?: boolean;
   /** Has a native DURABLE session fork the runtime can invoke to branch onto
    * a prior user message (pi session.sessionManager.createBranchedSession)?
    * Backs edit/retry: when true, room-service forks the harness's OWN
@@ -256,6 +264,49 @@ export interface RuntimeCreateContext {
   harnessHost?: HarnessHost;
   /** Hybrid memory search (facts + episodes + room history), daemon-side. */
   recallSearch?: RecallSearch;
+  /** Pages the ORIGINAL, uncollapsed call/args/result for a diet-collapsed own
+   * tool-call stub back by (eventId, toolId) — backs the `tool_result_fetch`
+   * gaia-tool verb (09-MEMORY-CONTEXT). Absent — as in an incognito/no-bridge
+   * run — makes the verb unavailable rather than erroring the whole tool. */
+  toolResultFetch?: ToolResultFetch;
+  /** Read/patch the context-diet policy (workspace default + this room's
+   * override) — backs the `diet` gaia-tool verb and the `/diet` room command;
+   * ONE implementation, two surfaces. */
+  contextDiet?: ContextDietAccess;
+  /** Gracefully end this agent's current room conversation with a visible farewell. */
+  endConversation?: EndConversation;
+  /** Service implementations for the shared tool port. */
+  toolProviders?: ToolProviders;
+}
+
+/** Pages a diet-collapsed own tool-call stub's original content back, 32k
+ * chars/page (mirrors gaia-daemon-v2's tool_result_fetch guarded tool). */
+export interface EndConversation {
+  (params: { farewell: string }): Promise<string>;
+}
+/** Pages a diet-collapsed own tool-call stub's original content back, 32k
+ * chars/page (mirrors gaia-daemon-v2's tool_result_fetch guarded tool). */
+export interface ToolResultFetch {
+  (params: { sessionId: string; entryId: string; offset: number; limit: number }): Promise<{
+    text: string;
+    totalLength: number;
+    hasMore: boolean;
+  }>;
+}
+
+/** Effective policy plus this room's raw overrides (for display) — what both
+ * the gaia-tool `diet` verb and the `/diet` room command read and mutate. */
+export interface ContextDietView {
+  effective: ContextDietPolicy;
+  roomOverrides: ContextDietOverrides;
+}
+
+export interface ContextDietAccess {
+  get(): Promise<ContextDietView>;
+  /** `scope: "room"` patches this room's override document; `"workspace"`
+   * patches the workspace-wide default every room without its own override
+   * inherits. */
+  set(params: { scope: "room" | "workspace"; patch: ContextDietOverrides }): Promise<ContextDietView>;
 }
 
 /** Search long-term memory; hits are pre-ranked (see domain/workspace-index).
@@ -321,27 +372,17 @@ export interface AccountFieldDef {
  * `command`, feeds ANSI-stripped output through the extractors, forwards the
  * user's paste-back input, and stores the resulting credential bag — never
  * learning what any of it means (RULE #0). */
-export interface AccountLoginVariant {
-  key: string;
-  label: string;
-  initialInput?: string[];
-  /** Provider ids this login option authorizes, stored on the account record. */
-  providers?: string[];
-}
-
 export interface AccountLoginSpec {
-  /** Provider ids this login authorizes when no variant overrides them. */
+  /** Optional selectable login variants. */
+  variants?: Array<{ key: string; label: string; providers?: string[]; initialInput?: string[] }>;
+  /** Optional provider ids this login can satisfy. */
   providers?: string[];
-  /** Optional alternate terminal flows for the same harness. */
-  variants?: AccountLoginVariant[];
+  /** Optional initial stdin lines for the flow. */
+  initialInput?: string[];
   /** The interactive command. ctx.configDir is a THROWAWAY isolated dir the
    * flow must be pointed at so it can never disturb the machine's ambient
    * login (e.g. claude's keychain session). */
   command(ctx: { configDir: string; initialInput?: string[] }): { argv: string[]; env?: Record<string, string> };
-  /** Optional startup keystrokes for CLIs whose login lives behind an
-   * interactive slash command/menu. Sent to the pty after spawn, before user
-   * paste-back input is forwarded. */
-  initialInput?: string[];
   /** Extract the sign-in URL from the output so far, once present. */
   signInUrl(output: string): string | undefined;
   /** True while the flow is waiting for a paste-back code from the user. */
@@ -375,12 +416,6 @@ export interface HarnessAccountsSpec {
   env(credentials: Record<string, string>): Record<string, string>;
   /** Best-effort identity extraction from an opaque credential bag. */
   email?(credentials: Record<string, string>): string | undefined;
-  /** On-disk auth.json path for an account's materialized credential store,
-   * for IN-PROCESS provider calls (memory consolidation) that bypass env():
-   * they build the model runtime from this path so the call authenticates as
-   * the bound account (OAuth auto-refreshed) instead of the daemon's ambient
-   * login. Absent ⇒ in-process calls fall back to the ambient auth store. */
-  authStoragePath?(credentials: Record<string, string>): string | undefined;
   /** Interactive in-app login; absent = accounts for this harness are created
    * by pasting credentials into accounts.json directly. */
   login?: AccountLoginSpec;
@@ -514,17 +549,18 @@ export function harnessSpecs(): HarnessSpec[] {
 }
 
 export function findHarness(id: string): HarnessSpec | undefined {
-  return registry.get(id);
+  return registry.get(canonicalHarnessId(id));
 }
 
 export function harnessSpecFor(id: string): HarnessSpec {
-  const spec = registry.get(id);
+  const canonical = canonicalHarnessId(id);
+  const spec = registry.get(canonical);
   if (!spec) throw new Error(`Unsupported harness: ${id}`);
   return spec;
 }
 
 export function capabilitiesFor(id: string): HarnessCapabilities {
-  const spec = registry.get(id) ?? registry.get(DEFAULTS.harness);
+  const spec = registry.get(canonicalHarnessId(id)) ?? registry.get(DEFAULTS.harness);
   if (!spec) throw new Error("No harnesses registered");
   return spec.capabilities;
 }
@@ -532,21 +568,16 @@ export function capabilitiesFor(id: string): HarnessCapabilities {
 /** A-priori context window for a harness/model, or undefined when unknown.
  * Read uniformly by the context gate — each harness declares its own. */
 export function contextWindowFor(id: string, model: string | undefined): number | undefined {
-  return registry.get(id)?.contextWindow?.(model);
+  return registry.get(canonicalHarnessId(id))?.contextWindow?.(model);
 }
 
 /** Native passthrough commands a harness advertises for autocomplete ([] when
  * none / unregistered). Read uniformly by the snapshot builder. */
 export function nativeCommandsFor(id: string): NativeCommandDef[] {
-  return registry.get(id)?.nativeCommands?.() ?? [];
-}
-
-/** The single harness parser: valid iff registered. */
-export function parseHarness(raw: unknown): string | undefined {
-  return typeof raw === "string" && registry.has(raw) ? raw : undefined;
+  return registry.get(canonicalHarnessId(id))?.nativeCommands?.() ?? [];
 }
 
 /** Effective harness for an agent in a workspace: agent → workspace → "pi". */
 export function harnessIdFor(agent: AgentDef, workspace: Workspace): string {
-  return agent.harness ?? workspace.config.harness ?? DEFAULTS.harness;
+  return canonicalHarnessId(agent.harness ?? workspace.config.harness ?? DEFAULTS.harness);
 }

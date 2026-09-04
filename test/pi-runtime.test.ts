@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MemoryStore } from "../src/domain/memory.js";
 import { findHarness, type SummonCreate } from "../src/harness/spec.js";
-import { PiRuntime, piRoomSessionDir, type PiRuntimeSessionFactory, type PiSessionLike } from "../src/harness/pi.js";
+import { mechanicalCompactionFallback, PiRuntime, piRoomSessionDir, type PiRuntimeSessionFactory, type PiSessionLike } from "../src/harness/pi.js";
 import { collect, harnessFixture } from "./helpers/fixture.js";
 import { createTempDir } from "./helpers/temp.js";
 
@@ -519,6 +519,56 @@ test("PiRuntime.compact surfaces the SDK's summary for durable compaction", asyn
   }
 });
 
+test("PiRuntime.compactDraft captures a summary without evicting, then compactApply commits the edited text", async () => {
+  const fx = await harnessFixture();
+  try {
+    let evictions = 0;
+    let committedSummary: string | undefined;
+    const factory: PiRuntimeSessionFactory = async ({ loader }) => {
+      await loader.reload();
+      const session = new FakeSession("s1");
+      const hook = loader.getExtensions().extensions[0]!.handlers.get("session_before_compact")![0]!;
+      const preparation = {
+        firstKeptEntryId: "fresh-cut",
+        tokensBefore: 900,
+        messagesToSummarize: [], turnPrefixMessages: [], retainedTail: [],
+        fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
+      };
+      session.compact = async () => {
+        const result = await hook({ preparation }, { model: undefined });
+        if (result?.cancel) throw new Error("Compaction cancelled");
+        evictions += 1;
+        committedSummary = result?.compaction?.summary ?? "generated summary";
+        return { summary: committedSummary, tokensBefore: preparation.tokensBefore };
+      };
+      return { session };
+    };
+    const runtime = new PiRuntime({ workspace: fx.workspace, agent: fx.agent, memoryStore: new MemoryStore(), sessionFactory: factory });
+    await collect(runtime.send({ roomId: "default", message: "hi", transcript: [] }));
+    const draft = await runtime.compactDraft("default");
+    assert.equal(draft.compacted, false);
+    assert.match(draft.summary ?? "", /Mechanical compaction/);
+    assert.equal(evictions, 0, "draft cancellation leaves Pi's live session intact");
+    const applied = await runtime.compactApply("default", "OWNER-EDITED-SUMMARY");
+    assert.equal(applied.compacted, true);
+    assert.equal(applied.summary, "OWNER-EDITED-SUMMARY");
+    assert.equal(committedSummary, "OWNER-EDITED-SUMMARY", "apply must not reuse the draft prose");
+    assert.equal(evictions, 1);
+    runtime.dispose();
+  } finally {
+    await fx.cleanup();
+  }
+});
+test("PiRuntime.compactApply rejects clearly without a pending draft", async () => {
+  const fx = await harnessFixture();
+  try {
+    const runtime = new PiRuntime({ workspace: fx.workspace, agent: fx.agent, memoryStore: new MemoryStore() });
+    await assert.rejects(runtime.compactApply("default", "edited"), /no draft — run \/compact --edit first/);
+    runtime.dispose();
+  } finally {
+    await fx.cleanup();
+  }
+});
 test("PiRuntime.compact turns pi-ai's 'session too small' throw into a clean no-op instead of a scary failure", async () => {
   const fx = await harnessFixture();
   try {
@@ -1028,6 +1078,66 @@ test("PiRuntime with NO configured model still passes undefined through to the p
 // hasDurableSession — pi self-persists sessions as files under the room's
 // pi-sessions/<agent>/ dir; any file there is what continueRecent resumes
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// mechanicalCompactionFallback — 08-25 fix: when the room's own model IS the
+// compact-fallback model (Solas compacting Solas), a failed LLM summarize
+// has no diversity left to retry with (see compactionFallbackExtension's
+// comment). This is the deterministic non-LLM degrade path that keeps the
+// room compactable instead of deadlocking at >100% context forever.
+// ---------------------------------------------------------------------------
+
+test("mechanicalCompactionFallback carries forward the load-bearing compaction fields untouched", () => {
+  const result = mechanicalCompactionFallback(
+    {
+      firstKeptEntryId: "entry-42",
+      tokensBefore: 1_350_670,
+      previousSummary: undefined,
+      messagesToSummarize: [1, 2, 3],
+      turnPrefixMessages: [],
+      fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+    },
+    "Summarization failed: The model refused to complete the request",
+  );
+  assert.equal(result.firstKeptEntryId, "entry-42", "cut point must be preserved or the compaction can't be applied");
+  assert.equal(result.tokensBefore, 1_350_670);
+  assert.match(result.summary, /The model refused to complete the request/, "failure reason must be visible, not swallowed");
+  assert.match(result.summary, /3 message/, "honest about how much history got no narrative summary");
+});
+
+test("mechanicalCompactionFallback preserves the prior compaction chain verbatim", () => {
+  const result = mechanicalCompactionFallback(
+    {
+      firstKeptEntryId: "entry-9",
+      tokensBefore: 500,
+      previousSummary: "## Goal\nFix the ps5-jb WebKit UAF chain.",
+      messagesToSummarize: [],
+      turnPrefixMessages: [],
+      fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+    },
+    "refused",
+  );
+  assert.match(result.summary, /Fix the ps5-jb WebKit UAF chain\./, "dropping the summary chain silently loses prior context");
+});
+
+test("mechanicalCompactionFallback splits file ops the same way the real summarizer does (modified wins over read)", () => {
+  const result = mechanicalCompactionFallback(
+    {
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 100,
+      previousSummary: undefined,
+      messagesToSummarize: [],
+      turnPrefixMessages: [],
+      fileOps: {
+        read: new Set(["a.ts", "b.ts"]),
+        written: new Set(["b.ts"]),
+        edited: new Set(["c.ts"]),
+      },
+    },
+    "refused",
+  );
+  assert.deepEqual(result.details, { readFiles: ["a.ts"], modifiedFiles: ["b.ts", "c.ts"] });
+});
 
 test("hasDurableSession: true iff the room's pi session dir holds a session file", async () => {
   const temp = await createTempDir();

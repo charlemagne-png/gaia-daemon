@@ -63,7 +63,7 @@ export function mountApp() {
   const root = $("#app");
   if (!root) return;
   root.replaceChildren(
-    h("header", { class: "tabbar", id: "tabbar" }),
+    h("header", { class: "tabbar", id: "tabbar", "data-tauri-drag-region": true }),
     h(
       "div",
       { class: "body", id: "body" },
@@ -89,7 +89,6 @@ export function mountApp() {
         h("section", { class: "panel", id: "room-panel" }),
       ),
     ),
-    h("footer", { class: "statusbar", id: "statusbar" }),
     // Overlay slots: the theme palette and other overlays render into their
     // own mount points, so neither region's re-render can touch the other.
     h(
@@ -128,9 +127,10 @@ function renderLayout() {
   right.hidden = state.rightCollapsed;
   rightResizer.hidden = state.rightCollapsed;
   const cols = [];
-  if (!state.sidebarCollapsed) cols.push("var(--w-left)", "5px");
+  // Resizer columns are 0 wide; the 5px handle overhangs the pane border via negative margin (styles.css .col-resizer).
+  if (!state.sidebarCollapsed) cols.push("var(--w-left)", "0px");
   cols.push("minmax(0,1fr)");
-  if (!state.rightCollapsed) cols.push("5px", "var(--w-right)");
+  if (!state.rightCollapsed) cols.push("0px", "var(--w-right)");
   body.style.gridTemplateColumns = cols.join(" ");
 }
 
@@ -152,7 +152,8 @@ function startResize(event, side) {
   const root = document.documentElement;
   const varName = side === "left" ? "--w-left" : "--w-right";
   const startX = event.clientX;
-  const start = parseInt(getComputedStyle(root).getPropertyValue(varName), 10) || (side === "left" ? 260 : 340);
+  const pane = document.querySelector(side === "left" ? "#sidebar" : "#right");
+  const start = pane instanceof HTMLElement ? pane.getBoundingClientRect().width : (side === "left" ? 260 : 340);
   /** @param {PointerEvent} move */
   const onMove = (move) => {
     const delta = side === "left" ? move.clientX - startX : startX - move.clientX;

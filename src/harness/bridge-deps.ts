@@ -6,8 +6,9 @@
 import { daemonPost, type DaemonTarget } from "../core/daemon-client.js";
 import { MemoryStore, type MemoryAction, type MemoryMutationResult } from "../domain/memory.js";
 import type { MemorySearchHit } from "../domain/workspace-index.js";
-import { LLM_PROXY_MOUNT } from "./protocol.js";
-import type { HarnessHost, RecallSearch, ResumeCreate, SummonCreate } from "./spec.js";
+import type { ContextDietOverrides, ContextDietPolicy } from "../domain/context-diet.js";
+import { LLM_PROXY_MOUNT, type ToolProviders } from "./protocol.js";
+import type { ContextDietAccess, ContextDietView, EndConversation, HarnessHost, RecallSearch, ResumeCreate, SummonCreate, ToolResultFetch } from "./spec.js";
 
 /** MemoryStore whose writes go to the daemon (single writer); reads stay on disk. */
 export class BridgeMemoryStore extends MemoryStore {
@@ -39,6 +40,32 @@ export class BridgeMemoryStore extends MemoryStore {
       return { ok: false, message: `memory bridge error: ${error instanceof Error ? error.message : String(error)}`, state };
     }
   }
+}
+
+/** Tool service client for runner-side Pi tools. The daemon injects service
+ * implementations; this bridge only serializes the port over its existing token. */
+export function bridgeToolProviders(target: DaemonTarget): ToolProviders {
+  const call = async (operation: string, body: Record<string, unknown> = {}): Promise<unknown> => {
+    const { ok, payload } = await daemonPost(target, "/api/harness/tools", { operation, ...body });
+    if (!ok) throw new Error(typeof payload.error === "string" ? payload.error : `${operation} failed`);
+    return payload.result;
+  };
+  return {
+    artifacts: {
+      list: () => call("artifact-list"),
+      read: async (_location, artifactId) => call("artifact-read", { artifactId }) as Promise<{ manifest: unknown; payload: string }>,
+      create: async (_location, input) => call("artifact-create", input),
+      update: async (_location, artifactId, input) => call("artifact-update", { artifactId, ...input }),
+    },
+    web: {
+      search: async (request) => call("web-search", request) as Promise<{ provider: string; results: Array<{ title: string; url: string; snippet: string }> }>,
+      fetch: async (request) => call("web-fetch", request) as Promise<{ url: string; title: string; text: string; video?: { provider: string; videoId: string; lang: string; channel?: string; description?: string; transcript: string; entries: number; truncated: boolean; comments?: Array<{ author: string; likes?: number; text: string }>; commentsUnavailable?: string } }>,
+    },
+    caryll: {
+      compress: (text) => call("caryll-compress", { text }) as Promise<{ output: string; stats: { tokensBefore: number; tokensAfter: number; ratio: number; legendEntries: number } }>,
+      expand: (text) => call("caryll-expand", { text }) as Promise<string>,
+    },
+  };
 }
 
 /** recallSearch that POSTs to the daemon (deep search + reranker run
@@ -89,6 +116,51 @@ export function bridgeResumeCreate(target: DaemonTarget): ResumeCreate {
     const { ok, payload } = await daemonPost(target, "/api/harness/resume", { room: roomId, message });
     if (!ok) throw new Error(typeof payload.error === "string" ? payload.error : "resume failed");
     return typeof payload.result === "string" ? payload.result : "resume queued";
+  };
+}
+
+/** Gracefully end the calling agent's room conversation through the daemon. */
+export function bridgeEndConversation(target: DaemonTarget): EndConversation {
+  return async ({ farewell }) => {
+    const { ok, payload } = await daemonPost(target, "/api/harness/end-conversation", { farewell });
+    if (!ok) throw new Error(typeof payload.error === "string" ? payload.error : "end conversation failed");
+    return typeof payload.result === "string" ? payload.result : "Conversation ended.";
+  };
+}
+/** Pages the ORIGINAL, uncollapsed call/args/result for a diet-collapsed own
+ * tool-call stub back — backs the `tool_result_fetch` gaia-tool verb
+ * (09-MEMORY-CONTEXT). Same daemon bridge shape as every other harness dep. */
+export function bridgeToolResultFetch(target: DaemonTarget): ToolResultFetch {
+  return async ({ sessionId, entryId, offset, limit }) => {
+    const { ok, payload } = await daemonPost(target, "/api/harness/tool-result-fetch", { sessionId, entryId, offset, limit });
+    if (!ok) throw new Error(typeof payload.error === "string" ? payload.error : "tool_result_fetch failed");
+    return {
+      text: typeof payload.text === "string" ? payload.text : "",
+      totalLength: typeof payload.totalLength === "number" ? payload.totalLength : 0,
+      hasMore: payload.hasMore === true,
+    };
+  };
+}
+
+/** Read/patch the context-diet policy — backs the `diet` gaia-tool verb (the
+ * `/diet` room command reaches the SAME daemon-side RoomService methods
+ * in-process, without this bridge). */
+export function bridgeContextDiet(target: DaemonTarget): ContextDietAccess {
+  const parseView = (payload: Record<string, unknown>): ContextDietView => ({
+    effective: payload.effective as ContextDietPolicy,
+    roomOverrides: (payload.roomOverrides ?? {}) as ContextDietOverrides,
+  });
+  return {
+    get: async () => {
+      const { ok, payload } = await daemonPost(target, "/api/harness/context-diet", {});
+      if (!ok) throw new Error(typeof payload.error === "string" ? payload.error : "context-diet read failed");
+      return parseView(payload);
+    },
+    set: async ({ scope, patch }) => {
+      const { ok, payload } = await daemonPost(target, "/api/harness/context-diet", { scope, patch });
+      if (!ok) throw new Error(typeof payload.error === "string" ? payload.error : "context-diet write failed");
+      return parseView(payload);
+    },
   };
 }
 

@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "bun scripts/build-daemon.mjs",
-    "check": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json && tsc -p src/server/graphql.tsconfig.json --noEmit && bun run check:dead",
+    "check:dead": "knip --no-exit-code",
     "test": "bun test test/",
     "start": "bun src/cli.ts",
     "stop": "pids=$(lsof -ti tcp:8787); if [ -n \"$pids\" ]; then kill $pids && echo \"stopped gaia (pid $pids) on :8787\"; else echo \"gaia not running on :8787\"; fi",
@@ -30,11 +31,14 @@
     "@earendil-works/pi-ai": "^0.82.0",
     "@earendil-works/pi-coding-agent": "^0.82.0",
     "gpt-tokenizer": "^3.4.0",
+    "graphql": "^17.0.2",
+    "graphql-yoga": "^5.22.0",
     "typebox": "^1.1.24"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^24.3.0",
+    "knip": "^6.34.0",
     "typescript": "^5.7.3"
   },
   "license": "MIT"

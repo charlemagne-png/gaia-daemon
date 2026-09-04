@@ -54,6 +54,12 @@ test("parseCommand: known commands and arguments", () => {
   assert.deepEqual(parseCommand("/stop"), { type: "cancel" }); // alias
   assert.deepEqual(parseCommand("/compact"), { type: "compact", agent: undefined });
   assert.deepEqual(parseCommand("/compact @nyari"), { type: "compact", agent: "nyari" });
+  assert.deepEqual(parseCommand("/compact --edit"), { type: "compact", agent: undefined, edit: true });
+  assert.deepEqual(parseCommand("/compact --edit reviewed summary"), { type: "compact", agent: undefined, edit: "reviewed summary" });
+  assert.deepEqual(parseCommand("/stt"), { type: "stt", engine: undefined });
+  assert.deepEqual(parseCommand("/stt RePliCate"), { type: "stt", engine: "replicate" });
+  assert.deepEqual(parseCommand("/tts elevenlabs"), { type: "stt", engine: "elevenlabs", alias: "tts" });
+  assert.ok(SLASH_COMMANDS.some((command) => command.name === "tts"), "/tts is visible in the command palette");
   assert.deepEqual(parseCommand("/model opus"), { type: "model", spec: "opus" });
   assert.deepEqual(parseCommand("/model @nyari anthropic/opus"), { type: "model", agent: "nyari", spec: "anthropic/opus" });
   assert.deepEqual(parseCommand("/pet @nyari nari"), { type: "pet", action: "set", agent: "nyari", package: "nari" });
@@ -76,6 +82,26 @@ test("parseCommand: known commands and arguments", () => {
   // pipeline rather than being mistaken for a path/prose message.
   assert.deepEqual(parseCommand("/skill:stoner-mode 7"), { type: "unknown", command: "skill:stoner-mode" });
   assert.deepEqual(parseCommand("/wat"), { type: "unknown", command: "wat" });
+  assert.ok(SLASH_COMMANDS.some((command) => command.name === "diet"), "/diet is advertised to the command palette");
+  assert.deepEqual(parseCommand("/diet"), { type: "diet", sub: "status", scope: "room" });
+  assert.deepEqual(parseCommand("/diet on"), { type: "diet", sub: "on", scope: "room" });
+  assert.deepEqual(parseCommand("/diet off"), { type: "diet", sub: "off", scope: "room" });
+  assert.deepEqual(parseCommand("/diet status"), { type: "diet", sub: "status", scope: "room" });
+  assert.deepEqual(parseCommand("/diet on --workspace"), { type: "diet", sub: "on", scope: "workspace" });
+  assert.deepEqual(parseCommand("/diet --workspace off"), { type: "diet", sub: "off", scope: "workspace" });
+});
+
+test("parseCommand: /goal sub-commands, objective and --tokens budget", () => {
+  assert.deepEqual(parseCommand("/goal"), { type: "goal", sub: "status" });
+  assert.deepEqual(parseCommand("/goal status"), { type: "goal", sub: "status" });
+  assert.deepEqual(parseCommand("/goal pause"), { type: "goal", sub: "pause" });
+  assert.deepEqual(parseCommand("/goal resume"), { type: "goal", sub: "resume" });
+  assert.deepEqual(parseCommand("/goal clear"), { type: "goal", sub: "clear" });
+  assert.deepEqual(parseCommand("/goal ship the release"), { type: "goal", sub: "set", objective: "ship the release" });
+  assert.deepEqual(parseCommand("/goal --tokens 50000 ship it"), { type: "goal", sub: "set", objective: "ship it", tokens: 50000 });
+  assert.deepEqual(parseCommand("/goal --tokens=1200 ship it"), { type: "goal", sub: "set", objective: "ship it", tokens: 1200 });
+  // A multi-word objective that merely BEGINS with a sub-command word is an objective.
+  assert.deepEqual(parseCommand("/goal status page rewrite"), { type: "goal", sub: "set", objective: "status page rewrite" });
 });
 
 test("parseCommand: a leading '/' that isn't command-shaped is a message, never a swallowed 'unknown'", () => {

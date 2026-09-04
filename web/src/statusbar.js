@@ -2,7 +2,8 @@
 // banner, and the signature powerline status bar. Every segment is one fact
 // about the session; arrows are pure CSS so no Nerd Font is required. Also
 // owns the omarchy-style theme palette (the "theme" region).
-import { accountsCatalog, selectRoom } from "./actions.js";
+import { selectRoom } from "./actions.js";
+import { agentGlyph, UI } from "./glyphs.js";
 import { artifactPanelOpen, toggleArtifactPanel } from "./design/artifacts.js";
 import { api } from "./api.js";
 import { $, h } from "./dom.js";
@@ -11,12 +12,8 @@ import { stopReadAloud } from "./readaloud.js";
 import { clearError, markDirty, registerRegion, setError } from "./render.js";
 import { openSearch } from "./search.js";
 import { runningSummonRooms, state } from "./state.js";
-import { applyTheme, currentThemeId, themeById, THEMES } from "./themes.js";
+import { commitTheme, committedThemeId, currentThemeId, previewTheme, revertTheme, themeById, THEMES } from "./themes.js";
 import { jumpToEvent } from "./transcript.js";
-
-/** @type {import("./actions.js").AccountsCatalog | null} */
-let usageAccountsCatalog = null;
-void accountsCatalog().then((c) => { usageAccountsCatalog = c; markDirty("usage"); }).catch(() => {});
 
 /** @typedef {{ spacer: true }|{ spacer?: undefined, text: string, cls: string, title?: string, id?: string, onclick?: () => void }} Seg */
 /** @typedef {import("./types.js").Snapshot} Snapshot */
@@ -24,43 +21,85 @@ void accountsCatalog().then((c) => { usageAccountsCatalog = c; markDirty("usage"
 function renderStatus() {
   renderTopbar();
   renderErrorBanner();
-  renderStatusbar();
 }
 
 registerRegion("status", renderStatus);
 
+/** @param {Snapshot} snapshot */
+function activeAgent(snapshot) {
+  const id = snapshot.room.activeAgent ?? snapshot.workspace.defaultAgent;
+  return snapshot.agents.find((agent) => agent.id === id) ?? null;
+}
+
+/** @param {Snapshot} snapshot */
+function roomMeterText(snapshot) {
+  const agent = activeAgent(snapshot);
+  if (!agent) return "No active agent";
+  const context = agent.context;
+  const maxTokens = context?.maxTokens;
+  const percent = context && Number.isFinite(context.usedTokens) && typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+    ? Math.round((context.usedTokens / maxTokens) * 100)
+    : null;
+  // Room-header meter: speaker name renders PLAIN, glyph only (V2-SKIN.md
+  // design law — @ is for addressing/mentions, not a header).
+  return `${agentGlyph(agent.id)} ${agent.id}${percent === null ? " · ctx unavailable" : ` · ctx ${percent}%`}`;
+}
+
+/** @param {Snapshot} snapshot */
+function transcriptStateText(snapshot) {
+  const loaded = snapshot.room.events.length;
+  const total = snapshot.room.eventTotal;
+  const running = activeAgent(snapshot)?.status === "running";
+  return `${loaded.toLocaleString()} loaded · ${total.toLocaleString()} total${running ? " · running" : ""}`;
+}
+
 function renderTopbar() {
   const topbar = $("#topbar");
   if (!topbar) return;
+  topbar.classList.add("room-header");
   const snapshot = state.snapshot;
+  if (!snapshot) {
+    topbar.replaceChildren(
+      h("strong", { class: "room-workspace-path", title: "Add an initialized workspace to begin." }, LinkedText("No workspace selected")),
+    );
+    return;
+  }
+  const meter = roomMeterText(snapshot);
+  const usage = usageChipSeg();
   topbar.replaceChildren(
+    h("strong", { class: "room-workspace-path", title: snapshot.room.statePath }, PathText(snapshot.workspace.rootDir)),
     h(
       "div",
-      {},
-      h("strong", {}, snapshot ? PathText(snapshot.workspace.rootDir) : LinkedText("No workspace selected")),
-      h("small", {}, snapshot ? PathText(snapshot.workspace.configPath) : LinkedText("Add an initialized workspace to begin.")),
-    ),
-    h(
-      "div",
-      { class: "topbar-right" },
-      // Search THIS chat — the same overlay as ⌘K, pre-scoped to the open room.
-      snapshot
+      { class: "room-header-controls" },
+      h("button", {
+        class: "room-search",
+        type: "button",
+        title: "Search this room",
+        "aria-label": "Search this room",
+        text: "⌕",
+        onclick: () => openSearch("room"),
+      }),
+      usage && !usage.spacer
         ? h("button", {
-            class: "topbar-search",
+            class: `room-usage${usage.cls.includes("crit") ? " crit" : usage.cls.includes("warn") ? " warn" : ""}`,
             type: "button",
-            title: "search this chat (⌘F)",
-            "aria-label": "search this chat",
-            onclick: () => openSearch("room"),
-            text: "⌕",
+            title: usage.title,
+            text: usage.text.replace(/^◔\s*/, ""),
+            onclick: usage.onclick,
           })
         : null,
-      h("div", {
-        class: state.voice || state.voiceStatusText ? "status on-call" : "status",
-        text: state.voiceStatusText
-          ? state.voiceStatusText
-          : snapshot
-            ? `${state.voice ? `on call @${state.voice.agentId}` : `@${snapshot.room.activeAgent ?? snapshot.workspace.defaultAgent}`}`
-            : "idle",
+      h("button", {
+        class: `room-artifacts${artifactPanelOpen() ? " on" : ""}`,
+        type: "button",
+        title: "toggle artifacts",
+        text: "▢ artifacts",
+        onclick: toggleArtifactPanel,
+      }),
+      h("output", {
+        class: "room-meter",
+        title: "Context is reported by the active harness. Session cost is unavailable: v1 does not expose room cost totals.",
+        "aria-live": "polite",
+        text: meter,
       }),
     ),
   );
@@ -107,7 +146,7 @@ function renderStatusbar() {
       cls: running ? "seg-run on" : "seg-run",
       title: "rooms with a live turn (this room + any running summons)",
     });
-    if (state.voice) segs.push({ text: `🎙 @${state.voice.agentId}`, cls: "seg-voice", title: "on a voice call" });
+    if (state.voice) segs.push({ text: `${UI.call} @${state.voice.agentId}`, cls: "seg-voice", title: "on a voice call" });
   } else {
     segs.push({ text: "no workspace", cls: "seg-head" });
   }
@@ -175,33 +214,21 @@ const STATUSBAR_STORAGE_KEY = "gaia.statusbar";
 
 /** @returns {boolean} true unless the user has explicitly hidden it */
 export function statusbarVisible() {
-  try {
-    return localStorage.getItem(STATUSBAR_STORAGE_KEY) !== "hidden";
-  } catch {
-    return true;
-  }
+  return false;
 }
 
 /** @param {boolean} visible */
 function applyStatusbarVisibility(visible) {
-  const app = $("#app");
-  if (app) app.classList.toggle("statusbar-hidden", !visible);
+  void visible;
 }
 
 /** @param {boolean} visible */
 export function setStatusbarVisible(visible) {
-  applyStatusbarVisibility(visible);
-  try {
-    localStorage.setItem(STATUSBAR_STORAGE_KEY, visible ? "shown" : "hidden");
-  } catch {
-    // private mode / storage disabled — the choice just won't persist.
-  }
+  void visible;
 }
 
 // Restore before first paint so there is no flash of the status bar.
-export function initStatusbarPref() {
-  applyStatusbarVisibility(statusbarVisible());
-}
+export function initStatusbarPref() {}
 
 // ---------------------------------------------------------------------------
 // Account usage chip — subscription session/weekly caps per ACCOUNT
@@ -213,15 +240,11 @@ export function initStatusbarPref() {
 
 /** The cached usage groups relevant to this room's actual account bindings.
  * A room with no usage-capable active agent intentionally displays nothing;
- * showing a provider-wide fallback is how an old login escaped into the UI.
+ * showing a provider-wide fallback is how an old credential picker escaped into the UI.
  * @returns {import("./types.js").UsageLimits[]} */
 function visibleUsageGroups() {
-  // Show only accounts used by agents in the current room.
-  // For full subscription overview, use Settings → Accounts → Usage.
-  const snapshot = state.snapshot;
-  if (!snapshot?.room.usageAccounts) return Object.values(state.usage);
-  const roomAccounts = new Set(snapshot.room.usageAccounts);
-  return Object.values(state.usage).filter((limits) => roomAccounts.has(limits.account));
+  const accounts = state.snapshot?.room.usageAccounts ?? [];
+  return accounts.map((account) => state.usage[account]).filter(Boolean);
 }
 
 /** @returns {import("./types.js").UsageWindow[]} every window across the visible accounts */
@@ -556,7 +579,7 @@ function BgTasksPopover() {
                     h("span", {
                       class: "usage-pct",
                       style: "cursor:pointer;",
-                      text: running ? "■ stop" : "✕ dismiss",
+                      text: running ? `${UI.stop} stop` : `${UI.close} dismiss`,
                       title: running ? "stop this background process" : "dismiss this entry",
                       onclick: (event) => {
                         event.stopPropagation();
@@ -645,38 +668,16 @@ function UsagePopover(animate = false) {
           onclick: () => void refreshUsageNow(),
         }),
       ),
-      ...groups.map(({ limits, windows }) => {
-        // Resolve label + email from managed accounts catalog if available.
-        const managed = usageAccountsCatalog?.accounts?.find((/** @type {{id:string,label?:string,email?:string}} */ a) => a.id === limits.account);
-        const displayName = managed?.label || limits.account;
-        const email = managed?.email || null;
-        // Freshness: stale if fetched > 10min ago.
-        const ageMs = limits.fetchedAt ? Date.now() - new Date(limits.fetchedAt).getTime() : Infinity;
-        const isLive = ageMs < 10 * 60 * 1000;
-        const worstSev = windows.reduce((s, w) => {
-          const ord = /** @type {Record<string,number>} */({ critical: 2, warning: 1, normal: 0 });
-          return (ord[w.severity] ?? 0) > (ord[s] ?? 0) ? w.severity : s;
-        }, "normal");
-        return h(
+      ...groups.map(({ limits, windows }) =>
+        h(
           "div",
           { class: "usage-group" },
           h(
             "div",
             { class: "usage-group-head" },
-            h("span", { class: `usage-active-dot sev-${isLive ? worstSev : "off"}`, title: isLive ? "active" : "stale — click ↻ to refresh" }),
-            h("span", { class: "usage-harness" },
-              h("span", { text: displayName }),
-              email ? h("span", { class: "muted", style: "font-size:0.8em; margin-left:0.4em;", text: email }) : null,
-            ),
+            h("span", { class: "usage-harness", text: limits.account }),
             limits.plan ? h("span", { class: "usage-plan", text: limits.plan }) : null,
             h("span", { class: "usage-age", text: formatAge(limits.fetchedAt) }),
-            h("button", {
-              class: "usage-switch-btn",
-              type: "button",
-              title: "Switch active agent to this account",
-              text: "⇄",
-              onclick: () => void switchToAccount(managed?.id || limits.account),
-            }),
           ),
           ...windows.map((win) =>
             h(
@@ -692,8 +693,8 @@ function UsagePopover(animate = false) {
               win.resetsAt ? h("small", { class: "usage-reset", text: formatReset(win.resetsAt) }) : null,
             ),
           ),
-        );
-      }),
+        ),
+      ),
     ),
   );
 }
@@ -716,25 +717,6 @@ async function refreshUsageNow() {
   } finally {
     state.usageRefreshing = false;
     markDirty("status", "usage");
-  }
-}
-
-/** Switch the room's primary agent to use the specified account.
- * @param {string} accountId */
-async function switchToAccount(accountId) {
-  const snapshot = state.snapshot;
-  if (!snapshot?.agents?.length) return;
-  const primaryAgent = snapshot.agents[0]?.id;
-  if (!primaryAgent) return;
-  try {
-    await api(`/api/agents/${encodeURIComponent(primaryAgent)}/account`, {
-      method: "PUT",
-      body: JSON.stringify({ account: accountId }),
-    });
-    closeUsagePopover();
-    markDirty("panel");
-  } catch (err) {
-    console.error("Failed to switch account:", err);
   }
 }
 
@@ -778,20 +760,17 @@ async function jumpToPlaying(playing) {
 // html[data-theme] attribute, no re-render); click commits; Esc or backdrop
 // cancels back to where you were.
 
-/** @type {string|null} */
-let themeCommitted = null;
-
 export function openThemePalette() {
-  themeCommitted = currentThemeId();
   state.themePaletteOpen = true;
   markDirty("theme", "status");
 }
 
 /** @param {boolean} commit */
 export function closeThemePalette(commit) {
-  if (!commit && themeCommitted) applyTheme(themeCommitted);
+  // v2 model: the committed palette is the only thing that survives; anything
+  // still on screen from a hover is a preview and gets dropped on close.
+  if (!commit) revertTheme();
   state.themePaletteOpen = false;
-  themeCommitted = null;
   markDirty("theme", "status");
 }
 
@@ -814,42 +793,42 @@ function ThemePalette() {
       },
     },
     h(
-      "div",
-      { class: "palette" },
+      "section",
+      { class: "modal palette" },
       h(
         "div",
-        { class: "palette-head" },
-        h("strong", { text: "themes" }),
-        h("small", { text: "hover to preview · click to apply · esc to cancel" }),
+        { class: "panel-head" },
+        h("strong", { text: "◈ Theme" }),
+        h("button", { type: "button", title: "cancel theme preview", text: "×", onclick: () => closeThemePalette(false) }),
       ),
       h(
         "div",
-        { class: "palette-grid" },
+        { class: "theme-list" },
         THEMES.map((theme) =>
-          // Each swatch carries its own data-theme attribute, so the palette
-          // variables in styles.css recolour it without a second copy of any
-          // theme colour existing in JS.
           h(
             "button",
             {
-              class: `swatch ${theme.id === currentThemeId() ? "active" : ""}`,
+              class: `theme-row ${theme.id === committedThemeId() ? "active" : ""}`,
               "data-theme": theme.id,
-              onmouseenter: () => applyTheme(theme.id),
+              onmouseenter: () => previewTheme(theme.id),
+              onmouseleave: () => revertTheme(),
+              onfocus: () => previewTheme(theme.id),
+              onblur: () => revertTheme(),
               onclick: () => {
-                applyTheme(theme.id);
-                themeCommitted = theme.id;
+                commitTheme(theme.id);
                 closeThemePalette(true);
               },
             },
             h(
               "span",
-              { class: "sw-preview" },
-              h("span", { class: "sw-dot sw-accent" }),
-              h("span", { class: "sw-dot sw-accent2" }),
-              h("span", { class: "sw-dot sw-good" }),
-              h("span", { class: "sw-dot sw-danger" }),
+              { class: "swatches" },
+              h("i", { class: "sw-bg" }),
+              h("i", { class: "sw-fg" }),
+              h("i", { class: "sw-dim" }),
+              h("i", { class: "sw-accent" }),
+              h("i", { class: "sw-good" }),
             ),
-            h("span", { class: "sw-name", text: theme.name }),
+            h("span", { text: theme.name }),
           ),
         ),
       ),

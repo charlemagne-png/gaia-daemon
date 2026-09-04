@@ -39,6 +39,9 @@ import { isNative, isNativeWindowFocused } from "./native.js";
  *   expandedWorkspaceGroups: Set<string>,
  *   roomsShown: number,
  *   roomsFavoritesOnly: boolean,
+ *   roomsCollapsed: boolean,
+ *   workspacesShown: number,
+ *   workspacesCollapsed: boolean,
  *   older: {roomId: string, events: RoomEvent[], loading: boolean, lastTotal: number},
  *   openTabs: string[],
  *   sidebarCollapsed: boolean,
@@ -49,6 +52,7 @@ import { isNative, isNativeWindowFocused } from "./native.js";
  *   voiceStatusText: string,
  *   micMuted: boolean,
  *   dictating: boolean,
+ *   dictationOrigin: {workspaceId: string, roomId: string}|null,
  *   dictationBusy: boolean,
  *   dictationLevel: number,
  *   dictationBars: number[],
@@ -120,10 +124,19 @@ export const state = {
   expandedWorkspaceGroups: new Set(["FENYX", "PERSONAL", "PALOPTIC", "General"]),
   // How many top-level rooms the sidebar list renders before "show more" —
   // rooms are chats, and a 100-chat history import must not flood the list.
-  roomsShown: 25,
+  // Same cap as workspacesShown below, for the same reason.
+  roomsShown: 8,
   // Sidebar room-list filter: show just favorited rooms (plus their ancestor
   // containers so favorite summon subrooms stay reachable). Persisted per app.
   roomsFavoritesOnly: loadBoolean("gaia.roomsFavoritesOnly"),
+  // Minimise the whole rooms tree behind its header. Persisted per app.
+  roomsCollapsed: loadBoolean("gaia.roomsCollapsed"),
+  // Same pagination idea as roomsShown, for the workspace list above it — a
+  // long-lived install accumulates dozens of workspaces, which otherwise
+  // buries the rooms section under an unpaginated list.
+  workspacesShown: 8,
+  // Minimise the whole workspace list behind its header. Persisted per app.
+  workspacesCollapsed: loadBoolean("gaia.workspacesCollapsed"),
   // Older committed events paged in by the transcript's "load older" button,
   // strictly preceding the snapshot's tail window. Cleared on room switch and
   // whenever the transcript shrinks (rewind/truncate → lastTotal drops).
@@ -150,6 +163,11 @@ export const state = {
   // dictationDrafts below is the recovered summary of that server-side layer,
   // not the live recording state.
   dictating: false,
+  // Room the live dictation was STARTED in (v2 parity). Dictation is
+  // room-bound: the transcript belongs to the composer it was spoken into, so
+  // switching rooms mid-recording must not redirect it. Null while idle.
+  /** @type {{workspaceId: string, roomId: string}|null} */
+  dictationOrigin: null,
   dictationBusy: false,
   dictationLevel: 0,
   dictationBars: [],
@@ -298,6 +316,22 @@ export function persistRoomsFavoritesOnly() {
     localStorage.setItem("gaia.roomsFavoritesOnly", state.roomsFavoritesOnly ? "true" : "false");
   } catch {
     // storage disabled — the filter just won't survive a reload.
+  }
+}
+
+export function persistRoomsCollapsed() {
+  try {
+    localStorage.setItem("gaia.roomsCollapsed", state.roomsCollapsed ? "true" : "false");
+  } catch {
+    // storage disabled — the collapsed state just won't survive a reload.
+  }
+}
+
+export function persistWorkspacesCollapsed() {
+  try {
+    localStorage.setItem("gaia.workspacesCollapsed", state.workspacesCollapsed ? "true" : "false");
+  } catch {
+    // storage disabled — the collapsed state just won't survive a reload.
   }
 }
 

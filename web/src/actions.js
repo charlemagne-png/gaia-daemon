@@ -1,13 +1,14 @@
 // Every server mutation goes through these small action functions: they call
 // the API, update state, and mark the affected regions. Views never mutate
 // state directly.
-import { api } from "./api.js";
+import { api, apiUrl } from "./api.js";
 import { connectEvents, seedLiveTurn } from "./events.js";
 import { confirmDialog, promptText } from "./prompt.js";
 import { markDirty, setError } from "./render.js";
 import { activeTask, markRoomRead, rememberLocation, runningSummonRooms, state, syncReadMarks } from "./state.js";
 import { closeTab, openTab, restoreTabs } from "./tabs.js";
 import { syncDarioFromSnapshot } from "./dario.js";
+import { adoptServerTheme, setThemePersist } from "./themes.js";
 import { pinTranscriptToBottom } from "./transcript.js";
 
 /** @typedef {import("./types.js").AppPayload} AppPayload */
@@ -35,6 +36,9 @@ async function applyAppPayload(body) {
   state.settingsGlobalFiles = body.globalFiles ?? state.settingsGlobalFiles;
   state.keepAwake = body.keepAwake ?? state.keepAwake;
   state.userName = body.userName ?? state.userName;
+  // Theme is a daemon setting (v2 parity, services/theme.ts): the payload is
+  // authoritative over this browser's pre-paint localStorage cache.
+  adoptServerTheme(body.theme);
   if (state.snapshot) {
     restoreTabs(state.snapshot.workspace.id);
     openTab(state.snapshot.room.id, state.snapshot.workspace.id);
@@ -49,9 +53,6 @@ async function applyAppPayload(body) {
  * @param {string} [currentWorkspaceId] Preferred workspace to open (e.g. the one
  *   the user last had open). Ignored if it no longer exists, so a removed
  *   workspace never surfaces as an error on boot.
- * @returns {Promise<boolean>} true once the daemon answered and the app loaded;
- *   false if the daemon was unreachable (e.g. mid /rebuild re-exec) — the caller
- *   retries rather than dead-ending on a blank error screen.
  */
 export async function loadApp(currentWorkspaceId) {
   try {
@@ -81,7 +82,6 @@ function applySnapshotPayload(body) {
   state.settingsWorkspaceFiles = body.workspaceFiles ?? [];
   state.voice = body.voice ?? null;
   rememberLocation(state.snapshot);
-  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("gaia:snapshot", { detail: { snapshot: state.snapshot } }));
 }
 
 /** @param {string} workspaceId */
@@ -123,8 +123,8 @@ export async function addWorkspace() {
 /**
  * @param {string} workspaceId
  * @param {string} roomId
- * @param {{ incognito?: boolean, parentRoomId?: string, voiceSession?: boolean, voiceNavigation?: boolean }} [opts]
- *   Creation-only room flags plus explicit voice navigation transport.
+ * @param {{ incognito?: boolean; voiceNavigation?: boolean }} [opts] `incognito` only takes effect when this
+ *   call creates the room (a no-op when selecting one that already exists).
  */
 export async function selectRoom(workspaceId, roomId, opts = {}) {
   try {
@@ -133,12 +133,7 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
     // now-playing chip). So no stopReadAloud() here.
     const body = await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/rooms/${encodeURIComponent(roomId)}/select`, {
       method: "POST",
-      body: JSON.stringify({
-        ...(opts.incognito ? { incognito: true } : {}),
-        ...(opts.parentRoomId ? { parentRoomId: opts.parentRoomId } : {}),
-        ...(opts.voiceSession ? { voiceSession: true } : {}),
-        ...(opts.voiceNavigation ? { voiceNavigation: true } : {}),
-      }),
+      body: JSON.stringify({ ...(opts.incognito ? { incognito: true } : {}), ...(opts.voiceNavigation ? { voiceNavigation: true } : {}) }),
     });
     applySnapshotPayload(body);
     if (state.snapshot) openTab(state.snapshot.room.id, state.snapshot.workspace.id);
@@ -151,62 +146,21 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
 }
 
 /**
- * Create a room without selecting/opening it. Used by GaiaVoice's hidden
- * session room: transcript persists, main chat UI stays where Charles left it.
- * @param {{ incognito?: boolean, title?: string, voiceSession?: boolean }} [opts]
- * @returns {Promise<{ workspaceId: string, roomId: string } | null>}
+ * @param {string|{title?: string; voiceSession?: boolean; incognito?: boolean}} workspaceId
+ * @param {string} [roomId]
+ * @param {{ incognito?: boolean; voiceSession?: boolean }} [opts]
  */
-export async function createRoom(opts = {}) {
+export async function createRoom(workspaceId, roomId, opts = {}) {
   const snapshot = state.snapshot;
   if (!snapshot) return null;
-  const incognito = opts.incognito === true;
-  const roomId = newAutoRoomId(incognito ? "incognito-" : "chat-");
-  try {
-    const created = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/create`, {
-      method: "POST",
-      body: JSON.stringify({
-        ...(incognito ? { incognito: true } : {}),
-        ...(opts.voiceSession ? { voiceSession: true } : {}),
-      }),
-    });
-    applyRoomsPayload(snapshot.workspace.id, created.rooms);
-    const title = String(opts.title ?? "").trim();
-    if (title) {
-      const titled = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/title`, {
-        method: "POST",
-        body: JSON.stringify({ title, source: "auto" }),
-      });
-      applyRoomsPayload(snapshot.workspace.id, titled.rooms);
-    }
-    markDirty("sidebar", "tabs", "status");
-    return { workspaceId: snapshot.workspace.id, roomId };
-  } catch (error) {
-    setError(error);
-    return null;
+  if (typeof workspaceId === "object") {
+    const id = newAutoRoomId(workspaceId.voiceSession ? "voice-" : workspaceId.incognito ? "incognito-" : "chat-");
+    await selectRoom(snapshot.workspace.id, id, { incognito: workspaceId.incognito === true });
+    return { workspaceId: snapshot.workspace.id, roomId: id };
   }
-}
-
-/** @param {string} agentId */
-/** @param {string} agentId */
-export async function setActiveAgent(agentId) {
-  const snapshot = state.snapshot;
-  if (!snapshot || snapshot.room.activeAgent === agentId) return;
-  try {
-    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/active-agent`, {
-      method: "POST",
-      body: JSON.stringify({ agentId }),
-    });
-    if (body.redirect) {
-      await selectRoom(body.redirect.workspaceId, body.redirect.roomId);
-      return;
-    }
-    applySnapshotPayload(body);
-    connectEvents();
-    state.error = "";
-    markDirty();
-  } catch (error) {
-    setError(error);
-  }
+  if (!roomId) return null;
+  await selectRoom(workspaceId, roomId, opts);
+  return { workspaceId, roomId };
 }
 
 /** @param {string} agentId */
@@ -266,40 +220,23 @@ export async function setAgentDefaultRole(agentId, role) {
   }
 }
 
-/** Set an agent's global model/account patch. Response is intentionally
- * small; the daemon broadcasts the reloaded snapshot over SSE.
- * @param {string} agentId
- * @param {{ model?: string | null, account?: string | null }} patch */
-export async function setAgentConfig(agentId, patch) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  const agent = snapshot.agents.find((a) => a.id === agentId);
-  const previous = agent ? { account: agent.account, configuredModel: agent.configuredModel } : undefined;
-  if (agent) {
-    if ("account" in patch) agent.account = patch.account || undefined;
-    if ("model" in patch) agent.configuredModel = patch.model || "default";
-    markDirty("panel");
-  }
-  try {
-    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/agents/${encodeURIComponent(agentId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    });
-    state.error = "";
-  } catch (error) {
-    if (agent && previous) {
-      agent.account = previous.account;
-      agent.configuredModel = previous.configuredModel;
-      markDirty();
-    }
-    setError(error);
-  }
-}
-
 /** Set (or clear) the named account an agent's harness subprocess runs under.
+ * Global (not per-room/workspace), so unlike setAgentRole this has no snapshot
+ * in its response — the daemon's own applySettingsChange("global") reload
+ * broadcasts a fresh snapshot over the already-open SSE stream, same as any
+ * other global settings edit.
  * @param {string} agentId @param {string | null} account */
 export async function setAgentAccount(agentId, account) {
-  await setAgentConfig(agentId, { account });
+  try {
+    await api(`/api/agents/${encodeURIComponent(agentId)}/account`, {
+      method: "POST",
+      body: JSON.stringify({ account: account || null }),
+    });
+    state.error = "";
+    markDirty();
+  } catch (error) {
+    setError(error);
+  }
 }
 
 /** Reversible agent delete: moves agent dir to trash (recoverable).
@@ -325,8 +262,8 @@ export async function deleteAgent(agentId) {
   }
 }
 
-/** @typedef {{ id: string, harness: string, label?: string, email?: string, workspace?: string, providers?: string[] }} AccountRecordSummary */
-/** @typedef {{ id: string, label?: string, login: boolean, lockedProvider?: string, modelProviderIds?: string[], modelNameOptions?: string[] }} AccountHarnessSummary */
+/** @typedef {{ id: string, harness: string, label?: string, email?: string }} AccountRecordSummary */
+/** @typedef {{ id: string, label?: string }} AccountHarnessSummary */
 /** @typedef {{ accounts: AccountRecordSummary[], harnesses: AccountHarnessSummary[] }} AccountsCatalog */
 
 /** Cached GET /api/accounts — every caller (Settings' Accounts tab, the
@@ -338,12 +275,6 @@ let accountsCatalogPromise = null;
 export function accountsCatalog() {
   if (!accountsCatalogPromise) accountsCatalogPromise = api("/api/accounts");
   return accountsCatalogPromise;
-}
-
-/** Drop the cache so the next accountsCatalog() call refetches — call after
- * an account is added, removed, or logged in. */
-export function refreshAccountsCatalog() {
-  accountsCatalogPromise = null;
 }
 
 /** Run a room-local plugin action (popup form submit, item action button, or
@@ -398,30 +329,17 @@ function newAutoRoomId(prefix) {
  * Create a new room in the current workspace and switch to it — instantly, no
  * name dialog. The room is auto-named (its title is distilled from the first
  * message). ⌥-click / `incognito:true` makes it memory-off instead.
- * @param {{ incognito?: boolean, title?: string, voiceSession?: boolean }} [opts]
- * @returns {Promise<{ workspaceId: string, roomId: string } | null>}
+ * @param {{ incognito?: boolean }} [opts]
  */
 export async function addRoom(opts = {}) {
   const snapshot = state.snapshot;
-  if (!snapshot) return null;
+  if (!snapshot) return;
   const incognito = opts.incognito === true;
   const roomId = newAutoRoomId(incognito ? "incognito-" : "chat-");
   try {
-    await selectRoom(snapshot.workspace.id, roomId, { incognito, ...(opts.voiceSession ? { voiceSession: true } : {}) });
-    const title = String(opts.title ?? "").trim();
-    if (title) {
-      const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/title`, {
-        method: "POST",
-        body: JSON.stringify({ title, source: "auto" }),
-      });
-      applyRoomsPayload(snapshot.workspace.id, body.rooms);
-      if (state.snapshot?.workspace.id === snapshot.workspace.id && state.snapshot.room.id === roomId) /** @type {any} */ (state.snapshot.room).title = title;
-      markDirty("sidebar", "tabs", "status");
-    }
-    return { workspaceId: snapshot.workspace.id, roomId };
+    await selectRoom(snapshot.workspace.id, roomId, { incognito });
   } catch (error) {
     setError(error);
-    return null;
   }
 }
 
@@ -481,65 +399,6 @@ function applyRoomsPayload(workspaceId, rooms) {
   }
 }
 
-/** Open a fresh SUBROOM nested under a parent room — a first-class room the
- * human talks in (full summon rights, normal memory), merely grouped under the
- * parent in the sidebar. Nothing is ever delivered back to the parent, and the
- * parent's running turn is never touched.
- * @param {string} parentRoomId */
-export async function openSubroom(parentRoomId) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  const roomId = newAutoRoomId("chat-");
-  try {
-    await selectRoom(snapshot.workspace.id, roomId, { parentRoomId });
-  } catch (error) {
-    setError(error);
-  }
-}
-
-/** Launch a background worker in ANY room from the UI — turn-independent:
- * the daemon spawns the child sub-room without touching the parent's running
- * turn (no steer, no agent tokens spent relaying the order), and the result
- * comes back as a collapsed note (deliver:"note").
- * @param {string} roomId @param {string} agentId */
-export async function summonAgentInRoom(roomId, agentId) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  const task = await promptText(`Summon @${agentId} in a sub-room`, { placeholder: "task for the worker…", okLabel: "Summon" });
-  if (typeof task !== "string" || !task.trim()) return;
-  try {
-    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/summons`, {
-      method: "POST",
-      body: JSON.stringify({ agentId, task: task.trim() }),
-    });
-    state.error = "";
-    markDirty("sidebar", "status");
-  } catch (error) {
-    setError(error);
-  }
-}
-
-/** Set/clear a room's project label — the sidebar's second grouping axis
- * (day → project). Empty input clears; Esc cancels.
- * @param {string} roomId @param {string} [currentProject] */
-export async function setRoomProject(roomId, currentProject = "") {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  const project = await promptText("Set project (empty clears)", { value: currentProject, placeholder: "project name…", okLabel: "Set" });
-  if (project === null) return;
-  try {
-    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/project`, {
-      method: "POST",
-      body: JSON.stringify({ project }),
-    });
-    applyRoomsPayload(snapshot.workspace.id, body.rooms);
-    state.error = "";
-    markDirty("sidebar", "tabs", "status");
-  } catch (error) {
-    setError(error);
-  }
-}
-
 /** @param {string} roomId @param {boolean} favorite */
 export async function setRoomFavorite(roomId, favorite) {
   const snapshot = state.snapshot;
@@ -552,40 +411,6 @@ export async function setRoomFavorite(roomId, favorite) {
     applyRoomsPayload(snapshot.workspace.id, body.rooms);
     state.error = "";
     markDirty("sidebar", "tabs", "status");
-  } catch (error) {
-    setError(error);
-  }
-}
-
-/** @param {string} roomId @param {string} eventId @param {string} name */
-export async function setRoomBookmark(roomId, eventId, name) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  try {
-    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/bookmarks`, {
-      method: "POST",
-      body: JSON.stringify({ eventId, name }),
-    });
-    applyRoomsPayload(snapshot.workspace.id, body.rooms);
-    state.error = "";
-    markDirty("sidebar", "tabs", "status", "panel");
-  } catch (error) {
-    setError(error);
-  }
-}
-
-/** @param {string} roomId @param {string} bookmarkId */
-export async function deleteRoomBookmark(roomId, bookmarkId) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  try {
-    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/bookmarks/${encodeURIComponent(bookmarkId)}`, {
-      method: "DELETE",
-      body: "{}",
-    });
-    applyRoomsPayload(snapshot.workspace.id, body.rooms);
-    state.error = "";
-    markDirty("sidebar", "tabs", "status", "panel");
   } catch (error) {
     setError(error);
   }
@@ -643,20 +468,50 @@ export async function deleteWorkspace(workspaceId) {
   }
 }
 
+/** Sidebar right-click "Add/Remove favorite" — favorites always sort first
+ * (server-side, see WorkspaceRegistry.list). @param {string} workspaceId @param {boolean} favorite */
+export async function setWorkspaceFavorite(workspaceId, favorite) {
+  try {
+    const body = await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/favorite`, {
+      method: "POST",
+      body: JSON.stringify({ favorite }),
+    });
+    state.workspaces = body.workspaces ?? state.workspaces;
+    state.error = "";
+    markDirty("sidebar");
+  } catch (error) {
+    setError(error);
+  }
+}
+
+/**
+ * Persist a sidebar drag-drop reorder. `ids` is the FULL desired order (every
+ * workspace currently in the sidebar) — the server still pins favorites to the
+ * top regardless of position here (see WorkspaceRegistry.list).
+ * @param {string[]} ids
+ */
+export async function reorderWorkspaces(ids) {
+  try {
+    const body = await api("/api/workspaces/reorder", { method: "POST", body: JSON.stringify({ ids }) });
+    state.workspaces = body.workspaces ?? state.workspaces;
+    state.error = "";
+    markDirty("sidebar");
+  } catch (error) {
+    setError(error);
+  }
+}
+
 /**
  * Upload one pasted file into the current room's files dir. Raw fetch, not
  * api(): the body is the file's bytes, not JSON.
  * @param {File} file
  * @param {string} name
- * @param {boolean} [mirrorToDownloads] dropped files (screenshot preview
- *   drags) are also written to ~/Downloads by the server — the drag happened
- *   before the file was saved anywhere the user can find it.
  * @returns {Promise<import("./types.js").UploadedAttachment>}
  */
 export async function uploadAttachment(file, name, mirrorToDownloads = false) {
   const snapshot = state.snapshot;
   if (!snapshot) throw new Error("No room selected");
-  const url = `/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/files?name=${encodeURIComponent(name)}${mirrorToDownloads ? "&downloads=1" : ""}`;
+  const url = apiUrl(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/files?name=${encodeURIComponent(name)}${mirrorToDownloads ? "&mirror=downloads" : ""}`);
   const response = await fetch(url, {
     method: "POST",
     ...(file.type ? { headers: { "content-type": file.type } } : {}),
@@ -670,9 +525,8 @@ export async function uploadAttachment(file, name, mirrorToDownloads = false) {
 /**
  * @param {string} text
  * @param {import("./types.js").UploadedAttachment[]} [attachments]
- * @param {{ queue?: boolean, voice?: boolean, onTask?: (task: import("./types.js").Task) => void }} [options] queue:true forces
- *   the durable queue (Cmd/Ctrl+Enter) instead of steering the running turn;
- *   voice:true marks continuous voice-control origin; onTask observes the accepted task.
+ * @param {{ queue?: boolean; voice?: boolean; onTask?: (task: import("./types.js").Task) => void }} [options] queue:true forces the durable queue
+ *   (Cmd/Ctrl+Enter) instead of steering the running turn.
  * @returns {Promise<boolean>}
  */
 export async function sendMessage(text, attachments = [], options = {}) {
@@ -691,8 +545,8 @@ export async function sendMessage(text, attachments = [], options = {}) {
         ...(options.voice ? { voice: true } : {}),
       }),
     });
-    if (body.task) options.onTask?.(body.task);
     // Reflect the accepted task immediately so busy state doesn't wait for SSE.
+    if (body.task) options.onTask?.(body.task);
     if (body.task && state.snapshot === snapshot && !snapshot.tasks.some((task) => task.id === body.task.id)) {
       snapshot.tasks.push(body.task);
       markDirty("panel", "status", "composer");
@@ -770,54 +624,6 @@ export async function deleteQueuedMessage(taskId) {
     if (state.snapshot === snapshot) {
       const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
       if (task) task.status = "cancelled";
-      markDirty("transcript", "panel", "status", "composer");
-    }
-  } catch (error) {
-    setError(error);
-  }
-}
-
-/**
- * Dismiss a sticky note (the ✕ on a /note card in the tasks panel). Display
- * metadata only — no runtime, no queue; idempotent server-side.
- * @param {string} noteId
- */
-export async function deleteNote(noteId) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  try {
-    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/notes/${encodeURIComponent(noteId)}`, {
-      method: "DELETE",
-      body: "{}",
-    });
-    // Reflect immediately so the card vanishes without waiting for SSE.
-    if (state.snapshot === snapshot && snapshot.notes) {
-      snapshot.notes = snapshot.notes.filter((note) => note.id !== noteId);
-      markDirty("panel");
-    }
-  } catch (error) {
-    setError(error);
-  }
-}
-
-/**
- * Pause or resume a still-queued message (⏸/▶ in the tasks panel). Paused
- * entries keep their queue slot but drain skips them until resumed. A 404
- * means it already started running — the next snapshot reconciles.
- * @param {string} taskId @param {boolean} paused
- */
-export async function setQueuedPaused(taskId, paused) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  try {
-    await api(
-      `/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/queue/${encodeURIComponent(taskId)}/paused`,
-      { method: "POST", body: JSON.stringify({ paused }) },
-    );
-    // Reflect immediately so the chip flips without waiting for SSE.
-    if (state.snapshot === snapshot) {
-      const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
-      if (task) task.status = paused ? "paused" : "queued";
       markDirty("transcript", "panel", "status", "composer");
     }
   } catch (error) {
@@ -951,6 +757,12 @@ export async function setKeepAwake(enabled) {
   }
 }
 
+// Theme commits (palette overlay, settings grid, Alt+Shift+T cycle) persist
+// daemon-side through this hook; themes.js itself never touches the API.
+setThemePersist((theme) => {
+  void api("/api/app/theme", { method: "POST", body: JSON.stringify({ theme }) }).catch(setError);
+});
+
 /** "Your name" (Settings ▸ General): persists the label agents use for the
  * human's own transcript lines in place of the anonymous "user" token
  * (services/user-name.ts). Empty string clears it back to that default.
@@ -964,3 +776,12 @@ export async function setUserName(name) {
     setError(error);
   }
 }
+
+/** @returns {Promise<string[]>} */
+export async function roomHumans() {
+  const snapshot = state.snapshot;
+  if (!snapshot) return [];
+  const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/humans`);
+  return body.humans ?? [];
+}
+

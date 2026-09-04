@@ -12,7 +12,7 @@
 import { createInterface } from "node:readline";
 import { env } from "../core/env.js";
 import { loadWorkspace } from "../domain/workspace.js";
-import { BridgeMemoryStore, bridgeRecallSearch, bridgeResumeCreate, bridgeSummonCreate, fixedTokenHost } from "./bridge-deps.js";
+import { BridgeMemoryStore, bridgeContextDiet, bridgeEndConversation, bridgeRecallSearch, bridgeResumeCreate, bridgeSummonCreate, bridgeToolProviders, bridgeToolResultFetch, fixedTokenHost } from "./bridge-deps.js";
 // Self-register every harness before the lookup — this subprocess starts with
 // an empty registry.
 import "./index.js";
@@ -91,6 +91,11 @@ export async function runAgentRunner(): Promise<void> {
   const summonCreate = target ? bridgeSummonCreate(target) : undefined;
   const resumeCreate = target ? bridgeResumeCreate(target) : undefined;
   const harnessHost = target ? fixedTokenHost(target) : undefined;
+  // 09-MEMORY-CONTEXT: backs the `tool_result_fetch`/`diet` gaia-tool verbs.
+  const toolResultFetch = target ? bridgeToolResultFetch(target) : undefined;
+  const contextDiet = target ? bridgeContextDiet(target) : undefined;
+  const endConversation = target ? bridgeEndConversation(target) : undefined;
+  const toolProviders = target ? bridgeToolProviders(target) : undefined;
 
   // The daemon already resolved the harness (agent > workspace > default) and
   // passed it down; fall back to recomputing if the env is somehow absent.
@@ -104,6 +109,10 @@ export async function runAgentRunner(): Promise<void> {
       resumeCreate,
       harnessHost,
       recallSearch: target ? bridgeRecallSearch(target) : undefined,
+      toolResultFetch,
+      contextDiet,
+      endConversation,
+      toolProviders,
     });
   let runtime = createRuntime(agent);
   let runtimeKey = JSON.stringify({ tools: agent.tools, skills: agent.skills ?? [] });
@@ -183,6 +192,48 @@ export async function runAgentRunner(): Promise<void> {
               message: result.message,
               ...(result.summary ? { summary: result.summary } : {}),
             });
+          })
+          .catch((error: unknown) =>
+            send({ type: "compact-result", ok: false, compacted: false, message: error instanceof Error ? error.message : String(error) }),
+          );
+        return;
+      case "compact-clean":
+        void (
+          runtime.compactClean?.(command.roomId, (update) => send({ type: "compact-progress", ...update })) ??
+          Promise.reject(new Error("clean compaction not supported"))
+        )
+          .then((result) => {
+            if (result.compacted === true) runtime.refreshContext?.(command.roomId);
+            send({
+              type: "compact-result",
+              ok: true,
+              compacted: result.compacted,
+              message: result.message,
+              ...(result.summary ? { summary: result.summary } : {}),
+            });
+          })
+          .catch((error: unknown) =>
+            send({ type: "compact-result", ok: false, compacted: false, message: error instanceof Error ? error.message : String(error) }),
+          );
+        return;
+      case "compact-draft":
+        void (runtime.compactDraft?.(command.roomId) ?? Promise.reject(new Error("editable compaction not supported")))
+          .then((result) => send({
+            type: "compact-result", ok: true, compacted: result.compacted, message: result.message,
+            ...(result.summary ? { summary: result.summary } : {}),
+          }))
+          .catch((error: unknown) =>
+            send({ type: "compact-result", ok: false, compacted: false, message: error instanceof Error ? error.message : String(error) }),
+          );
+        return;
+      case "compact-apply":
+        void (
+          runtime.compactApply?.(command.roomId, command.editedSummary, (update) => send({ type: "compact-progress", ...update })) ??
+          Promise.reject(new Error("editable compaction not supported"))
+        )
+          .then((result) => {
+            if (result.compacted === true) runtime.refreshContext?.(command.roomId);
+            send({ type: "compact-result", ok: true, compacted: result.compacted, message: result.message, ...(result.summary ? { summary: result.summary } : {}) });
           })
           .catch((error: unknown) =>
             send({ type: "compact-result", ok: false, compacted: false, message: error instanceof Error ? error.message : String(error) }),

@@ -15,6 +15,7 @@
 //      banner. It is driven by a rAF loop while playing and by discrete repaints
 //      otherwise. The server still decides the mode; nothing here branches on an
 //      engine id (same law as the harness abstraction).
+import { apiUrl } from "./api.js";
 import { markDirty, setError } from "./render.js";
 import { h } from "./dom.js";
 import { state } from "./state.js";
@@ -60,6 +61,8 @@ class AudioTransport {
     this.onFirstAudio = null;
     /** @type {(() => void)|null} fired when the last sample finishes playing */
     this.onEnded = null;
+    /** @type {((error: unknown) => void)|null} visible AudioContext failures */
+    this.onError = null;
   }
 
   /** @returns {number} */
@@ -162,7 +165,9 @@ class AudioTransport {
     this.frontier = Math.min(Math.max(0, from), this.total);
     this.anchorCtx = this.ctx.currentTime + 0.08;
     this.anchorSample = this.frontier;
-    void this.ctx.resume().catch(() => {});
+    void this.ctx.resume().then(() => {
+      if (this.ctx.state !== "running") throw new Error(`Audio output is ${this.ctx.state}`);
+    }).catch((error) => this.onError?.(error));
     this._pump();
     this._maybeFinish();
   }
@@ -298,6 +303,7 @@ export function stopReadAloud() {
   if (transport) {
     transport.onEnded = null;
     transport.onFirstAudio = null;
+    transport.onError = null;
     transport.destroy();
     transport = null;
   }
@@ -317,7 +323,7 @@ async function startReadAloud(eventId, regenerate = false) {
   const snapshot = state.snapshot;
   if (!snapshot) return;
 
-  const base = `/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}`;
+  const base = apiUrl(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}`);
   // Bind playback to the room it started in, so switching rooms mid-play never
   // re-points fetches and the now-playing chip can jump back to this message.
   const origin = { workspaceId: snapshot.workspace.id, roomId: snapshot.room.id };
@@ -334,6 +340,11 @@ async function startReadAloud(eventId, regenerate = false) {
     if (activeEventId === eventId) setPhase("ended");
     rememberPcm(eventId, t);
     updatePlayerUi();
+  };
+  t.onError = (error) => {
+    if (transport !== t) return;
+    stopReadAloud();
+    setError(error instanceof Error ? error : new Error(String(error)));
   };
 
   state.readAloud = { eventId, phase: "loading", ...origin };
@@ -392,6 +403,7 @@ async function feedStream(t, response, controller) {
   const frameBytes = 2 * channels; // s16le
   /** @type {Uint8Array} */
   let leftover = new Uint8Array(0);
+  let pcmFrames = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (controller.signal.aborted || transport !== t) {
@@ -415,8 +427,10 @@ async function feedStream(t, response, controller) {
     const usable = buf.length - (buf.length % frameBytes);
     if (usable < buf.length) leftover = buf.slice(usable);
     if (usable === 0) continue;
+    pcmFrames += usable / frameBytes;
     t.append(s16leToMono(buf.subarray(0, usable), channels));
   }
+  if (!pcmFrames) throw new Error("Read aloud stream ended without audio frames");
   t.markDone();
 }
 

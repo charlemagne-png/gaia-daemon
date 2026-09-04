@@ -7,18 +7,22 @@
 // rebuilding the whole transcript. v1's author+text merge heuristic is gone:
 // when the final room-event commits under the same id, the stream entry is
 // dropped and the keyed node swaps to the committed version in place.
-import { deleteQueuedMessage, retryMessage, setRoomBookmark } from "./actions.js";
+import { deleteQueuedMessage, retryMessage } from "./actions.js";
+import { agentGlyph, KIND, STATE, UI } from "./glyphs.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
 import { detectArtifacts } from "./design/artifacts.js";
 import { beginEditMessage, humanSize } from "./composer.js";
 import { $, h } from "./dom.js";
 import { LinkedText } from "./links.js";
+import { boundedLines, diffBlock, filePreview, jsonHtml, resultNode } from "./rich.js";
 import { MarkdownMessage } from "./markdown.js";
-import { promptText } from "./prompt.js";
 import { toggleReadAloud } from "./readaloud.js";
 import { markDirty, registerRegion, setError } from "./render.js";
 import { state } from "./state.js";
+import { toolSummaryText } from "../shared/tool-summary.js";
+import { splitLeadingGaiaThink } from "../shared/gaia-think.js";
+export { splitLeadingGaiaThink } from "../shared/gaia-think.js";
 
 /** @typedef {import("./types.js").RoomEvent} RoomEvent */
 /** @typedef {import("./types.js").UserRoomEvent} UserRoomEvent */
@@ -36,6 +40,8 @@ import { state } from "./state.js";
  * @property {string} timestamp
  * @property {string} author
  * @property {string[]} targets
+ * @property {string} [humanLabel] Logged-in human's display name (multi-user
+ *   rooms) — absent for the default single-implicit-user path.
  * @property {AgentRoomEvent["kind"]} [kind]
  * @property {string} [channel]
  * @property {string} text
@@ -87,6 +93,7 @@ function viewOfEvent(event) {
     author: event.author,
     kind,
     targets: isUser ? (/** @type {UserRoomEvent} */ (event).targets ?? []) : [],
+    humanLabel: isUser ? (/** @type {UserRoomEvent} */ (event).humanLabel) : undefined,
     channel: event.channel,
     text: event.text,
     details: agentEvent?.details,
@@ -300,7 +307,7 @@ function messageViews() {
   // drops the queued task from the snapshot, so the ghost swaps to the committed
   // bubble with no overlap).
   for (const task of state.snapshot?.tasks ?? []) {
-    if ((task.status !== "queued" && task.status !== "paused") || !task.text.trim()) continue;
+    if (task.status !== "queued" || !task.text.trim()) continue;
     // Agent-authored hand-offs / summon callbacks aren't human-typed: their
     // driving text is an agent message or an internal pointer, not a queued
     // user message, so they get no "user →" ghost (the summon result note and
@@ -311,7 +318,7 @@ function messageViews() {
     if (task.recorded) continue;
     views.push({
       id: `queued:${task.id}`,
-      version: task.status === "paused" ? "queued-paused" : "queued",
+      version: "queued",
       timestamp: task.startedAt,
       author: "user",
       targets: task.targets ?? [],
@@ -496,6 +503,14 @@ function renderTranscript() {
   const roomId = state.snapshot?.room?.id ?? "";
   if (stickState.roomId !== roomId) stickState = { roomId, stick: true };
   const stick = stickState.stick;
+  // Snapshot open thinking/tool state before the keyed sync rebuilds a streaming
+  // message (notably its stream → committed-event handoff). `toggle` normally
+  // keeps this set current; reading the live DOM here also preserves native
+  // <details> state on WebKit's commit-frame edge.
+  for (const activity of container.querySelectorAll("details[data-activity-id][open]")) {
+    const id = /** @type {HTMLElement} */ (activity).dataset.activityId;
+    if (id) state.expandedActivities.add(id);
+  }
   // Snapshot open thinking/tool scroll offsets before the sync rebuilds nodes.
   const activityScroll = captureActivityScroll(container);
 
@@ -512,22 +527,37 @@ function renderTranscript() {
     if (el.dataset.eventId) existing.set(el.dataset.eventId, el);
   }
 
-  const nextNodes = views.map((view) => {
+  // `── HH:MM ──` separators between time groups (LAW): inserted whenever the
+  // formatted minute changes from the previous visible entry. Keyed off the
+  // triggering view's id so the sync below can reuse/drop it like any node.
+  /** @type {HTMLElement[]} */
+  const nextNodes = [];
+  let lastMinuteLabel = "";
+  for (const view of views) {
+    const minuteLabel = formatTime(view.timestamp);
+    if (minuteLabel && minuteLabel !== lastMinuteLabel) {
+      const sepKey = `sep:${view.id}`;
+      const sepVersion = `sep:${minuteLabel}`;
+      const sepCurrent = existing.get(sepKey);
+      const sepNode = sepCurrent && sepCurrent.dataset.v === sepVersion ? sepCurrent : Separator(minuteLabel);
+      sepNode.dataset.eventId = sepKey;
+      sepNode.dataset.v = sepVersion;
+      nextNodes.push(sepNode);
+      lastMinuteLabel = minuteLabel;
+    }
     // Read-aloud playback and the search-jump flash both fold into the version
     // stamp, so exactly the affected message re-renders when either toggles.
     const version =
       view.version +
-      avatarSignature(view) +
       (state.readAloud?.eventId === view.id ? `:ra-${state.readAloud.phase}` : "") +
       (state.search.highlightEventId === view.id ? ":search-hit" : "");
     const current = existing.get(view.id);
-    if (current && current.dataset.v === version) return current;
-    const node = Message(view);
+    const node = current && current.dataset.v === version ? current : Message(view);
     if (state.search.highlightEventId === view.id) node.classList.add("search-hit");
     node.dataset.eventId = view.id;
     node.dataset.v = version;
-    return node;
-  });
+    nextNodes.push(node);
+  }
 
   // Older-history indicator above the transcript, keyed like a message so the
   // sync below keeps it. History now pages in automatically as you scroll toward
@@ -588,7 +618,11 @@ function Message(view) {
   if (view.kind === "compact-complete") return CompactBoundary(view);
   const isUser = view.author === "user";
   const isAgent = !isUser && view.author !== "system";
-  const label = isUser ? `user -> ${view.targets.map((target) => `@${target}`).join(", ")}` : `@${view.author}`;
+  // Speaker names are plain (LAW): "@" addresses a target, it never prefixes
+  // the speaker's own name. Human = their name, agent = its bare id, system
+  // reads as "system" — never as a chat participant.
+  const speakerName = isUser ? (view.humanLabel ?? "user") : isAgent ? view.author : "system";
+  const targetLabel = isUser && view.targets.length ? `→ ${view.targets.map((target) => `@${target}`).join(", ")}` : "";
   const text = isUser ? stripLeadingRouteMentions(view.text, view.targets) : view.text;
   const details = view.details ?? {};
   // A summon worker's result lands as a collapsed, summon-labeled block (reusing
@@ -629,7 +663,6 @@ function Message(view) {
   // rewinds the room there (this failure row + the stale user message move to
   // rewound.jsonl), and re-runs the same text once — never a growing pile.
   const canResendFailedTurn = view.kind === "turn-failed" && !view.streaming && !view.queued;
-  const bm = (state.snapshot?.rooms.find((r) => r.isCurrent)?.bookmarks ?? []).find((b) => b.eventId === view.id);
   // The action row lives at the FOOT of the message (Claude-style), not the meta
   // header — on a long reply the buttons should sit where the reader ends up, not
   // scrolled far above. Built here, appended after the body below.
@@ -648,7 +681,7 @@ function Message(view) {
           type: "button",
           class: "msg-action",
           title: "retry — regenerate from the message that produced this reply",
-          text: "⟳",
+          text: UI.retry,
           onclick: () => void retryMessage(view.id),
         })
       : null,
@@ -657,26 +690,11 @@ function Message(view) {
           type: "button",
           class: "msg-action",
           title: "resend — regenerate the failed turn from the message that produced it",
-          text: "⟳",
+          text: UI.retry,
           onclick: () => void retryMessage(view.id),
         })
       : null,
     isAgent && !view.streaming ? ReadAloudButton(view.id) : null,
-    !view.streaming && !view.queued && view.author !== "system"
-      ? h("button", {
-          type: "button",
-          class: `msg-action bookmark${bm ? " active" : ""}`,
-          title: bm ? `checkpoint: "${bm.name}" — click to rename` : "save as named checkpoint — pins this message as an inflection point",
-          text: "🔖",
-          onclick: async () => {
-            const name = await promptText(bm ? "Rename checkpoint" : "Name this checkpoint", {
-              value: bm?.name ?? "",
-              placeholder: "e.g. final spec locked",
-            });
-            if (name !== null && state.snapshot) void setRoomBookmark(state.snapshot.room.id, view.id, name);
-          },
-        })
-      : null,
     // A queued ghost can't be forked, but it CAN be dropped from the queue
     // before it runs — ✕ removes exactly this entry (harness-agnostic).
     view.queued && view.queuedTaskId
@@ -694,19 +712,26 @@ function Message(view) {
   return h(
     "article",
     { class: `message ${isUser ? "user" : "agent"} ${view.author === "system" ? "system" : ""} ${view.queued ? "queued" : ""}` },
-    MessageAvatar(view),
     h(
       "div",
       { class: "message-meta" },
-      h("span", { text: label }),
+      // Speaker mark (v2 parity): ❯ for the human, the agent's own identity
+      // glyph otherwise. Theme-coloured via .speaker-glyph, never emoji.
+      h("span", {
+        class: `speaker-glyph${isAgent ? " agent" : ""}`,
+        "aria-hidden": "true",
+        text: isUser ? UI.human : isAgent ? agentGlyph(view.author) : UI.system,
+      }),
+      h("span", { class: "who", text: speakerName }),
+      targetLabel ? h("span", { class: "to", text: targetLabel }) : null,
       view.queued ? h("small", { class: "channel-tag", title: "queued — runs after the current turn", text: "queued" }) : null,
-      view.channel === "voice" ? h("small", { class: "channel-tag", title: "spoken on a voice call", text: "🎙" }) : null,
+      view.channel === "voice" ? h("small", { class: "channel-tag", title: "spoken on a voice call", text: UI.call }) : null,
       details.model ? h("small", { class: "model-tag", text: details.model }) : null,
       details.modelFallback
         ? h("small", {
             class: "model-tag fallback",
             title: details.modelFallback.reason,
-            text: `⚠ ${details.modelFallback.from} → ${details.modelFallback.to}`,
+            text: `⚠︎ ${details.modelFallback.from} → ${details.modelFallback.to}`,
           })
         : null,
       view.redacted ? RedactedTag() : null,
@@ -718,7 +743,7 @@ function Message(view) {
     summon || !orderedBlocks ? null : OrderedBlocks(view, orderedBlocks, details.tools ?? []),
     summon || orderedBlocks || !showThinking
       ? null
-      : ThinkingActivity(`thinking:${view.id}`, details.thinking ?? "", Boolean(view.streaming)),
+      : ThinkingActivity(`thinking:${view.id}:0`, details.thinking ?? "", Boolean(view.streaming)),
     summon || orderedBlocks ? null : details.tools?.length ? ToolActivityList(details.tools) : null,
     view.attachments?.length ? AttachmentGallery(view.attachments) : null,
     summon || orderedBlocks
@@ -735,7 +760,7 @@ function Message(view) {
       ? h("span", {
           class: "stream-stalled",
           title: "upstream connection dropped mid-reply — the harness is reconnecting and will resume where it left off",
-          text: "⚠ reconnecting…",
+          text: "⚠︎ reconnecting…",
         })
       : null,
     view.streaming ? LiveHeartbeat(view) : null,
@@ -743,34 +768,10 @@ function Message(view) {
   );
 }
 
-/** @param {string} author */
-function agentStatus(author) {
-  return state.snapshot?.agents?.find((agent) => agent.id === author);
-}
-
-/** @param {MessageView} view @returns {string} */
-function avatarSignature(view) {
-  if (view.author === "user") return ":av-user";
-  if (view.author === "system") return ":av-system";
-  const agent = agentStatus(view.author);
-  return `:av-${agent?.avatarUrl ?? agent?.icon ?? view.author}`;
-}
-
-/** @param {MessageView} view @returns {HTMLElement} */
-function MessageAvatar(view) {
-  if (view.author === "user") return h("span", { class: "message-avatar user-avatar", title: "you", text: ">" });
-  if (view.author === "system") return h("span", { class: "message-avatar system-avatar", title: "system", text: "◆" });
-  const agent = agentStatus(view.author);
-  const label = agent?.displayName || view.author;
-  return agent?.avatarUrl
-    ? h("img", { class: "message-avatar agent-message-avatar", src: agent.avatarUrl, alt: label, title: `@${view.author}` })
-    : h("span", { class: "message-avatar agent-message-avatar fallback", title: `@${view.author}`, text: agent?.icon || "•" });
-}
-
 /** @param {MessageView} view @returns {HTMLElement} */
 function LiveHeartbeat(view) {
   if (view.connectionStale) {
-    return h("div", { class: "live-heartbeat stale", text: "⚠ connection stale — reconnecting…" });
+    return h("div", { class: "live-heartbeat stale", text: "⚠︎ connection stale — reconnecting…" });
   }
   const elapsed = Math.max(0, Date.now() - Date.parse(view.timestamp));
   const activity = Math.max(0, Date.now() - (view.lastDeltaAt ?? Date.now()));
@@ -788,6 +789,13 @@ function formatElapsed(milliseconds) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+/** `── HH:MM ──` time-group separator (LAW) — the dashes are CSS pseudo-elements
+ * (.separator::before/::after), this only carries the label.
+ * @param {string} label @returns {HTMLElement} */
+function Separator(label) {
+  return h("div", { class: "separator" }, h("span", { text: label }));
+}
+
 /** @param {MessageView} view @returns {HTMLElement} */
 function CompactBoundary(view) {
   const tokens = compactTokensBefore(view.text);
@@ -803,7 +811,7 @@ function CompactBoundary(view) {
     h(
       "span",
       { class: "compact-boundary-pill" },
-      h("span", { class: "compact-boundary-icon", text: "✂" }),
+      h("span", { class: "compact-boundary-icon", text: "✂︎" }),
       h("span", { text: "Context compacted" }),
       h("small", { text: detail }),
     ),
@@ -859,7 +867,7 @@ function SummonResultActivity(view, summon) {
       id: `summon:${view.id}`,
       className: "summon-result",
       status: summon.failed ? "error" : "complete",
-      icon: summon.failed ? "⚠️" : "↩︎",
+      icon: summon.failed ? KIND.warning : KIND.handoff,
       title: `summon ${summon.childRoomId}`,
       extra: summon.failed ? "failed" : "finished",
     },
@@ -879,6 +887,7 @@ function SummonResultActivity(view, summon) {
 function OrderedBlocks(view, blocks, tools) {
   const toolsById = new Map(tools.map((tool) => [tool.id, tool]));
   const lastIndex = blocks.length - 1;
+  let thinkingIndex = 0;
   // Only the FIRST text span can carry a leading <gaia:think> block (the reply's
   // opening) — later text spans render as plain markdown.
   const firstTextIndex = blocks.findIndex((block) => block.kind === "text" && block.text.trim());
@@ -896,7 +905,12 @@ function OrderedBlocks(view, blocks, tools) {
       // isn't currently streaming carries nothing to show.
       const running = Boolean(view.streaming) && index === lastIndex;
       if (!block.text.trim() && !running) return null;
-      return ThinkingActivity(`thinking:${view.id}:${index}`, block.text, running);
+      // Number thinking spans independently of text/tool blocks. This keeps
+      // the expander id stable if the stream's bucketed view becomes an ordered
+      // timeline (or vice versa) when the final room event arrives.
+      const id = `thinking:${view.id}:${thinkingIndex}`;
+      thinkingIndex += 1;
+      return ThinkingActivity(id, block.text, running);
     }
     if (block.kind === "steer") {
       // The user steered HERE. Render their message inline at this position —
@@ -940,7 +954,7 @@ function RedactedTag() {
   return h("small", {
     class: "redacted-tag",
     title: "sanitized by thanks-dario — the original text is preserved in the room's redactions.jsonl",
-    text: "✂",
+    text: "✂︎",
   });
 }
 
@@ -951,29 +965,9 @@ function RedactedTag() {
  */
 function ThinkingActivity(id, text, running) {
   return ActivityDetails(
-    { id, className: "thinking", status: running ? "running" : "complete", icon: "💭", title: "thinking" },
+    { id, className: "thinking", status: running ? "running" : "complete", icon: KIND.thinking, title: "thinking" },
     text && text.trim() ? MarkdownMessage(text) : null,
   );
-}
-
-/**
- * A GAIA agent may open its reply with a literal `<gaia:think>…</gaia:think>`
- * span (streamed as ordinary text, not native model thinking). Detect a LEADING
- * such block: return the thought text, the remainder after the close tag, and
- * whether the close tag was seen. An unclosed tag (streaming/partial) treats
- * everything after the open as thought with no remainder yet. Only a block at
- * the very start (leading whitespace allowed) qualifies — any later occurrence
- * is left in the text and escaped by MarkdownMessage on its normal path.
- * @param {string} text
- * @returns {{ thought: string, remainder: string, closed: boolean } | null}
- */
-export function splitLeadingGaiaThink(text) {
-  const open = /^\s*<gaia:think>/u.exec(text);
-  if (!open) return null;
-  const rest = text.slice(open[0].length);
-  const closeIdx = rest.indexOf("</gaia:think>");
-  if (closeIdx === -1) return { thought: rest, remainder: "", closed: false };
-  return { thought: rest.slice(0, closeIdx), remainder: rest.slice(closeIdx + "</gaia:think>".length), closed: true };
 }
 
 /**
@@ -1028,7 +1022,7 @@ function AttachmentGallery(attachments) {
       return h(
         "a",
         { class: "attachment-chip", href: url, target: "_blank", rel: "noopener", title: file.path },
-        h("span", { text: "📎" }),
+        h("span", { text: UI.attach }),
         h("span", { class: "attach-name", text: file.name }),
         h("small", { text: humanSize(file.size) }),
       );
@@ -1076,7 +1070,7 @@ function ToolActivityList(tools) {
  */
 export function SkillInvocationActivity(skill) {
   return ActivityDetails(
-    { id: `skill:${skill.location}`, className: "tool-call skill-call", status: "complete", icon: "🧩", title: `[skill] ${skill.name}` },
+    { id: `skill:${skill.location}`, className: "tool-call skill-call", status: "complete", icon: KIND.skill, title: `[skill] ${skill.name}` },
     MarkdownMessage(skill.content),
   );
 }
@@ -1088,18 +1082,147 @@ export function SkillInvocationActivity(skill) {
  * mirroring pi's TUI classifier (see skillReadLabel doc comment).
  * @param {ToolDetail} tool
  */
-function ToolActivity(tool) {
+export function ToolActivity(tool) {
   const skillLabel = skillReadLabel(tool);
   const options = skillLabel
-    ? { id: `tool:${tool.id}`, className: "tool-call skill-call", status: tool.status, icon: "🧩", title: `[skill] ${skillLabel}` }
-    : { id: `tool:${tool.id}`, className: "tool-call", status: tool.status, icon: "🛠️", title: tool.toolName, extra: toolSummaryText(tool) };
+    ? { id: `tool:${tool.id}`, className: "tool-call skill-call", status: tool.status, icon: KIND.skill, title: `[skill] ${skillLabel}` }
+    : { id: `tool:${tool.id}`, className: "tool-call", status: tool.status, icon: KIND.tool, title: tool.toolName, extra: toolSummaryText(tool) };
   return ActivityDetails(
     options,
-    ToolPayload("call", { id: tool.id, name: tool.toolName, status: tool.status }),
-    ToolPayload("args", tool.args),
-    ToolPayload("partial", tool.partialResult),
-    ToolPayload("result", tool.result),
+    PayloadSection("CALL", { id: tool.id, name: tool.toolName, status: tool.status }),
+    tool.args === undefined || tool.args === null ? null : PayloadSection("ARGS", tool.args),
+    tool.partialResult === undefined || tool.partialResult === null ? null : PayloadSection("PARTIAL", tool.partialResult),
+    tool.result === undefined || tool.result === null ? null : ResultSection(tool),
   );
+}
+
+/** RESULT block, rendered by TOOL rather than as a JSON dump: bash -> `$ cmd`
+ * + bounded output + exit code; read -> numbered lines + remainder; write ->
+ * byte count; edit/apply_patch -> word-level diff; anything else -> rich.js's
+ * generic renderer (v2 traceResultNode).
+ * @param {ToolDetail} tool @returns {HTMLElement} */
+function ResultSection(tool) {
+  const { kind, args } = toolKind(tool);
+  const text = toolResultText(tool.result);
+  /** @type {Node} */
+  let body;
+  if (kind === "bash") body = BashResult(args, tool.status, text);
+  else if (kind === "read") body = ReadResult(text || "(empty)");
+  else if (kind === "write") body = WriteResult(args, text);
+  else if (kind === "edit") body = EditResult(args, tool.result, text);
+  else body = resultNode(text || tool.result);
+  return h("section", { class: "payload-section" }, h("h4", { text: "RESULT" }), body);
+}
+
+/** Which renderer a call wants, and the args THAT renderer should read.
+ * GAIA's own unified tool carries the real operation in `{verb, args}` — a
+ * `gaia` call is a bash/read/write/edit call wearing one name, so classify by
+ * the verb and hand on the INNER args. Harness-native tools (pi `bash`,
+ * claude `Bash`/`Read`) classify by name, case-insensitively.
+ * @param {ToolDetail} tool
+ * @returns {{ kind: string, args: Record<string, unknown> }} */
+function toolKind(tool) {
+  const outer = /** @type {Record<string, unknown>} */ (tool.args && typeof tool.args === "object" ? tool.args : {});
+  const name = String(tool.toolName ?? "").toLowerCase();
+  if (name === "gaia" && typeof outer.verb === "string") {
+    const inner = /** @type {Record<string, unknown>} */ (outer.args && typeof outer.args === "object" ? outer.args : {});
+    return { kind: normalizeKind(outer.verb), args: inner };
+  }
+  return { kind: normalizeKind(name), args: outer };
+}
+
+/** @param {string} value @returns {string} */
+function normalizeKind(value) {
+  const kind = value.toLowerCase();
+  if (kind === "bash" || kind === "shell") return "bash";
+  if (kind === "read") return "read";
+  if (kind === "write") return "write";
+  if (kind === "edit" || kind === "multiedit" || kind === "apply_patch") return "edit";
+  return kind;
+}
+
+/** Tool results arrive as a string, as pi's `{content:[{type,text}]}` blocks,
+ * or as a bare `{text}` - flatten to text, empty string when not textual.
+ * @param {unknown} value @returns {string} */
+function toolResultText(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        const record = /** @type {{ text?: unknown }} */ (part && typeof part === "object" ? part : {});
+        return typeof record.text === "string" ? record.text : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  const row = /** @type {Record<string, unknown>} */ (value && typeof value === "object" ? value : {});
+  if (Array.isArray(row.content)) return toolResultText(row.content);
+  if (typeof row.text === "string") return row.text;
+  return "";
+}
+
+/** @param {Record<string, unknown>} args @param {string|undefined} status @param {string} text @returns {HTMLElement} */
+function BashResult(args, status, text) {
+  const exitMatch = /Command exited with code (-?\d+)/.exec(text);
+  // pi's bash tool only embeds the exit marker on a nonzero/errored run: a
+  // completed trace with no marker exited 0.
+  const exitCode = exitMatch ? exitMatch[1] : status === "error" ? "?" : "0";
+  return h(
+    "div",
+    { class: "trace-bash" },
+    h("pre", { class: "trace-bash-cmd", text: `$ ${String(args.command ?? "")}` }),
+    boundedLines((text || "(no output)").split("\n"), "trace-bash-output", (line) => document.createTextNode(line)),
+    h("p", { class: `trace-exit-code${exitCode !== "0" ? " trace-exit-error" : ""}`, text: `exit ${exitCode}` }),
+  );
+}
+
+/** pi's read appends a bracketed continuation notice with the remaining line
+ * count - split it off into a footer instead of painting it as file content.
+ * @param {string} text @returns {HTMLElement} */
+function ReadResult(text) {
+  const continuation = /\n\n\[(?:Showing lines \d+-\d+ of (\d+)(?: \([^)]*\))?|(\d+) more lines in file)[^\]]*\]\s*$/.exec(text);
+  const body = continuation ? text.slice(0, continuation.index) : text;
+  const remaining = continuation?.[1] ?? continuation?.[2] ?? "";
+  const wrapper = h("div", {}, filePreview(body));
+  if (remaining) wrapper.append(h("p", { class: "trace-read-remainder", text: `\u2026 ${remaining} more lines` }));
+  return wrapper;
+}
+
+/** @param {Record<string, unknown>} args @param {string} text @returns {HTMLElement} */
+function WriteResult(args, text) {
+  const match = /wrote ([\d,]+) bytes/.exec(text);
+  const content = String(args.content ?? "");
+  const bytes = match ? match[1] : content ? String(new TextEncoder().encode(content).byteLength) : "";
+  return h("p", { class: "trace-write-bytes", text: bytes ? `${bytes} bytes written` : text || "written" });
+}
+
+/** edit/apply_patch: show the replacement as a diff (old -> new) rather than
+ * two opaque blobs. Falls back to the generic renderer when the args carry no
+ * recognisable before/after pair.
+ * @param {Record<string, unknown>} args @param {unknown} result @param {string} text @returns {Node} */
+function EditResult(args, result, text) {
+  if (typeof args.patch === "string") return diffBlock(args.patch);
+  const edits = Array.isArray(args.edits) ? args.edits : [];
+  const pairs = edits.length > 0
+    ? edits.map((edit) => /** @type {Record<string, unknown>} */ (edit && typeof edit === "object" ? edit : {}))
+    : [/** @type {Record<string, unknown>} */ ({ oldText: args.oldText ?? args.old_string, newText: args.newText ?? args.new_string })];
+  const blocks = pairs
+    .filter((pair) => typeof pair.oldText === "string" || typeof pair.old_string === "string")
+    .map((pair) => {
+      const before = String(pair.oldText ?? pair.old_string ?? "");
+      const after = String(pair.newText ?? pair.new_string ?? "");
+      const unified = [...before.split("\n").map((line) => `-${line}`), ...after.split("\n").map((line) => `+${line}`)].join("\n");
+      return diffBlock(unified);
+    });
+  if (blocks.length === 0) return resultNode(text || result);
+  return h("div", { class: "trace-edit" }, blocks);
+}
+
+/** @param {string} label @param {unknown} value @returns {HTMLElement} */
+function PayloadSection(label, value) {
+  const pre = h("pre", {});
+  pre.innerHTML = jsonHtml(value);
+  return h("section", { class: "payload-section" }, h("h4", { text: label }), pre);
 }
 
 /**
@@ -1133,6 +1256,7 @@ function skillReadLabel(tool) {
 function ActivityDetails(options, ...children) {
   const statusText = options.status === "running" ? "running" : options.status === "error" ? "error" : "complete";
   const id = options.id;
+  const body = children.filter(Boolean);
   return h(
     "details",
     {
@@ -1155,103 +1279,18 @@ function ActivityDetails(options, ...children) {
         class: "activity-result",
         title: statusText,
         "aria-label": statusText,
-        text: options.status === "running" ? "" : options.status === "error" ? "x" : "✓",
+        text: options.status === "running" ? "" : options.status === "error" ? STATE.error : STATE.done,
       }),
     ),
-    children,
+    // One shaded, scrollable body per trace (LAW .trace-body) instead of the
+    // payload sections spilling directly under <details> — an open trace reads
+    // as ONE contained block, never a stack of bordered boxes.
+    body.length ? h("div", { class: "trace-body" }, body) : null,
   );
-}
-
-/** @param {string} label @param {unknown} value */
-function ToolPayload(label, value) {
-  if (value === undefined || value === null) return null;
-  return h("div", { class: "tool-payload" }, h("span", { text: label }), h("pre", {}, LinkedText(formatPayload(value))));
 }
 
 // --- Tool one-line summaries: pick the most subject-like string from the
 // args/results so a collapsed tool row still says what it acted on. ----------
-
-/** @param {ToolDetail} tool */
-function toolSummaryText(tool) {
-  const candidates = [
-    ...toolSubjectCandidates(tool.args),
-    ...toolSubjectCandidates(tool.partialResult),
-    ...toolSubjectCandidates(tool.result),
-  ];
-  return candidates[0]?.summary ?? "";
-}
-
-/**
- * @param {unknown} value
- * @param {string[]} [path]
- * @param {number} [depth]
- * @returns {{ score: number, summary: string }[]}
- */
-function toolSubjectCandidates(value, path = [], depth = 0) {
-  if (value === undefined || value === null || depth > 3) return [];
-  if (typeof value === "string") {
-    const summary = compactOneLine(value);
-    return summary ? [{ score: path.length ? subjectScore(path.at(-1)) : 0, summary }] : [];
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    const key = path.at(-1);
-    const summary = key ? `${key}: ${String(value)}` : String(value);
-    return [{ score: subjectScore(key), summary }];
-  }
-  if (Array.isArray(value)) {
-    return value.slice(0, 4).flatMap((item, index) => toolSubjectCandidates(item, [...path, String(index)], depth + 1));
-  }
-  if (typeof value !== "object") return [];
-
-  return Object.entries(value)
-    .flatMap(([key, nested]) => {
-      const nextPath = [...path, key];
-      const label = compactKey(key);
-      if (typeof nested === "string") {
-        const body = compactOneLine(nested);
-        if (!body) return [];
-        return [{ score: subjectScore(key), summary: subjectScore(key) >= 80 ? body : `${label}: ${body}` }];
-      }
-      if (typeof nested === "number" || typeof nested === "boolean") {
-        return [{ score: subjectScore(key), summary: `${label}: ${String(nested)}` }];
-      }
-      return toolSubjectCandidates(nested, nextPath, depth + 1);
-    })
-    .sort((left, right) => right.score - left.score);
-}
-
-/** @param {string|undefined} key */
-function subjectScore(key) {
-  const normalized = String(key ?? "").toLowerCase();
-  if (["path", "filepath", "file", "filename", "url", "uri", "href", "target"].includes(normalized)) return 100;
-  if (["command", "cmd", "query", "pattern", "repo", "repository", "cwd", "name", "id"].includes(normalized)) return 80;
-  if (normalized.includes("path") || normalized.includes("file") || normalized.includes("url")) return 90;
-  return 10;
-}
-
-/** @param {string} key */
-function compactKey(key) {
-  return String(key ?? "")
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .toLowerCase();
-}
-
-/** @param {unknown} value */
-function compactOneLine(value) {
-  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
-  return normalized.length > 96 ? `${normalized.slice(0, 93)}...` : normalized;
-}
-
-/** @param {unknown} value */
-function formatPayload(value) {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
 
 /**
  * User messages start with the routing mentions; the label already shows the

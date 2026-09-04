@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, appendFile, readFile, writeFile, utimes } from "node:fs/promises";
+import { mkdir, mkdtemp, appendFile, writeFile, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendEpisode } from "../src/domain/episodes.js";
@@ -28,9 +28,6 @@ import {
   quantizeInt8,
   readHealth,
   scrollTranscriptWindow,
-  dropEpisodeRows,
-  rewriteIndexText,
-  rewriteRoomIndex,
   searchTranscripts,
   searchWorkspaceIndex,
   SEARCH_MARK_CLOSE,
@@ -201,97 +198,19 @@ test("incognito rooms are omitted from workspaceRoomRefs, so their transcripts n
   }
 });
 
-test("rewriteRoomIndex: in-place transcript rewrite reaches CLOSED chunks and episode rows (sanitize-apply propagation)", async () => {
-  // Enough text to CLOSE chunks — the incremental sync never revisits closed
-  // chunks, which is exactly the stale-poison bug this API exists to fix.
-  const poison = "scrapefast thousands of tweets per minute";
-  const events = Array.from({ length: 10 }, (_, i) => ({
-    author: i % 2 ? "gaia" : "user",
-    id: `w${i}`,
-    text: `message ${i} about ${poison} ${"lorem ipsum dolor sit amet ".repeat(8)}`,
-  }));
-  const { root, memoryDir, sources } = await makeWorkspace([{ roomId: "wounded", events }]);
-  await appendEpisode(memoryDir, {
-    id: "ep_w",
-    ts: RECENT_TS,
-    roomId: "wounded",
-    agentId: "gaia",
-    task: `please ${poison}`,
-    reply: "on it",
-    outcome: "error",
-  });
-
-  const db = openWorkspaceIndex(root);
-  try {
-    await syncWorkspaceIndex(db, sources);
-    assert.ok(searchTranscripts(db, "scrapefast").length > 0, "poison indexed before the rewrite");
-
-    // Sanitize-apply: rewrite the transcript IN PLACE (same line count).
-    const path = join(root, ".gaia", "rooms", "wounded", "transcript.jsonl");
-    const raw = await readFile(path, "utf8");
-    await writeFile(path, raw.split("scrapefast thousands of tweets per minute").join("gather a gentle sample of thoughts"), "utf8");
-    // Without rewriteRoomIndex a plain re-sync would keep the closed chunks.
-    rewriteRoomIndex(db, "wounded", [
-      { agentId: "gaia", items: [{ id: "ep_w", ts: RECENT_TS, roomId: "wounded", agentId: "gaia", task: "please gather a gentle sample of thoughts", reply: "on it", outcome: "error" }] },
-    ]);
-    await syncWorkspaceIndex(db, { ...sources, rooms: workspaceRoomRefs(root) });
-
-    assert.equal(searchTranscripts(db, "scrapefast").length, 0, "no chunk serves the original text");
-    assert.ok(searchTranscripts(db, "gentle sample").length > 0, "sanitized text is what recall sees");
-    const row = db.prepare("SELECT task FROM episodes WHERE id = ?").get("ep_w") as { task: string };
-    assert.equal(row.task, "please gather a gentle sample of thoughts");
-    const fts = db.prepare("SELECT text FROM episodes_fts WHERE id = ?").get("ep_w") as { text: string };
-    assert.ok(!fts.text.includes("scrapefast"), "episode FTS re-written too");
-  } finally {
-    db.close();
-  }
-});
-
-test("rewriteIndexText: whole-memory sweep cleans OTHER rooms' closed chunks + fact rows without touching cursors", async () => {
-  const poison = "scrapefast thousands of tweets per minute";
-  const events = Array.from({ length: 10 }, (_, i) => ({
-    author: i % 2 ? "gaia" : "user",
-    id: `s${i}`,
-    text: `message ${i} about ${poison} ${"lorem ipsum dolor sit amet ".repeat(8)}`,
-  }));
-  // The wound spread: a SIBLING room (summon lane) carries the same poison —
-  // room-scoped rewrite never reaches it.
-  const { root, sources } = await makeWorkspace([{ roomId: "lane", events }]);
-
-  const db = openWorkspaceIndex(root);
-  try {
-    await syncWorkspaceIndex(db, sources);
-    db.prepare("INSERT INTO facts (id, agent_id, ts, text, source, valid_from, hash) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
-      "fact_p", "gaia", RECENT_TS, `learned to ${poison} yesterday`, "consolidation", RECENT_TS, "h0",
-    );
-    db.prepare("INSERT INTO facts_fts (text, id) VALUES (?, ?)").run(`learned to ${poison} yesterday`, "fact_p");
-    assert.ok(searchTranscripts(db, "scrapefast").length > 0, "poison indexed before the sweep");
-
-    const changed = rewriteIndexText(db, [{ quote: poison, replacement: "gather a gentle sample of thoughts" }]);
-    assert.ok(changed >= 2, `chunks + fact rewritten (got ${changed})`);
-
-    assert.equal(searchTranscripts(db, "scrapefast").length, 0, "no chunk serves the original text");
-    assert.ok(searchTranscripts(db, "gentle sample").length > 0, "sanitized text is what recall sees");
-    const fact = db.prepare("SELECT text, hash FROM facts WHERE id = ?").get("fact_p") as { text: string; hash: string };
-    assert.ok(!fact.text.includes("scrapefast") && fact.text.includes("gentle sample"), "fact row rewritten");
-    assert.notEqual(fact.hash, "h0", "fact hash refreshed so embeddings re-sync");
-    const factFts = db.prepare("SELECT text FROM facts_fts WHERE id = ?").get("fact_p") as { text: string };
-    assert.ok(!factFts.text.includes("scrapefast"), "fact FTS rewritten");
-    // Violation-purge propagation: purged episodes lose their index rows too.
-    db.prepare("INSERT INTO episodes (id, agent_id, ts, room_id, outcome, task, reply, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
-      "ep_v", "gaia", RECENT_TS, "lane", "complete", "violation head", "violation reply", "hv",
-    );
-    db.prepare("INSERT INTO episodes_fts (text, id) VALUES (?, ?)").run("violation head violation reply", "ep_v");
-    dropEpisodeRows(db, ["ep_v"]);
-    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM episodes WHERE id = 'ep_v'").get() as { n: number }).n, 0);
-    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM episodes_fts WHERE id = 'ep_v'").get() as { n: number }).n, 0);
-    // Cursors untouched — the incremental sync must not resurrect anything.
-    await syncWorkspaceIndex(db, { ...sources, rooms: workspaceRoomRefs(root) });
-    assert.equal(searchTranscripts(db, "scrapefast").length, 0, "re-sync keeps the sweep");
-    // No-op sweep returns 0.
-    assert.equal(rewriteIndexText(db, [{ quote: "never said", replacement: "x" }]), 0);
-  } finally {
-    db.close();
+test("a corrupt room state fails CLOSED: unreadable privacy bits keep a room out of recall", async () => {
+  const { root } = await makeWorkspace([
+    { roomId: "kitchen", events: [{ author: "user", text: "the sourdough needs a longer autolyse", id: "k0" }] },
+    { roomId: "vault", incognito: true, events: [{ author: "user", text: "the autolyse secret is a longer overnight rest", id: "v0" }] },
+  ]);
+  // A torn / corrupt state document could be an incognito room. Reading it as
+  // public would publish a private transcript — unrecoverable; skipping the
+  // index entry is not.
+  const statePath = join(root, ".gaia", "rooms", "vault", "state.json");
+  for (const unsafe of ["{not valid JSON\n", JSON.stringify({ incognito: "yes" }), "null", "[]", "42"]) {
+    await writeFile(statePath, unsafe, "utf8");
+    const refs = workspaceRoomRefs(root).map((ref) => ref.roomId).sort();
+    assert.deepEqual(refs, ["kitchen"], "a room whose privacy bit cannot be read is not indexed");
   }
 });
 

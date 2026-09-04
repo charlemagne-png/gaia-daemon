@@ -16,13 +16,22 @@
 //      re-run the turn from partialReply. Idempotent either way.
 
 import { existsSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
-import type { BackgroundTask, ContextGatePending, EventDetails, MessageAttachment, MessageBlock, MonadConfig, PendingTurn, QueuedMessage, RoomBookmark, RoomEvent, RoomEventKind, RoomNote, RoomState, SummonDelivery, ToolDetail } from "../core/types.js";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import type { BackgroundTask, ContextGatePending, EventDetails, MessageAttachment, MessageBlock, MonadConfig, PendingTurn, QueuedMessage, RoomBookmark, RoomEvent, RoomEventKind, RoomGoal, RoomNote, RoomState, SummonDelivery, ToolDetail } from "../core/types.js";
 import { normalizePetBindings } from "./pets.js";
-import { appendJsonl, ensureDir, readJson, readJsonlFrom, writeJsonAtomic, writeText, writeTextAtomic } from "../core/store.js";
+import { appendJsonl, appendJsonlBatchDurable, appendJsonlDurable, ensureDir, readJson, readJsonlFrom, readText, writeJsonAtomic, writeTextAtomic, writeTextIfMissing } from "../core/store.js";
 import { workspacePaths } from "../core/paths.js";
 import { newId } from "../core/ids.js";
+import { withSqliteImmediateLock } from "../core/sqlite.js";
+
+/** The one transcript.jsonl serializer: one JSON line per event, trailing
+ * newline, empty file for no events — byte-identical to what appendJsonl
+ * produces, so a rewrite never changes the format. */
+function serializeEvents(events: RoomEvent[]): string {
+  return events.length ? events.map((event) => JSON.stringify(event)).join("\n") + "\n" : "";
+}
 
 export function newRoomEventId(): string {
   return newId("evt");
@@ -39,8 +48,6 @@ export const AUTO_ROOM_PREFIX = "chat-";
 export function isAutoRoomId(roomId: string): boolean {
   return roomId.startsWith(AUTO_ROOM_PREFIX);
 }
-
-export type RoomTitleSource = "auto" | "model" | "manual";
 
 export const ROOM_TITLE_MAX = 48;
 
@@ -71,10 +78,29 @@ export function deriveRoomTitle(text: string): string {
   return normalizeRoomTitle(text.replace(/^(?:@[A-Za-z0-9_-]+\s+)+/, ""));
 }
 
+const ROOM_REF_RE = /^[A-Z][0-9]{2,3}$/;
+const BOOKMARK_ROOM_MAX = 50;
+const NOTE_ROOM_MAX = 50;
+
+export function validRoomRefCode(code: string): boolean {
+  return ROOM_REF_RE.test(code.trim().toUpperCase());
+}
+
 // --- state normalization (accepts every v1 shape) ---------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function unknownFields(value: Record<string, unknown>, known: readonly string[]): Record<string, unknown> {
+  const unknown = { ...value };
+  for (const key of known) delete unknown[key];
+  return unknown;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((v): v is string => typeof v === "string" && v.trim().length > 0))];
 }
 
 function stringRecord(value: unknown): Record<string, string> {
@@ -254,11 +280,12 @@ function attachmentsFrom(value: unknown): MessageAttachment[] | undefined {
   for (const raw of value) {
     if (!isRecord(raw) || typeof raw.name !== "string" || typeof raw.path !== "string" || !raw.path.trim()) continue;
     attachments.push({
+      ...unknownFields(raw, ["name", "mime", "size", "path"]),
       name: raw.name,
       mime: typeof raw.mime === "string" && raw.mime ? raw.mime : "application/octet-stream",
       size: typeof raw.size === "number" && Number.isFinite(raw.size) && raw.size >= 0 ? Math.floor(raw.size) : 0,
       path: raw.path,
-    });
+    } as MessageAttachment);
   }
   return attachments.length > 0 ? attachments : undefined;
 }
@@ -303,6 +330,9 @@ function pendingTurnFrom(value: unknown): PendingTurn | undefined {
   if (targets.length === 0) return undefined;
   const attachments = attachmentsFrom(value.attachments);
   return {
+    ...unknownFields(value, [
+      "id", "eventId", "prompt", "attachments", "targets", "agentId", "partialReply", "channel", "goalStartedAt", "startedAt", "monad",
+    ]),
     id: value.id,
     ...(typeof value.eventId === "string" && value.eventId ? { eventId: value.eventId } : {}),
     prompt: value.prompt,
@@ -311,13 +341,52 @@ function pendingTurnFrom(value: unknown): PendingTurn | undefined {
     agentId: value.agentId,
     partialReply: typeof value.partialReply === "string" ? value.partialReply : "",
     ...(value.channel === "voice" ? { channel: "voice" as const } : {}),
-    ...(value.voice === true ? { voice: true } : {}),
+    ...(typeof value.goalStartedAt === "string" && value.goalStartedAt.trim() ? { goalStartedAt: value.goalStartedAt } : {}),
+    ...(value.monad === true ? { monad: true } : {}),
     startedAt: typeof value.startedAt === "string" ? value.startedAt : "",
-  };
+  } as PendingTurn;
 }
 
-/** Persisted checkpoints. A malformed entry is dropped (never bricks the
- * room); names/excerpts are re-capped defensively on read. */
+function queueFrom(value: unknown): QueuedMessage[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const queue: QueuedMessage[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw) || typeof raw.taskId !== "string" || typeof raw.text !== "string") continue;
+    const targets = Array.isArray(raw.targets) ? raw.targets.filter((t): t is string => typeof t === "string" && t.trim().length > 0) : [];
+    const attachments = attachmentsFrom(raw.attachments);
+    queue.push({
+      ...unknownFields(raw, [
+        "taskId", "text", "targets", "channel", "voice", "attachments", "fromAgentDialogue", "goalStartedAt", "nativeCommand", "pluginMessageTurn", "dogVerbTurn", "paused", "eventId", "recorded",
+        "stallRetried", "authRetries", "notBefore", "queuedAt", "humanId", "humanLabel",
+      ]),
+      taskId: raw.taskId,
+      text: raw.text,
+      targets,
+      ...(raw.channel === "voice" ? { channel: "voice" as const } : {}),
+      ...(raw.voice === true ? { voice: true } : {}),
+      ...(attachments ? { attachments } : {}),
+      ...(raw.fromAgentDialogue === true ? { fromAgentDialogue: true } : {}),
+      ...(typeof raw.goalStartedAt === "string" && raw.goalStartedAt.trim() ? { goalStartedAt: raw.goalStartedAt } : {}),
+      ...(raw.nativeCommand === true ? { nativeCommand: true } : {}),
+      ...(raw.pluginMessageTurn === true || raw.dogVerbTurn === true ? { pluginMessageTurn: true } : {}),
+      ...(raw.paused === true ? { paused: true } : {}),
+      // eventId/recorded are the queue→transcript crash-idempotency pair: drop
+      // them and a restart re-appends a user event that is already on disk.
+      ...(typeof raw.eventId === "string" && raw.eventId.trim() ? { eventId: raw.eventId } : {}),
+      ...(raw.recorded === true ? { recorded: true } : {}),
+      ...(raw.stallRetried === true ? { stallRetried: true } : {}),
+      ...(typeof raw.authRetries === "number" ? { authRetries: raw.authRetries } : {}),
+      ...(typeof raw.notBefore === "string" ? { notBefore: raw.notBefore } : {}),
+      ...(typeof raw.humanId === "string" && raw.humanId.trim() ? { humanId: raw.humanId } : {}),
+      ...(typeof raw.humanLabel === "string" && raw.humanLabel.trim() ? { humanLabel: raw.humanLabel } : {}),
+      queuedAt: typeof raw.queuedAt === "string" ? raw.queuedAt : "",
+    } as QueuedMessage);
+  }
+  return queue.length > 0 ? queue : undefined;
+}
+
+/** A room's pinned objective (see RoomGoal). A malformed record is dropped —
+ * a broken goal must never wedge the room open/read path. */
 function bookmarksFrom(value: unknown): RoomBookmark[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const bookmarks: RoomBookmark[] = [];
@@ -329,71 +398,49 @@ function bookmarksFrom(value: unknown): RoomBookmark[] | undefined {
     bookmarks.push({
       id: raw.id,
       eventId: raw.eventId,
-      name: raw.name.slice(0, BOOKMARK_NAME_MAX),
-      author: typeof raw.author === "string" && raw.author ? raw.author : "user",
-      excerpt: typeof raw.excerpt === "string" ? raw.excerpt.slice(0, BOOKMARK_EXCERPT_MAX) : "",
+      name: raw.name.trim().slice(0, 80),
+      author: typeof raw.author === "string" ? raw.author : "user",
+      excerpt: typeof raw.excerpt === "string" ? raw.excerpt.slice(0, 240) : "",
       eventAt: typeof raw.eventAt === "string" ? raw.eventAt : "",
       createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "",
     });
   }
-  const capped = bookmarks.slice(0, BOOKMARK_ROOM_MAX);
-  return capped.length > 0 ? capped : undefined;
+  return bookmarks.slice(0, BOOKMARK_ROOM_MAX).length ? bookmarks.slice(0, BOOKMARK_ROOM_MAX) : undefined;
 }
 
-export const BOOKMARK_NAME_MAX = 64;
-export const BOOKMARK_EXCERPT_MAX = 200;
-/** Hard per-room cap — checkpoints are inflection points, not an index of
- * every message; the prompt block must stay small. */
-export const BOOKMARK_ROOM_MAX = 50;
-
-export const NOTE_TEXT_MAX = 500;
-/** Hard per-room cap — sticky notes are a short prompt-later shelf, not an
- * archive; the panel must stay scannable. */
-export const NOTE_ROOM_MAX = 50;
-
-/** Persisted sticky notes. A malformed entry is dropped (never bricks the
- * room); text is re-capped defensively on read. */
 function notesFrom(value: unknown): RoomNote[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const notes: RoomNote[] = [];
   for (const raw of value) {
-    if (!isRecord(raw)) continue;
-    if (typeof raw.id !== "string" || !raw.id.trim()) continue;
-    if (typeof raw.text !== "string" || !raw.text.trim()) continue;
-    notes.push({
-      id: raw.id,
-      text: raw.text.slice(0, NOTE_TEXT_MAX),
-      createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "",
-    });
+    if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.text !== "string") continue;
+    notes.push({ id: raw.id, text: raw.text.slice(0, 2_000), createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "" });
   }
-  const capped = notes.slice(0, NOTE_ROOM_MAX);
-  return capped.length > 0 ? capped : undefined;
+  return notes.slice(0, NOTE_ROOM_MAX).length ? notes.slice(0, NOTE_ROOM_MAX) : undefined;
 }
 
-function queueFrom(value: unknown): QueuedMessage[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const queue: QueuedMessage[] = [];
-  for (const raw of value) {
-    if (!isRecord(raw) || typeof raw.taskId !== "string" || typeof raw.text !== "string") continue;
-    const targets = Array.isArray(raw.targets) ? raw.targets.filter((t): t is string => typeof t === "string" && t.trim().length > 0) : [];
-    const attachments = attachmentsFrom(raw.attachments);
-    queue.push({
-      taskId: raw.taskId,
-      text: raw.text,
-      targets,
-      ...(raw.channel === "voice" ? { channel: "voice" as const } : {}),
-      ...(raw.voice === true ? { voice: true } : {}),
-      ...(attachments ? { attachments } : {}),
-      ...(raw.fromAgentDialogue === true ? { fromAgentDialogue: true } : {}),
-      ...(raw.nativeCommand === true ? { nativeCommand: true } : {}),
-      ...(raw.paused === true ? { paused: true } : {}),
-      ...(raw.stallRetried === true ? { stallRetried: true } : {}),
-      ...(typeof raw.authRetries === "number" ? { authRetries: raw.authRetries } : {}),
-      ...(typeof raw.notBefore === "string" ? { notBefore: raw.notBefore } : {}),
-      queuedAt: typeof raw.queuedAt === "string" ? raw.queuedAt : "",
-    });
-  }
-  return queue.length > 0 ? queue : undefined;
+function voiceDispatchFrom(value: unknown): RoomState["voiceDispatch"] {
+  if (!isRecord(value) || typeof value.lastTarget !== "string" || typeof value.lastTargetAt !== "string") return undefined;
+  return { lastTarget: value.lastTarget, lastTargetAt: value.lastTargetAt };
+}
+
+function goalFrom(value: unknown): RoomGoal | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.objective !== "string" || !value.objective.trim()) return undefined;
+  if (typeof value.agentId !== "string" || !value.agentId.trim()) return undefined;
+  const status = value.status === "paused" || value.status === "done" ? value.status : "active";
+  const budget = typeof value.tokenBudget === "number" && Number.isFinite(value.tokenBudget) && value.tokenBudget > 0 ? Math.floor(value.tokenBudget) : undefined;
+  const now = new Date().toISOString();
+  return {
+    objective: value.objective,
+    agentId: value.agentId,
+    status,
+    ...(budget ? { tokenBudget: budget } : {}),
+    tokensUsed: typeof value.tokensUsed === "number" && Number.isFinite(value.tokensUsed) && value.tokensUsed > 0 ? Math.floor(value.tokensUsed) : 0,
+    iterations: typeof value.iterations === "number" && Number.isFinite(value.iterations) && value.iterations > 0 ? Math.floor(value.iterations) : 0,
+    startedAt: typeof value.startedAt === "string" ? value.startedAt : now,
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now,
+    ...(typeof value.stoppedReason === "string" && value.stoppedReason.trim() ? { stoppedReason: value.stoppedReason } : {}),
+  };
 }
 
 /** A summon child room's pending result delivery (see SummonDelivery). A
@@ -404,98 +451,20 @@ function summonDeliveryFrom(value: unknown): SummonDelivery | undefined {
   if (typeof value.agentId !== "string" || !value.agentId.trim()) return undefined;
   const deliver = value.deliver === "turn" ? "turn" : value.deliver === "note" ? "note" : undefined;
   if (!deliver) return undefined;
+  // Fix #1 (resume-completion tracking): resumeStatus is only ever set by
+  // SummonCoordinator.resume/recoverUndelivered (never a bare "running"
+  // default like `status` above — an absent field means "no resume ever
+  // tracked", which must stay distinguishable from "one is in flight").
+  const resumeStatus = value.resumeStatus === "running" || value.resumeStatus === "delivered" ? value.resumeStatus : undefined;
   return {
     agentId: value.agentId,
     deliver,
     ...(typeof value.callerAgentId === "string" && value.callerAgentId.trim() ? { callerAgentId: value.callerAgentId } : {}),
     status: value.status === "delivered" ? "delivered" : "running",
     launchedAt: typeof value.launchedAt === "string" ? value.launchedAt : new Date().toISOString(),
+    ...(resumeStatus ? { resumeStatus } : {}),
+    ...(resumeStatus && typeof value.resumeStartedAt === "string" ? { resumeStartedAt: value.resumeStartedAt } : {}),
   };
-}
-
-const ROOM_REF_BATCH = 26 * 99;
-const roomRefLocks = new Map<string, Promise<Map<string, string>>>();
-
-export function roomRefCodeForIndex(index: number): string {
-  if (!Number.isInteger(index) || index < 0) throw new Error("room ref index must be a non-negative integer");
-  const batch = Math.floor(index / ROOM_REF_BATCH);
-  const offset = index % ROOM_REF_BATCH;
-  const letter = String.fromCharCode("A".charCodeAt(0) + Math.floor(offset / 99));
-  const n = (offset % 99) + 1;
-  return batch === 0 ? `${letter}${String(n).padStart(2, "0")}` : `${letter}${batch + 1}${String(n).padStart(2, "0")}`;
-}
-
-export function validRoomRefCode(value: string): boolean {
-  const match = /^([A-Z])(\d+)$/.exec(value.trim().toUpperCase());
-  if (!match) return false;
-  const digits = match[2];
-  if (digits.length === 2) {
-    const n = Number(digits);
-    return n >= 1 && n <= 99;
-  }
-  if (digits.length < 3) return false;
-  const series = Math.floor(Number(digits) / 100);
-  const n = Number(digits) % 100;
-  return series >= 2 && n >= 1 && n <= 99;
-}
-
-function nextRoomRefCode(used: Set<string>): string {
-  for (let i = 0; ; i++) {
-    const code = roomRefCodeForIndex(i);
-    if (!used.has(code)) return code;
-  }
-}
-
-/** Ensure every room in a workspace has a stable, unique refCode. Missing or
- * colliding legacy rooms are filled oldest-first by room directory birth time;
- * existing unique codes are preserved. */
-export async function ensureWorkspaceRoomRefCodes(rootDir: string): Promise<Map<string, string>> {
-  const previous = roomRefLocks.get(rootDir) ?? Promise.resolve(new Map<string, string>());
-  const next = previous.then(async () => {
-    const roomsDir = workspacePaths.roomsDir(rootDir);
-    if (!existsSync(roomsDir)) return new Map<string, string>();
-    const entries = (await readdir(roomsDir, { withFileTypes: true })).filter((entry) => entry.isDirectory());
-    const rooms = await Promise.all(
-      entries.map(async (entry) => {
-        const dir = workspacePaths.roomDir(rootDir, entry.name);
-        const created = await stat(dir).then((info) => info.birthtimeMs || info.ctimeMs || info.mtimeMs, () => 0);
-        const statePath = workspacePaths.roomState(rootDir, entry.name);
-        const state = normalizeRoomState(await readJson(statePath));
-        return { id: entry.name, statePath, state, created };
-      }),
-    );
-    rooms.sort((a, b) => a.created - b.created || a.id.localeCompare(b.id));
-    const used = new Set<string>();
-    const refs = new Map<string, string>();
-    for (const room of rooms) {
-      const existing = room.state.refCode;
-      const refCode = existing && !used.has(existing) ? existing : nextRoomRefCode(used);
-      used.add(refCode);
-      refs.set(room.id, refCode);
-      if (room.state.refCode !== refCode) {
-        room.state.refCode = refCode;
-        await writeJsonAtomic(room.statePath, room.state);
-      }
-    }
-    return refs;
-  });
-  roomRefLocks.set(rootDir, next.catch(() => new Map<string, string>()));
-  return next;
-}
-
-export async function resolveWorkspaceRoomRef(rootDir: string, ref: string): Promise<string | undefined> {
-  const code = ref.trim().toUpperCase();
-  if (!validRoomRefCode(code)) return undefined;
-  const refs = await ensureWorkspaceRoomRefCodes(rootDir);
-  for (const [roomId, roomRef] of refs) if (roomRef === code) return roomId;
-  return undefined;
-}
-
-function voiceDispatchFrom(value: unknown): RoomState["voiceDispatch"] {
-  if (!isRecord(value)) return undefined;
-  return typeof value.lastTarget === "string" && Boolean(value.lastTarget.trim()) && typeof value.lastTargetAt === "string" && Boolean(value.lastTargetAt.trim())
-    ? { lastTarget: value.lastTarget.trim(), lastTargetAt: value.lastTargetAt.trim() }
-    : undefined;
 }
 
 export function normalizeRoomState(value: unknown): RoomState {
@@ -509,14 +478,18 @@ export function normalizeRoomState(value: unknown): RoomState {
     : undefined;
   const monad = monadFrom(value.monad);
   const summon = summonDeliveryFrom(value.summon);
+  const goal = goalFrom(value.goal);
   const pendingTurn = pendingTurnFrom(value.pendingTurn);
   const queue = queueFrom(value.queue);
   const contextUsage = contextUsageFrom(value.contextUsage);
   const backgroundTasks = backgroundTasksFrom(value.backgroundTasks);
   const contextGate = contextGateFrom(value.contextGate);
   const contextFloors = cursorRecord(value.contextFloors);
+  const conversationEndedAgents = stringRecord(value.conversationEndedAgents);
   const petBindings = normalizePetBindings(value.petBindings);
   const pluginState = pluginStateFrom(value.pluginState);
+  const bookmarks = bookmarksFrom(value.bookmarks);
+  const notes = notesFrom(value.notes);
   const voiceDispatch = voiceDispatchFrom(value.voiceDispatch);
   return {
     activeRoles: stringRecord(value.activeRoles),
@@ -529,36 +502,32 @@ export function normalizeRoomState(value: unknown): RoomState {
       : {}),
     ...(value.berserk === true ? { berserk: true as const } : {}),
     ...(value.love === true ? { love: true as const } : {}),
-    ...(typeof value.teleport === "boolean" ? { teleport: value.teleport } : {}),
+    ...(value.teleport === true ? { teleport: true } : {}),
+    ...(isRecord(value.rebirth) && typeof value.rebirth.to === "string" && typeof value.rebirth.at === "string" ? { rebirth: { to: value.rebirth.to, at: value.rebirth.at } } : {}),
+    ...(typeof value.autoHeals === "number" && Number.isFinite(value.autoHeals) && value.autoHeals > 0 ? { autoHeals: Math.floor(value.autoHeals) } : {}),
     agentCursors: cursorRecord(value.agentCursors),
     ...(Object.keys(contextFloors).length > 0 ? { contextFloors } : {}),
+    ...(Object.keys(conversationEndedAgents).length > 0 ? { conversationEndedAgents } : {}),
     ...(runtimeDetails && Object.keys(runtimeDetails).length > 0 ? { runtimeDetails } : {}),
     ...(typeof value.parentRoomId === "string" && value.parentRoomId.trim() ? { parentRoomId: value.parentRoomId } : {}),
     ...(value.subroom === true ? { subroom: true } : {}),
+    ...(goal ? { goal } : {}),
     ...(summon ? { summon } : {}),
     ...(value.summonUntrusted === true ? { summonUntrusted: true } : {}),
     ...(typeof value.workDir === "string" && value.workDir.trim() ? { workDir: value.workDir } : {}),
     ...(typeof value.title === "string" && value.title.trim() ? { title: value.title } : {}),
     ...(value.titleSource === "auto" || value.titleSource === "model" || value.titleSource === "manual" ? { titleSource: value.titleSource } : {}),
-    ...(typeof value.titleDrift === "number" && Number.isFinite(value.titleDrift) && value.titleDrift > 0 ? { titleDrift: Math.floor(value.titleDrift) } : {}),
     ...(value.favorite === true ? { favorite: true } : {}),
     ...(typeof value.project === "string" && value.project.trim() ? { project: value.project.trim() } : {}),
-    ...(() => {
-      const bookmarks = bookmarksFrom(value.bookmarks);
-      return bookmarks ? { bookmarks } : {};
-    })(),
+    ...(bookmarks ? { bookmarks } : {}),
     ...(typeof value.imported === "string" && value.imported.trim() ? { imported: value.imported } : {}),
-    ...(value.voiceSession === true ? { voiceSession: true } : {}),
-    ...(typeof value.voiceRotatedTo === "string" && value.voiceRotatedTo.trim() ? { voiceRotatedTo: value.voiceRotatedTo } : {}),
-    ...(typeof value.predecessorRoomId === "string" && value.predecessorRoomId.trim() ? { predecessorRoomId: value.predecessorRoomId } : {}),
     ...(monad ? { monad } : {}),
     ...(pendingTurn ? { pendingTurn } : {}),
     ...(queue ? { queue } : {}),
-    ...(() => {
-      const notes = notesFrom(value.notes);
-      return notes ? { notes } : {};
-    })(),
+    ...(notes ? { notes } : {}),
     ...(voiceDispatch ? { voiceDispatch } : {}),
+    ...(typeof value.voiceRotatedTo === "string" && value.voiceRotatedTo.trim() ? { voiceRotatedTo: value.voiceRotatedTo } : {}),
+    ...(typeof value.predecessorRoomId === "string" && value.predecessorRoomId.trim() ? { predecessorRoomId: value.predecessorRoomId } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     ...(backgroundTasks ? { backgroundTasks } : {}),
     ...(contextGate ? { contextGate } : {}),
@@ -566,10 +535,34 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(typeof value.activeAgent === "string" && value.activeAgent.trim() ? { activeAgent: value.activeAgent } : {}),
     ...(value.agentDialogue === true ? { agentDialogue: true } : {}),
     ...(value.incognito === true ? { incognito: true } : {}),
+    ...(value.voiceSession === true ? { voiceSession: true } : {}),
+    ...(stringArray(value.humans).length > 0 ? { humans: stringArray(value.humans) } : {}),
   };
 }
 
 // --- transcript parsing ------------------------------------------------------
+
+/** AgentRoomEvent.renderCap round-trip (see services/plugins.ts
+ * PluginRenderCap / domain/render-cap.ts). `note` is optional chrome text;
+ * absent/garbage input (including a `note` of the wrong type) drops just
+ * that field rather than the whole cap. */
+function renderCapFrom(raw: unknown): { maxLines: number; note?: string } | undefined {
+  if (!isRecord(raw) || typeof raw.maxLines !== "number" || !Number.isFinite(raw.maxLines)) return undefined;
+  const note = typeof raw.note === "string" && raw.note ? raw.note : undefined;
+  return { maxLines: raw.maxLines, ...(note ? { note } : {}) };
+}
+
+/** Back-compat for transcript lines committed before the whip-348 extraction
+ * (AgentRoomEvent.dogRender: { maxLines, prefix }, domain/dog-mode.ts, now
+ * deleted): maps the old shape onto the new one, DROPPING `prefix` — that
+ * injected-text-into-the-agent's-own-message field is exactly the banned
+ * placeholder pattern killed by whip 349, so it is never carried forward,
+ * only `maxLines` survives. New writes never use this field name again (see
+ * AgentRoomEvent.renderCap / RoomService#commitReply). */
+function legacyDogRenderCapFrom(raw: unknown): { maxLines: number; note?: string } | undefined {
+  if (!isRecord(raw) || typeof raw.maxLines !== "number" || !Number.isFinite(raw.maxLines)) return undefined;
+  return { maxLines: raw.maxLines };
+}
 
 function roomEventFrom(raw: unknown, index: number): RoomEvent | undefined {
   if (!isRecord(raw)) return undefined;
@@ -588,10 +581,66 @@ function roomEventFrom(raw: unknown, index: number): RoomEvent | undefined {
   if (raw.author === "user") {
     const targets = Array.isArray(raw.targets) ? raw.targets.filter((t): t is string => typeof t === "string") : [];
     const attachments = attachmentsFrom(raw.attachments);
-    return { ...base, author: "user", targets, ...(raw.voice === true ? { voice: true } : {}), ...(attachments ? { attachments } : {}) };
+    const humanId = typeof raw.humanId === "string" && raw.humanId.trim() ? raw.humanId : undefined;
+    const humanLabel = typeof raw.humanLabel === "string" && raw.humanLabel.trim() ? raw.humanLabel : undefined;
+    return {
+      ...base,
+      author: "user",
+      targets,
+      ...(attachments ? { attachments } : {}),
+      ...(humanId ? { humanId } : {}),
+      ...(humanLabel ? { humanLabel } : {}),
+    };
   }
   const details = eventDetailsFrom(raw.details);
-  return { ...base, author: raw.author, ...(kind ? { kind } : {}), ...(details ? { details } : {}) };
+  const renderCap = renderCapFrom(raw.renderCap) ?? legacyDogRenderCapFrom(raw.dogRender);
+  return { ...base, author: raw.author, ...(kind ? { kind } : {}), ...(details ? { details } : {}), ...(renderCap ? { renderCap } : {}) };
+}
+
+async function readRoomState(path: string): Promise<unknown> {
+  // State exists after RoomHandle.open. Parse failure is durability corruption,
+  // not an empty document: rewriting it would destroy recoverable bytes.
+  const state = JSON.parse(await readFile(path, "utf8")) as unknown;
+  // Normalization remains lenient for callers handling arbitrary input, but a
+  // persisted non-object or malformed privacy/trust bit is unsafe: never
+  // silently weaken it.
+  if (!isRecord(state)) throw new Error(`invalid persisted room state: ${path}`);
+  for (const bit of ["summonUntrusted", "incognito"] as const) {
+    if (bit in state && typeof state[bit] !== "boolean") throw new Error(`invalid persisted ${bit} bit: ${path}`);
+  }
+  return state;
+}
+
+function patchNormalizedState(raw: unknown, before: unknown, after: unknown): unknown {
+  if (isDeepStrictEqual(before, after)) return raw;
+  if (!isRecord(before) || !isRecord(after)) return after;
+
+  const patched: Record<string, unknown> = isRecord(raw) ? { ...raw } : {};
+  for (const key of Object.keys(before)) {
+    if (!(key in after)) delete patched[key];
+  }
+  for (const [key, value] of Object.entries(after)) {
+    if (!(key in before)) patched[key] = value;
+    else patched[key] = patchNormalizedState(patched[key], before[key], value);
+  }
+  return patched;
+}
+
+interface SharedRoomState {
+  chain: Promise<unknown>;
+  version: number;
+}
+
+const sharedRoomStates = new Map<string, SharedRoomState>();
+
+function sharedRoomState(path: string): SharedRoomState {
+  const key = resolve(path);
+  let shared = sharedRoomStates.get(key);
+  if (!shared) {
+    shared = { chain: Promise.resolve(), version: 0 };
+    sharedRoomStates.set(key, shared);
+  }
+  return shared;
 }
 
 // --- the handle --------------------------------------------------------------
@@ -601,22 +650,47 @@ export interface RoomPage {
   nextCursor: number;
 }
 
+/** Canonical tolerant transcript reader. Physical nonblank-line cursors stay
+ * stable: malformed JSON and non-object lines consume a position but yield no
+ * item, preserving durable replay ordering. */
+export interface TranscriptRecord extends Record<string, unknown> {
+  lineIndex: number;
+}
+export async function readTranscriptRecordsFrom(path: string, cursor = 0): Promise<{ items: TranscriptRecord[]; nextCursor: number }> {
+  return readJsonlFrom<TranscriptRecord>(path, cursor, (raw, lineIndex) =>
+    isRecord(raw) ? { ...raw, lineIndex } : undefined,
+  );
+}
+
 export class RoomHandle {
-  /** Serializes every state write; the single-writer rule enforced in code
-   * instead of by discipline. */
-  private chain: Promise<unknown> = Promise.resolve();
   private stateCache: RoomState | undefined;
+  private stateCacheVersion = -1;
 
   private constructor(
     readonly workspaceRoot: string,
     readonly roomId: string,
   ) {}
 
-  static async open(workspaceRoot: string, roomId: string): Promise<RoomHandle> {
+  /** `seed` is applied ONLY when this call is the one that creates the room's
+   * state document, inside the create lock: first winner keeps its seed, later
+   * openers (with or without a seed) never rewrite it. */
+  static async open(workspaceRoot: string, roomId: string, seed?: { incognito?: boolean }): Promise<RoomHandle> {
     const handle = new RoomHandle(workspaceRoot, roomId);
+    // Read-only fast path: an existing room needs no directory write and no
+    // lock database. Opening a room to READ it must never create a sidecar
+    // (read-only checkouts, snapshots, archived workspaces stay openable).
+    if (existsSync(handle.statePath)) return handle;
     await ensureDir(workspacePaths.roomDir(workspaceRoot, roomId));
-    if (!existsSync(handle.statePath)) await writeJsonAtomic(handle.statePath, normalizeRoomState(undefined));
-    await ensureWorkspaceRoomRefCodes(workspaceRoot);
+    const shared = sharedRoomState(handle.statePath);
+    const initialize = shared.chain.then(async () => {
+      await withSqliteImmediateLock(handle.stateLockPath, async () => {
+        if (existsSync(handle.statePath)) return;
+        await writeJsonAtomic(handle.statePath, normalizeRoomState(seed?.incognito ? { incognito: true } : undefined));
+        shared.version++;
+      });
+    });
+    shared.chain = initialize.catch(() => {});
+    await initialize;
     return handle;
   }
 
@@ -628,27 +702,72 @@ export class RoomHandle {
     return workspacePaths.roomState(this.workspaceRoot, this.roomId);
   }
 
-  async state(): Promise<RoomState> {
-    if (!this.stateCache) this.stateCache = normalizeRoomState(await readJson(this.statePath));
-    return this.stateCache;
+  /** ONE lock per room, shared by state.json and transcript.jsonl writers.
+   * Cross-process mutual exclusion of the two files must be the SAME lock or
+   * a transcript rewrite could interleave with a state commit; a second lock
+   * would also open a lock-ordering deadlock. Never acquired nested. */
+  private get stateLockPath(): string {
+    return `${this.statePath}.lock.sqlite`;
   }
 
-  /** Apply `mutate` to the current state and persist atomically. All writes
-   * funnel through here, serialized. */
-  async updateState(mutate: (state: RoomState) => void): Promise<RoomState> {
-    const run = async (): Promise<RoomState> => {
-      const state = await this.state();
-      mutate(state);
-      await writeJsonAtomic(this.statePath, state);
-      return state;
-    };
-    const next = this.chain.then(run, run);
-    this.chain = next.catch(() => {});
+  /** Run `work` under the room lock, serialized in-process on the same chain
+   * as state writes. `work` MUST NOT call any public method that acquires the
+   * lock again (updateState/appendEvent/...): the chain makes that a deadlock,
+   * by design — nesting is a bug, not a slow path. */
+  private async withRoomLock<T>(work: () => Promise<T>): Promise<T> {
+    const shared = sharedRoomState(this.statePath);
+    const run = (): Promise<T> => withSqliteImmediateLock(this.stateLockPath, work);
+    const next = shared.chain.then(run, run);
+    shared.chain = next.catch(() => {});
     return next;
   }
 
-  /** Drop the in-memory cache so the next read hits disk (used by tests and
-   * by anything that must observe a foreign write — there should be none). */
+  async state(): Promise<RoomState> {
+    // A peer process has no access to sharedRoomStates/version. Read the
+    // atomically-renamed document on every public observation instead.
+    const shared = sharedRoomState(this.statePath);
+    this.stateCache = normalizeRoomState(await readRoomState(this.statePath));
+    this.stateCacheVersion = shared.version;
+    return this.stateCache;
+  }
+
+  /** Apply one typed delta over the latest raw document. Every handle for this
+   * room shares the same chain; unknown future fields survive unchanged. */
+  async updateState(mutate: (state: RoomState) => void): Promise<RoomState> {
+    return this.withRoomLock(() => this.updateStateLocked(mutate));
+  }
+
+  /** The state delta itself, WITHOUT acquiring the room lock — for composite
+   * operations that already hold it (clearRoom). Lock spans read → typed patch
+   * → atomic rename. It is deliberately a sidecar lock: state.json remains the
+   * source of truth and preserves unknown fields and its established bytes for
+   * no-op mutations. */
+  private async updateStateLocked(mutate: (state: RoomState) => void): Promise<RoomState> {
+    const shared = sharedRoomState(this.statePath);
+    const raw = await readRoomState(this.statePath);
+    const before = normalizeRoomState(raw);
+    const state = structuredClone(before);
+    mutate(state);
+    if (!isDeepStrictEqual(before, state)) {
+      await writeJsonAtomic(this.statePath, patchNormalizedState(raw, before, state));
+      shared.version++;
+    }
+    this.stateCache = state;
+    this.stateCacheVersion = shared.version;
+    return state;
+  }
+
+  /** Exact state replacement for an import already holding the room lock. */
+  private async replaceStateLocked(state: RoomState): Promise<void> {
+    const shared = sharedRoomState(this.statePath);
+    await writeJsonAtomic(this.statePath, state);
+    shared.version++;
+    this.stateCache = state;
+    this.stateCacheVersion = shared.version;
+  }
+
+  /** Drop the in-memory cache retained for an update result. Public state()
+   * already reads disk so foreign-process writers are observable. */
   invalidate(): void {
     this.stateCache = undefined;
   }
@@ -656,13 +775,30 @@ export class RoomHandle {
   // --- transcript ------------------------------------------------------------
 
   async appendEvent(event: RoomEvent): Promise<void> {
-    await appendJsonl(this.transcriptPath, event);
+    await this.withRoomLock(() => appendJsonlDurable(this.transcriptPath, event));
+  }
+  /** Append an agent's visible goodbye and durably suppress its automatic
+   * follow-ups as one room-lock transaction. */
+  async endConversation(agentId: string, event: RoomEvent): Promise<void> {
+    await this.withRoomLock(async () => {
+      await appendJsonlDurable(this.transcriptPath, event);
+      await this.updateStateLocked((state) => {
+        state.conversationEndedAgents = { ...(state.conversationEndedAgents ?? {}), [agentId]: event.timestamp };
+      });
+    });
   }
 
   /** `id` pre-assigns the event id — the queue→transcript hand-off reserves it
    * durably on the QueuedMessage first, so a crash-replayed append is
    * idempotent (see QueuedMessage.eventId). */
-  async addUserMessage(text: string, targets: string[], channel?: string, attachments?: MessageAttachment[], id?: string, voice?: boolean): Promise<RoomEvent> {
+  async addUserMessage(
+    text: string,
+    targets: string[],
+    channel?: string,
+    attachments?: MessageAttachment[],
+    id?: string,
+    human?: { id: string; label: string }
+  ): Promise<RoomEvent> {
     const event: RoomEvent = {
       id: id ?? newRoomEventId(),
       timestamp: new Date().toISOString(),
@@ -670,16 +806,95 @@ export class RoomHandle {
       targets,
       text,
       ...(channel ? { channel } : {}),
-      ...(voice ? { voice: true } : {}),
       ...(attachments?.length ? { attachments } : {}),
+      ...(human ? { humanId: human.id, humanLabel: human.label } : {}),
     };
     await this.appendEvent(event);
     return event;
   }
 
-  /** Wipe the transcript (backs /clear). State is the caller's to reset. */
-  async clearTranscript(): Promise<void> {
-    await writeText(this.transcriptPath, "");
+  /** /clear as ONE critical section: archive → wipe transcript → reset the
+   * state that describes it (cursors, legacy runtimeDetails), under a single
+   * acquisition of the room lock. Split across two acquisitions, a concurrent
+   * process can commit a turn in between and leave cursors pointing past a
+   * transcript that no longer has those lines (silent amnesia / replay).
+   *
+   * pending/queue are deliberately NOT touched: a queued message is owed work
+   * that survives history wipes, and a pendingTurn is another writer's live
+   * WAL record — clearing it here would strand or double-run that turn. /clear
+   * is therefore safe on a BUSY room, not only an idle one; the turn in flight
+   * commits its reply onto the fresh transcript. */
+  async clearRoom(): Promise<void> {
+    await this.withRoomLock(async () => {
+      const { events } = await this.readEventsLocked();
+      await this.archiveLocked(workspacePaths.roomRewound(this.workspaceRoot, this.roomId), events);
+      await writeTextAtomic(this.transcriptPath, "");
+      await this.updateStateLocked((state) => {
+        state.agentCursors = {};
+        delete state.runtimeDetails;
+      });
+    });
+  }
+
+  /** Replace the whole transcript with `events` (backs explicit import
+   * --force). The ONE history-rewrite entry point besides clear/rewind/redact:
+   * importers must come through here instead of writing transcript.jsonl
+   * behind the room lock's back.
+   *
+   * Conservative by construction: whatever was there — including lines a
+   * concurrent process appended while the import was reading its export — is
+   * archived to rewound.jsonl and fsynced BEFORE the replacement publishes. A
+   * --force import destroys no history, it only stops replaying it. */
+  async replaceTranscript(events: RoomEvent[]): Promise<void> {
+    await this.replaceImportedRoom(events);
+  }
+
+  /** Import transcript + selected state as one room-lock transaction. A
+   * non-force caller tests occupancy INSIDE that lock; false means no bytes
+   * changed. No observer can append against old transcript then patch new
+   * state, or see their state delta paired with the old transcript. */
+  async replaceImportedRoom(events: RoomEvent[], state?: RoomState, options?: { refuseIfNonempty?: boolean }): Promise<boolean> {
+    return this.withRoomLock(async () => {
+      // Occupancy is a byte-level question, checked inside the lock. A legacy
+      // or future transcript may not parse under this daemon, but non-force
+      // import must still refuse it rather than trying to normalize it.
+      const raw = (await readText(this.transcriptPath)) ?? "";
+      if (options?.refuseIfNonempty && raw.trim()) return false;
+      const { events: existing } = await this.readEventsLocked();
+      await this.archiveLocked(workspacePaths.roomRewound(this.workspaceRoot, this.roomId), existing);
+      await writeTextAtomic(this.transcriptPath, serializeEvents(events));
+      if (state) await this.replaceStateLocked(state);
+      return true;
+    });
+  }
+
+  /** The transcript's bytes, read under the room lock (backs /fork's source
+   * side): an unlocked read can catch a full rewrite mid-publish or an append
+   * mid-line. Returns "" for a room that never wrote one.
+   *
+   * Lock order: the snapshot is taken and the lock RELEASED before the target
+   * room's handle is touched. Source and target locks are never held at the
+   * same time, so two rooms forking into each other cannot deadlock. */
+  async snapshotTranscript(): Promise<string> {
+    return (await this.snapshotRoom()).transcript;
+  }
+
+  /** Fork source snapshot: transcript and selected state share ONE source
+   * lock acquisition. Target reservation deliberately occurs afterwards;
+   * source/target locks are never held together. */
+  async snapshotRoom(): Promise<{ transcript: string; state: RoomState }> {
+    return this.withRoomLock(async () => ({
+      transcript: (await readText(this.transcriptPath)) ?? "",
+      state: await readRoomState(this.statePath).then(normalizeRoomState),
+    }));
+  }
+
+  /** Seed this (new) room's transcript with `text`, exclusively: `wx`, so the
+   * fork target is created by exactly one writer and an existing room's
+   * history can never be clobbered by a fork/import landing on its id.
+   * Returns whether this call created it. */
+  async seedTranscript(text: string): Promise<boolean> {
+    return this.withRoomLock(() => writeTextIfMissing(this.transcriptPath, text));
   }
 
   /** Rewind: drop the last `userTurns` user messages and every event after
@@ -688,7 +903,8 @@ export class RoomHandle {
    * fewer user messages. Cursors/sessions are the caller's to reset; the
    * per-room recall index rebuilds itself on shrink. */
   async rewindTranscript(userTurns: number): Promise<RoomEvent[] | undefined> {
-    const { events } = await this.eventsFrom(0);
+    return this.withRoomLock(async () => {
+    const { events } = await this.readEventsLocked();
     let cut = -1;
     let seen = 0;
     for (let i = events.length - 1; i >= 0; i--) {
@@ -701,29 +917,33 @@ export class RoomHandle {
     }
     if (cut < 0) return undefined;
     return this.truncateAt(events, cut);
+    });
   }
 
   /** Rewind to a specific event: drop it and everything after (backs message
    * edit and reply retry — the fork-from-here primitive). Returns the dropped
    * events, or undefined when the id is not in the transcript. */
   async rewindToEvent(eventId: string): Promise<RoomEvent[] | undefined> {
-    const { events } = await this.eventsFrom(0);
-    const cut = events.findIndex((event) => event.id === eventId);
-    if (cut < 0) return undefined;
-    return this.truncateAt(events, cut);
+    return this.withRoomLock(async () => {
+      const { events } = await this.readEventsLocked();
+      const cut = events.findIndex((event) => event.id === eventId);
+      if (cut < 0) return undefined;
+      return this.truncateAt(events, cut);
+    });
   }
 
   /** All transcript truncation funnels through here. Dropped events are
    * preserved append-only in rewound.jsonl beside the transcript — a rewind
-   * discards them from the conversation, never from disk. */
+   * discards them from the conversation, never from disk. Caller holds the
+   * room lock: read → archive → publish is one critical section, so a
+   * concurrent append can neither be silently dropped nor half-written. */
   private async truncateAt(events: RoomEvent[], cut: number): Promise<RoomEvent[]> {
     const kept = events.slice(0, cut);
     const dropped = events.slice(cut);
-    const rewoundPath = workspacePaths.roomRewound(this.workspaceRoot, this.roomId);
-    for (const event of dropped) await appendJsonl(rewoundPath, event);
+    await this.archiveLocked(workspacePaths.roomRewound(this.workspaceRoot, this.roomId), dropped);
     // Atomic: the kept head has no other copy — a torn rewrite would be
     // permanent loss of committed history.
-    await writeTextAtomic(this.transcriptPath, kept.map((event) => JSON.stringify(event)).join("\n") + (kept.length ? "\n" : ""));
+    await writeTextAtomic(this.transcriptPath, serializeEvents(kept));
     return dropped;
   }
 
@@ -734,21 +954,80 @@ export class RoomHandle {
    * count is unchanged, so every existing cursor stays valid. Returns the
    * ids actually edited (unknown ids and no-op texts are ignored). */
   async redactEvents(edits: Map<string, string>): Promise<string[]> {
-    const { events } = await this.eventsFrom(0);
+    return this.withRoomLock(async () => {
+    const { events } = await this.readEventsLocked();
     const edited = new Set<string>();
     const redactionsPath = workspacePaths.roomRedactions(this.workspaceRoot, this.roomId);
+    const originals: RoomEvent[] = [];
     for (const event of events) {
       const text = edits.get(event.id);
       if (text === undefined || text === event.text) continue;
-      await appendJsonl(redactionsPath, event);
+      originals.push(event);
       edited.add(event.id);
     }
+    await this.archiveLocked(redactionsPath, originals);
     if (edited.size === 0) return [];
     const next = events.map((event) => (edited.has(event.id) ? { ...event, text: edits.get(event.id)!, redacted: true } : event));
     // Atomic: every unedited event exists only on this line — a torn rewrite
     // would destroy committed history far beyond the redaction.
-    await writeTextAtomic(this.transcriptPath, next.map((event) => JSON.stringify(event)).join("\n") + "\n");
+    await writeTextAtomic(this.transcriptPath, serializeEvents(next));
     return [...edited];
+    });
+  }
+
+  /** Transcript read for a mutation already holding the room lock. Identical
+   * parse to the public eventsFrom (same format, same legacy-details merge)
+   * and lock-free itself — state() only reads the atomically-renamed
+   * document, so no nested acquisition happens here. */
+  private async readEventsLocked(): Promise<RoomPage> {
+    const raw = await readText(this.transcriptPath);
+    if (raw) {
+      if (!raw.endsWith("\n")) throw new Error("Transcript rewrite refused: noncanonical raw tail");
+      let index = 0;
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        let value: unknown;
+        try { value = JSON.parse(line); } catch { throw new Error("Transcript rewrite refused: malformed raw line"); }
+        const event = roomEventFrom(value, index++);
+        // Compare parsed structures, not JSON text: key order is irrelevant,
+        // while unknown or normalized-away nested metadata would be destroyed
+        // by a rewrite and therefore fails closed.
+        if (!event || line.endsWith("\r") || !isDeepStrictEqual(value, event))
+          throw new Error("Transcript rewrite refused: noncanonical raw line");
+      }
+    }
+    return this.eventsFrom(0);
+  }
+
+  /** Physical raw-line cursor: all durable cursors count JSONL lines, not
+   * parsed events. Invalid lines remain visible to cursor arithmetic. */
+  async transcriptCursor(eventId?: string): Promise<number | undefined> {
+    const page = await readJsonlFrom<number>(this.transcriptPath, 0, (raw, lineIndex) =>
+      eventId === undefined || (raw && typeof raw === "object" && (raw as { id?: unknown }).id === eventId)
+        ? lineIndex + 1 : undefined,
+    );
+    return eventId === undefined ? page.nextCursor : page.items.at(-1);
+  }
+
+  /** Archive events that a rewrite is about to remove from the live file, and
+   * make them durable BEFORE the rewrite publishes — the archive is their only
+   * remaining copy, so "written but not yet on disk" is exactly the window in
+   * which a power cut turns a rewind into deletion.
+   *
+   * Retry note: a crash midway leaves a PARTIAL archive, and re-running the
+   * operation appends those events a second time. Duplicate archive lines are
+   * accepted deliberately — the invariant this file must carry is "every event
+   * that ever existed is in live ∪ archive", which duplication cannot break,
+   * while dedup keying (an operation id per rewrite) would add a second
+   * durable record to keep consistent for a cosmetic gain. NO production
+   * reader of rewound/redactions exists today: whoever writes the first one
+   * MUST dedup by event id (repeated id = one event), or a retried rewrite
+   * shows history twice. */
+  private async archiveLocked(path: string, events: RoomEvent[]): Promise<void> {
+    // ONE write + ONE fsync for the whole batch: this runs inside the room
+    // lock, so a per-event sync made clear/rewind/import hold time linear in
+    // history and eventually collide with the lock timeout.
+    await appendJsonlBatchDurable(path, events);
   }
 
   // --- durable compaction summaries -------------------------------------------
@@ -787,81 +1066,12 @@ export class RoomHandle {
     await writeJsonAtomic(this.compactionPath(), all);
   }
 
-  // --- checkpoints (bookmarks) -----------------------------------------------
-
-  /** Upsert a checkpoint by anchored event id (a second bookmark on the same
-   * message is a rename, never a duplicate). The anchored event's author,
-   * text head, and timestamp are frozen onto the bookmark here — the one
-   * transcript scan this feature ever does per write. Throws on an unknown
-   * event or a full room. Returns the stored bookmark. */
-  async setBookmark(eventId: string, rawName: string): Promise<RoomBookmark> {
-    const name = rawName.replace(/\s+/g, " ").trim().slice(0, BOOKMARK_NAME_MAX);
-    if (!name) throw new Error("Checkpoint name cannot be empty.");
-    const { events } = await this.eventsFrom(0);
-    const event = events.find((candidate) => candidate.id === eventId);
-    if (!event) throw new Error(`Unknown event: ${eventId} — cannot bookmark a message that is not in the transcript.`);
-    const bookmark: RoomBookmark = {
-      id: newId("bmk"),
-      eventId,
-      name,
-      author: "targets" in event ? "user" : event.author,
-      excerpt: event.text.replace(/\s+/g, " ").trim().slice(0, BOOKMARK_EXCERPT_MAX),
-      eventAt: event.timestamp,
-      createdAt: new Date().toISOString(),
-    };
-    let stored: RoomBookmark = bookmark;
-    await this.updateState((state) => {
-      const existing = state.bookmarks?.find((candidate) => candidate.eventId === eventId);
-      if (existing) {
-        existing.name = name;
-        stored = existing;
-        return;
-      }
-      if ((state.bookmarks?.length ?? 0) >= BOOKMARK_ROOM_MAX) throw new Error(`Checkpoint limit reached (${BOOKMARK_ROOM_MAX} per room) — remove one first.`);
-      const next = [...(state.bookmarks ?? []), bookmark];
-      next.sort((a, b) => a.eventAt.localeCompare(b.eventAt));
-      state.bookmarks = next;
-    });
-    return stored;
-  }
-
-  /** Remove one checkpoint by bookmark id — idempotent. */
-  async removeBookmark(bookmarkId: string): Promise<void> {
-    await this.updateState((state) => {
-      if (!state.bookmarks) return;
-      const next = state.bookmarks.filter((candidate) => candidate.id !== bookmarkId);
-      if (next.length > 0) state.bookmarks = next;
-      else delete state.bookmarks;
-    });
-  }
-
-  // --- sticky notes (/note) --------------------------------------------------
-
-  /** Append one sticky note — a prompt-later idea. Throws on empty text or a
-   * full shelf. Returns the stored note. */
-  async addNote(rawText: string): Promise<RoomNote> {
-    const text = rawText.replace(/\s+/g, " ").trim().slice(0, NOTE_TEXT_MAX);
-    if (!text) throw new Error("Note text cannot be empty.");
-    const note: RoomNote = { id: newId("note"), text, createdAt: new Date().toISOString() };
-    await this.updateState((state) => {
-      if ((state.notes?.length ?? 0) >= NOTE_ROOM_MAX) throw new Error(`Note limit reached (${NOTE_ROOM_MAX} per room) — dismiss one first.`);
-      state.notes = [...(state.notes ?? []), note];
-    });
-    return note;
-  }
-
-  /** Remove one sticky note by id — idempotent. */
-  async removeNote(noteId: string): Promise<void> {
-    await this.updateState((state) => {
-      if (!state.notes) return;
-      const next = state.notes.filter((candidate) => candidate.id !== noteId);
-      if (next.length > 0) state.notes = next;
-      else delete state.notes;
-    });
-  }
-
   async eventsFrom(cursor: number): Promise<RoomPage> {
-    const page = await readJsonlFrom<RoomEvent>(this.transcriptPath, cursor, roomEventFrom);
+    const records = await readTranscriptRecordsFrom(this.transcriptPath, cursor);
+    const page = {
+      items: records.items.map((record) => roomEventFrom(record, record.lineIndex)).filter((event): event is RoomEvent => event !== undefined),
+      nextCursor: records.nextCursor,
+    };
     // Merge legacy v1 side-table details onto agent events that lack them.
     const state = await this.state();
     const legacy = state.runtimeDetails;
@@ -882,9 +1092,74 @@ export class RoomHandle {
     return events.slice(-limit);
   }
 
-  async hasEvent(eventId: string): Promise<boolean> {
+  async setBookmark(eventId: string, name: string): Promise<RoomBookmark> {
     const { events } = await this.eventsFrom(0);
-    return events.some((event) => event.id === eventId);
+    const event = events.find((candidate) => candidate.id === eventId);
+    if (!event) throw new Error(`Unknown event: ${eventId} — cannot bookmark a message that is not in the transcript.`);
+    const bookmark: RoomBookmark = {
+      id: newId("bookmark"),
+      eventId,
+      name: name.trim().slice(0, 80) || "checkpoint",
+      author: event.author,
+      excerpt: event.text.trim().replace(/\s+/g, " ").slice(0, 240),
+      eventAt: event.timestamp,
+      createdAt: new Date().toISOString(),
+    };
+    let stored = bookmark;
+    await this.updateState((state) => {
+      const existing = state.bookmarks?.find((candidate) => candidate.eventId === eventId);
+      if (existing) {
+        stored = { ...existing, name: bookmark.name, excerpt: bookmark.excerpt };
+        state.bookmarks = (state.bookmarks ?? []).map((candidate) => candidate.id === existing.id ? stored : candidate);
+        return;
+      }
+      if ((state.bookmarks?.length ?? 0) >= BOOKMARK_ROOM_MAX) throw new Error(`Checkpoint limit reached (${BOOKMARK_ROOM_MAX} per room) — remove one first.`);
+      state.bookmarks = [...(state.bookmarks ?? []), bookmark].sort((a, b) => a.eventAt.localeCompare(b.eventAt));
+    });
+    return stored;
+  }
+
+  async removeBookmark(bookmarkId: string): Promise<void> {
+    await this.updateState((state) => {
+      if (!state.bookmarks) return;
+      const next = state.bookmarks.filter((candidate) => candidate.id !== bookmarkId);
+      if (next.length) state.bookmarks = next;
+      else delete state.bookmarks;
+    });
+  }
+
+  async addNote(text: string): Promise<RoomNote> {
+    const note: RoomNote = { id: newId("note"), text: text.trim().slice(0, 2_000), createdAt: new Date().toISOString() };
+    if (!note.text) throw new Error("Note text is required.");
+    await this.updateState((state) => {
+      if ((state.notes?.length ?? 0) >= NOTE_ROOM_MAX) throw new Error(`Note limit reached (${NOTE_ROOM_MAX} per room) — dismiss one first.`);
+      state.notes = [...(state.notes ?? []), note];
+    });
+    return note;
+  }
+
+  async removeNote(noteId: string): Promise<void> {
+    await this.updateState((state) => {
+      if (!state.notes) return;
+      const next = state.notes.filter((candidate) => candidate.id !== noteId);
+      if (next.length) state.notes = next;
+      else delete state.notes;
+    });
+  }
+
+  async hasEvent(eventId: string): Promise<boolean> {
+    return this.hasEventLocked(eventId);
+  }
+
+  /** hasEvent for callers already holding the room lock (never re-acquires).
+   * This is intentionally LENIENT: appending a new reserved event must remain
+   * possible after legacy/pre-id or damaged lines. Strict validation belongs
+   * only to operations that rewrite existing bytes. */
+  private async hasEventLocked(eventId: string): Promise<boolean> {
+    const page = await readJsonlFrom<boolean>(this.transcriptPath, 0, (raw) =>
+      raw && typeof raw === "object" && (raw as { id?: unknown }).id === eventId ? true : undefined,
+    );
+    return page.items.length > 0;
   }
 
   // --- durable queue -----------------------------------------------------------
@@ -902,20 +1177,7 @@ export class RoomHandle {
    * two-phase hand-off that makes a crash re-drain instead of losing the
    * message (the old dequeue-first held it in memory only). */
   async peekQueue(): Promise<QueuedMessage | undefined> {
-    // Paused entries are invisible to drain: the first RUNNABLE entry is the
-    // head. A paused head never blocks the entries behind it.
-    return (await this.state()).queue?.find((entry) => !entry.paused);
-  }
-
-  /** Durably pause/resume one queued entry (tasks-panel ⏸/▶). Idempotent;
-   * no-op when the entry already drained into a running turn. */
-  async setQueuedPaused(taskId: string, paused: boolean): Promise<void> {
-    await this.updateState((state) => {
-      const entry = state.queue?.find((candidate) => candidate.taskId === taskId);
-      if (!entry) return;
-      if (paused) entry.paused = true;
-      else delete entry.paused;
-    });
+    return (await this.state()).queue?.[0];
   }
 
   /** Durably reserve the transcript event id a queued message will commit
@@ -976,46 +1238,6 @@ export class RoomHandle {
     });
   }
 
-  /** Stuck-turn watchdog hand-off: preserve any flushed partial under the
-   * already-reserved reply event id, then atomically replace THAT pending marker
-   * with a durable, already-recorded queue entry. A crash before the state swap
-   * sees the reserved event and finishes its idempotent commit; a crash after it
-   * re-drains the queue. */
-  async requeuePendingTurn(pending: PendingTurn, queuedAt: string): Promise<QueuedMessage | undefined> {
-    const partial = pending.partialReply.trim();
-    const eventId = pending.eventId ?? newRoomEventId();
-    if (partial && !(await this.hasEvent(eventId))) {
-      await this.appendEvent({ id: eventId, timestamp: queuedAt, author: pending.agentId, text: pending.partialReply });
-    }
-    let cursorAfter: number | undefined;
-    if (partial) {
-      const page = await readJsonlFrom<number>(this.transcriptPath, 0, (raw, lineIndex) =>
-        raw && typeof raw === "object" && (raw as { id?: unknown }).id === eventId ? lineIndex : undefined,
-      );
-      cursorAfter = page.items.length > 0 ? page.items[page.items.length - 1] + 1 : page.nextCursor;
-    }
-    const queued: QueuedMessage = {
-      taskId: newId("task"),
-      text: pending.prompt,
-      targets: pending.targets,
-      ...(pending.channel ? { channel: pending.channel } : {}),
-      ...(pending.voice ? { voice: true } : {}),
-      ...(pending.attachments?.length ? { attachments: pending.attachments } : {}),
-      recorded: true,
-      queuedAt,
-    };
-    let moved = false;
-    await this.updateState((state) => {
-      const current = state.pendingTurn;
-      if (!current || current.id !== pending.id || current.eventId !== pending.eventId) return;
-      delete state.pendingTurn;
-      state.queue = [...(state.queue ?? []), queued];
-      if (cursorAfter !== undefined) state.agentCursors[pending.agentId] = cursorAfter;
-      moved = true;
-    });
-    return moved ? queued : undefined;
-  }
-
   /**
    * Commit a finished turn: append the reply event (reserved id + details on
    * the event), then ONE atomic state write that clears the pending marker
@@ -1032,17 +1254,27 @@ export class RoomHandle {
    * replaying the agent's own reply (and any later steer) as fresh context.
    */
   async commitTurn(event: RoomEvent, nextPending?: PendingTurn): Promise<void> {
-    if (!(await this.hasEvent(event.id))) await this.appendEvent(event);
-    // Line offsets, not parsed-array indexes: unparseable lines are skipped
-    // from items but still count toward the cursor space.
-    const page = await readJsonlFrom<number>(this.transcriptPath, 0, (raw, lineIndex) =>
-      raw && typeof raw === "object" && (raw as { id?: unknown }).id === event.id ? lineIndex : undefined,
-    );
-    const cursorAfter = page.items.length > 0 ? page.items[page.items.length - 1] + 1 : page.nextCursor;
-    await this.updateState((state) => {
-      if (nextPending) state.pendingTurn = nextPending;
-      else delete state.pendingTurn;
-      state.agentCursors[event.author] = cursorAfter;
+    // has → append is ONE critical section: two processes replaying the same
+    // reserved event id must produce exactly one line (an unlocked check-then-
+    // append duplicates it). The cursor scan stays inside too, so the offset
+    // matches the file this turn actually committed against.
+    await this.withRoomLock(async () => {
+      // fsynced here, BEFORE the state write below clears pendingTurn and
+      // advances the cursor: the WAL's ordering is only real if the append is
+      // durable first — otherwise a power cut can leave a state that says
+      // "committed" over a transcript that lost the reply.
+      if (!(await this.hasEventLocked(event.id))) await appendJsonlDurable(this.transcriptPath, event);
+      const page = await readJsonlFrom<number>(this.transcriptPath, 0, (raw, lineIndex) =>
+        raw && typeof raw === "object" && (raw as { id?: unknown }).id === event.id ? lineIndex : undefined,
+      );
+      const cursorAfter = page.items.length > 0 ? page.items[page.items.length - 1] + 1 : page.nextCursor;
+      // Keep append→cursor scan→ack contiguous. A crash after append still
+      // retains pendingTurn and resumeMode performs finish-commit.
+      await this.updateStateLocked((state) => {
+        if (nextPending) state.pendingTurn = nextPending;
+        else delete state.pendingTurn;
+        state.agentCursors[event.author] = cursorAfter;
+      });
     });
   }
 

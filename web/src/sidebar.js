@@ -2,89 +2,82 @@
 // child room nests under its parent (via room.parentRoomId) and is collapsed
 // by default behind a twisty. Nesting is unbounded — grandchildren summon
 // their own children.
-import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, openSubroom, renameRoom, selectRoom, setRoomFavorite, setRoomProject, summonAgentInRoom } from "./actions.js";
+import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, renameRoom, reorderWorkspaces, selectRoom, setRoomFavorite, setWorkspaceFavorite } from "./actions.js";
+import { UI } from "./glyphs.js";
 import { closeSidebarOverlay } from "./chrome.js";
 import { $, h } from "./dom.js";
 import { PathText } from "./links.js";
 import { refreshAttention } from "./attention.js";
+import { hapticArm, holdTouchScroll, isTouchPointer, LONG_PRESS_MS, releaseTouchScroll, TOUCH_SLOP } from "./press-drag.js";
 import { markDirty, registerRegion, setError } from "./render.js";
 import { openSearch } from "./search.js";
 import { openSettings } from "./settings.js";
-import { effectiveSidebarFocus, markRoomRead, markRoomUnread, persistRoomsFavoritesOnly, roomUnread, state, workspaceActivity } from "./state.js";
+import {
+  effectiveSidebarFocus,
+  markRoomRead,
+  markRoomUnread,
+  persistRoomsCollapsed,
+  persistRoomsFavoritesOnly,
+  persistWorkspacesCollapsed,
+  roomUnread,
+  state,
+  workspaceActivity,
+} from "./state.js";
 
 /** @typedef {import("./types.js").RoomSummary} RoomSummary */
+
+// Workspace drag-to-reorder: POINTER events (not HTML5 drag-and-drop), same
+// reason as the tab strip (tabsbar.js) — the native WKWebView shell fires no
+// HTML5 dragend/drop with real coordinates. Vertical list, no tear-off.
+/** @type {null | { workspaceId: string, startY: number, pointerId: number, el: HTMLElement, moved: boolean, dropIndex: number, touch: boolean, armed: boolean, timer: ReturnType<typeof setTimeout>|null }} */
+let wsDrag = null;
+// While a press is live the sidebar must NOT be rebuilt (same reasoning as
+// tabsbar's dragActive): the captured node + its imperative `.dragging` class
+// + the drop indicator all live in the current DOM.
+let wsDragActive = false;
+/** The accent caret showing where a reorder drop will land. @type {HTMLElement|null} */
+let wsDropIndicator = null;
+const WS_DRAG_THRESHOLD = 6;
 
 function renderSidebar() {
   const nav = $("#sidebar");
   if (!nav) return;
+  if (wsDragActive) return; // a live workspace drag owns the list DOM — don't rebuild it
   const scrollTop = nav.scrollTop;
-  const current = state.snapshot?.workspace.id;
-  // The delete target: which workspace/room the OS delete chord will remove.
-  const focus = effectiveSidebarFocus();
   /** @type {(HTMLElement|null)[]} */
   const children = [
     h("button", {
       class: "nav-search",
       title: "search across all chats (⌘K)",
       onclick: () => openSearch("chatwide"),
-      text: "🔍 search chats",
+      text: `${UI.search} search chats`,
     }),
     h(
       "div",
       { class: "nav-title nav-title-row" },
       h("span", { text: "workspaces" }),
-      // Inline + next to the header, same UI element as "rooms"'s new-room +
-      // — one click from the top, no separate full-width button buried under
-      // the workspace list.
       h(
         "span",
         { class: "nav-title-actions" },
+        // Minimise the whole workspace list — a long history of workspaces
+        // otherwise pushes "rooms" (and everything under it) off-screen.
+        h("button", {
+          class: "nav-title-add nav-title-collapse",
+          title: state.workspacesCollapsed ? "show workspaces" : "collapse workspaces",
+          onclick: () => {
+            state.workspacesCollapsed = !state.workspacesCollapsed;
+            persistWorkspacesCollapsed();
+            markDirty("sidebar");
+          },
+          text: state.workspacesCollapsed ? UI.twistyClosed : UI.twistyOpen,
+        }),
+        // Inline + next to the header, same UI element as "rooms"'s new-room +
+        // — one click from the top, no separate full-width button buried under
+        // the workspace list.
         h("button", { class: "nav-title-add", title: "add workspace", onclick: () => void addWorkspace(), text: "+" }),
       ),
     ),
-    h(
-      "div",
-      { class: "workspace-list" },
-      state.workspaces.map((workspace) => {
-        // Roll the workspace's rooms up to one dot so activity in a workspace
-        // you're NOT viewing is still visible: green (pulsing) while any room in
-        // it has an agent running, else accent while any has unread replies.
-        const act = workspaceActivity(workspace.id);
-        return h(
-          "button",
-          {
-            class: `nav-item ${workspace.id === current ? "active" : ""} ${workspace.isInitialized ? "" : "muted"} ${focus?.kind === "workspace" && focus.id === workspace.id ? "focused" : ""}`,
-            title: workspace.path,
-            // Clicking selects/opens it. The muted state means its .gaia is
-            // missing. Removing a workspace is right-click -> "Remove
-            // workspace" ONLY — never the ⌘⌫/Del chord (that's rooms only,
-            // see keys.js), so an accidental keypress can't nuke a workspace.
-            onclick: () => {
-              state.sidebarFocus = { kind: "workspace", id: workspace.id };
-              if (workspace.isInitialized) void loadWorkspace(workspace.id);
-              else setError(`Missing .gaia workspace: ${workspace.path}`);
-              markDirty("sidebar");
-            },
-            oncontextmenu: (/** @type {MouseEvent} */ event) => {
-              event.preventDefault();
-              state.workspaceContextMenu = { workspaceId: workspace.id, x: event.clientX, y: event.clientY };
-              markDirty("sidebar");
-            },
-          },
-          h(
-            "span",
-            { class: "room-label" },
-            act.running
-              ? h("span", { class: "room-dot running", title: "agent running in this workspace" })
-              : act.unread
-                ? h("span", { class: "room-dot unread", title: "unread messages in this workspace" })
-                : null,
-            h("span", { class: act.unread && !act.running ? "room-name unread" : "room-name", text: workspace.name }),
-          ),
-          h("small", {}, PathText(workspace.path)),
-        );
-      }),
-    ),
+    state.workspacesCollapsed ? null : WorkspaceList(),
     WorkspaceContextMenu(),
     h(
       "div",
@@ -96,6 +89,18 @@ function renderSidebar() {
         ? h(
             "span",
             { class: "nav-title-actions" },
+            // Same minimise affordance as workspaces above — collapses the
+            // whole room tree behind the header.
+            h("button", {
+              class: "nav-title-add nav-title-collapse",
+              title: state.roomsCollapsed ? "show rooms" : "collapse rooms",
+              onclick: () => {
+                state.roomsCollapsed = !state.roomsCollapsed;
+                persistRoomsCollapsed();
+                markDirty("sidebar");
+              },
+              text: state.roomsCollapsed ? UI.twistyClosed : UI.twistyOpen,
+            }),
             h("button", {
               class: `nav-title-add ${state.roomsFavoritesOnly ? "active" : ""}`,
               title: state.roomsFavoritesOnly ? "show all rooms" : "show favorites only",
@@ -106,27 +111,139 @@ function renderSidebar() {
               },
               text: "★",
             }),
-            h("button", { class: "nav-title-add", title: "new room (Ctrl+T) · ⌥-click = incognito 🕶", onclick: (/** @type {MouseEvent} */ e) => void addRoom({ incognito: e.altKey }), text: "+" }),
+            h("button", { class: "nav-title-add", title: "new room (Ctrl+T) · ⌥-click = incognito ⊚", onclick: (/** @type {MouseEvent} */ e) => void addRoom({ incognito: e.altKey }), text: "+" }),
           )
         : null,
     ),
-    RoomTree(),
+    state.roomsCollapsed ? null : RoomTree(),
     RoomContextMenu(),
-    h("div", { class: "spacer" }),
-    h("button", { class: "nav-action", onclick: () => openSettings(), text: "settings" }),
+    h(
+      "div",
+      { class: "side-bottom" },
+      h("button", { class: "nav-action", onclick: () => openSettings(), text: "settings" }),
+    ),
   ];
   nav.replaceChildren(...children.filter((child) => child !== null));
   if (scrollTop) nav.scrollTop = scrollTop;
 }
 
+// How many workspaces the sidebar list renders before "show more" — mirrors
+// ROOMS_CHUNK below: a long-lived install accumulates dozens of workspaces,
+// and an unpaginated list buries the rooms section under them (the bug this
+// fixes). The current workspace is always kept visible even past the cap.
+const WORKSPACES_CHUNK = 8;
+
+/** @param {string | undefined} timestamp */
+function localTime(timestamp) {
+  const date = timestamp ? new Date(timestamp) : null;
+  return date && !Number.isNaN(date.valueOf())
+    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+    : "";
+}
+/**
+ * Star + running/unread-dot, each in its own fixed-width slot so a row's name
+ * always starts at the same x whether or not either icon is present — the
+ * icon appears/vanishes INSIDE its slot, the slot itself never does. Pass
+ * `incognito` (room rows only; omit for workspace rows) to render a third
+ * slot the same way, ordered star → dot → incognito → name.
+ * @param {{favorite?: boolean, running?: boolean, unread?: boolean, incognito?: boolean, runningTitle?: string, unreadTitle?: string}} opts
+ */
+function StatusIcons({ favorite, running, unread, incognito, runningTitle = "agent running", unreadTitle = "unread messages" }) {
+  return [
+    h("span", { class: "room-icon-slot" }, favorite ? h("span", { class: "room-star", title: "favorite", text: UI.favorite }) : null),
+    h(
+      "span",
+      { class: "room-icon-slot" },
+      running
+        ? h("span", { class: "room-dot running", title: runningTitle })
+        : unread
+          // v2-parity `.unread-dot` class rides alongside the existing
+          // `.room-dot.unread` — same element, same behavior, native.css
+          // adds the v2 hook without touching styles.css's own rule.
+          ? h("span", { class: "room-dot unread unread-dot", title: unreadTitle })
+          : null,
+    ),
+    incognito === undefined
+      ? null
+      : h("span", { class: "room-icon-slot" }, incognito ? h("span", { class: "room-incognito", title: "incognito — no memory", text: UI.incognito }) : null),
+  ];
+}
+
+function WorkspaceList() {
+  const currentId = state.snapshot?.workspace.id;
+  const focus = effectiveSidebarFocus();
+  const all = state.workspaces;
+  const visible = all.slice(0, state.workspacesShown);
+  const current = all.find((workspace) => workspace.id === currentId);
+  if (current && !visible.includes(current)) visible.push(current);
+  const remaining = all.length - visible.length;
+  return h(
+    "div",
+    { class: "workspace-list" },
+    visible.map((workspace) => {
+      // Roll the workspace's rooms up to one dot so activity in a workspace
+      // you're NOT viewing is still visible: green (pulsing) while any room in
+      // it has an agent running, else accent while any has unread replies.
+      const act = workspaceActivity(workspace.id);
+      return h(
+        "button",
+        {
+          class: `nav-item ws-item ${workspace.id === currentId ? "active" : ""} ${workspace.isInitialized ? "" : "muted"} ${focus?.kind === "workspace" && focus.id === workspace.id ? "focused" : ""}`,
+          title: workspace.path,
+          // The muted state means its .gaia is missing. Removing a workspace is
+          // right-click -> "Remove workspace" ONLY — never the ⌘⌫/Del chord
+          // (that's rooms only, see keys.js), so an accidental keypress can't
+          // nuke a workspace. Open/select is driven from the pointer handlers
+          // below (a press that never crosses the drag threshold), not onclick
+          // — same split as the tab strip, so a real click and a reorder drag
+          // never both fire off one gesture.
+          onpointerdown: (/** @type {PointerEvent} */ event) => beginWorkspaceDrag(event, workspace.id),
+          onpointermove: (/** @type {PointerEvent} */ event) => moveWorkspaceDrag(event),
+          onpointerup: (/** @type {PointerEvent} */ event) => endWorkspaceDrag(event, workspace),
+          onpointercancel: (/** @type {PointerEvent} */ event) => cancelWorkspaceDrag(event),
+          oncontextmenu: (/** @type {MouseEvent} */ event) => {
+            event.preventDefault();
+            state.workspaceContextMenu = { workspaceId: workspace.id, x: event.clientX, y: event.clientY };
+            markDirty("sidebar");
+          },
+        },
+        h(
+          "span",
+          { class: "room-label" },
+          ...StatusIcons({
+            favorite: workspace.favorite,
+            running: act.running,
+            unread: act.unread,
+            runningTitle: "agent running in this workspace",
+            unreadTitle: "unread messages in this workspace",
+          }),
+          h("span", { class: act.unread && !act.running ? "room-name unread" : "room-name", text: workspace.name }),
+        ),
+        h("small", {}, PathText(workspace.path)),
+      );
+    }),
+    remaining > 0
+      ? h("button", {
+          class: "nav-action rooms-more",
+          text: `↓ show ${Math.min(WORKSPACES_CHUNK, remaining)} more (${remaining} left)`,
+          onclick: () => {
+            state.workspacesShown += WORKSPACES_CHUNK;
+            markDirty("sidebar");
+          },
+        })
+      : null,
+  );
+}
+
 registerRegion("sidebar", renderSidebar);
 
-// How many top-level rooms each "show more" click adds to the list.
-const ROOMS_CHUNK = 25;
+// How many top-level rooms each "show more" click adds to the list. Same
+// chunk size as WORKSPACES_CHUNK above, for consistency.
+const ROOMS_CHUNK = 8;
 
 function RoomTree() {
   /** @type {RoomSummary[]} */
-  const rooms = (state.snapshot?.rooms ?? [{ id: "no room", path: "select a workspace", isCurrent: true }]).filter((room) => !room.voiceSession);
+  const rooms = state.snapshot?.rooms ?? [{ id: "no room", path: "select a workspace", isCurrent: true }];
   const ids = new Set(rooms.map((room) => room.id));
   /** @type {Map<string|null, RoomSummary[]>} */
   const childrenOf = new Map();
@@ -148,7 +265,7 @@ function RoomTree() {
   return h(
     "div",
     { class: "room-tree" },
-    state.snapshot ? GroupedRooms(visible, childrenOf) : visible.map((room) => RoomNode(room, childrenOf, 0)),
+    visible.map((room) => RoomNode(room, childrenOf, 0)),
     remaining > 0
       ? h("button", {
           class: "nav-action rooms-more",
@@ -160,68 +277,6 @@ function RoomTree() {
         })
       : null,
   );
-}
-
-/**
- * Day label for the sidebar's group headers. Calendar days, local time.
- * @param {number|undefined} timestamp
- */
-function dayLabel(timestamp) {
-  if (!timestamp) return "older";
-  const date = new Date(timestamp);
-  const now = new Date();
-  const startOfDay = (/** @type {Date} */ d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-}
-
-/**
- * The top-level room list grouped by DAY of last activity, then by PROJECT
- * label within each day (RoomState.project, right-click → "Set project…").
- * Order stays newest-first: a project cluster is anchored where its newest
- * room sits; unlabeled rooms ride plain under the day header. Subrooms are
- * untouched — they still nest under their parents inside RoomNode.
- * @param {RoomSummary[]} visible
- * @param {Map<string|null, RoomSummary[]>} childrenOf
- * @returns {HTMLElement[]}
- */
-function GroupedRooms(visible, childrenOf) {
-  /** @type {{ label: string, groups: { project: string|null, rooms: RoomSummary[] }[], byProject: Map<string, { project: string|null, rooms: RoomSummary[] }> }[]} */
-  const days = [];
-  let day = days[0];
-  for (const room of visible) {
-    const label = dayLabel(room.lastActivity);
-    if (!day || day.label !== label) {
-      day = { label, groups: [], byProject: new Map() };
-      days.push(day);
-    }
-    if (room.project) {
-      let group = day.byProject.get(room.project);
-      if (!group) {
-        group = { project: room.project, rooms: [] };
-        day.byProject.set(room.project, group);
-        day.groups.push(group);
-      }
-      group.rooms.push(room);
-    } else {
-      day.groups.push({ project: null, rooms: [room] });
-    }
-  }
-  return days.flatMap((section) => [
-    h("div", { class: "room-day-head", text: section.label }),
-    ...section.groups.map((group) =>
-      group.project
-        ? h(
-            "div",
-            { class: "room-project-group" },
-            h("div", { class: "room-project-head", title: `project · ${group.project}`, text: group.project }),
-            group.rooms.map((room) => RoomNode(room, childrenOf, 0)),
-          )
-        : RoomNode(group.rooms[0], childrenOf, 0),
-    ),
-  ]);
 }
 
 /**
@@ -304,20 +359,8 @@ function RoomNode(room, childrenOf, depth) {
   const focus = effectiveSidebarFocus();
   const focused = focus?.kind === "room" && focus.id === room.id;
   const label = room.title ?? room.id;
-  /** Agent + model chip for the room card — the id/operator info the title no
-   * longer carries under the living-titles law. Model comes from the agents
-   * roster (AgentStatus.modelLabel) so it tracks what turns actually run.
-   * @param {import("../../src/core/types.ts").RoomSummary} room */
-  const RoomAgentChip = (room) => {
-    if (!room.agent) return null;
-    const info = snapshot?.agents?.find((agent) => agent.id === room.agent);
-    const model = info?.modelLabel ?? "";
-    return h("span", {
-      class: "room-agent",
-      title: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
-      text: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
-    });
-  };
+  const since = localTime(room.runningSince);
+  const runningTitle = room.running && since ? `running since ${since}` : "agent running";
   return h(
     "div",
     { class: "room-node" },
@@ -330,8 +373,8 @@ function RoomNode(room, childrenOf, depth) {
       h(
         "button",
         {
-          class: `nav-item room-item ${room.isCurrent ? "active" : ""} ${focused ? "focused" : ""} ${room.berserk ? "berserk" : ""} ${room.love ? "love" : ""} ${room.teleport ? "teleport" : ""}`,
-          title: `${label} — ${room.path}`,
+          class: `nav-item room-item ${room.isCurrent ? "active" : ""} ${focused ? "focused" : ""}`,
+          title: room.running && since ? runningTitle : `${label} — ${room.path}`,
           // Clicking makes this the delete target (the ⌘⌫ / Del chord acts on
           // it) and opens it. Re-clicking the current room just re-targets it.
           onclick: !snapshot
@@ -362,22 +405,9 @@ function RoomNode(room, childrenOf, depth) {
         h(
           "span",
           { class: "room-label" },
-          // One status slot: a green blinking dot while an agent is working in
-          // the room, else an accent dot when it has unread replies, else empty.
-          room.running
-            ? h("span", { class: "room-dot running", title: "agent running" })
-            : roomUnread(room)
-              ? h("span", { class: "room-dot unread", title: "unread messages" })
-              : null,
-          room.favorite ? h("span", { class: "room-star", title: "favorite", text: "★" }) : null,
-          room.incognito ? h("span", { class: "room-incognito", title: "incognito — no memory", text: "🕶" }) : null,
-          room.berserk ? h("span", { class: "room-berserk", title: "BERSERK — adversarial deathmode", text: "⚔\uFE0F" }) : null,
-          room.love ? h("span", { class: "room-love", title: "LOVE — lovemode", text: "💗" }) : null,
-          // Living-titles law: titles carry purpose, so the card itself names the
-          // operator — agent + model ride beside the status dot.
-          RoomAgentChip(room),
-          room.refCode ? h("span", { class: "room-ref", title: `room reference ${room.refCode}`, text: room.refCode }) : null,
+          ...StatusIcons({ favorite: room.favorite, running: room.running, unread: roomUnread(room), incognito: room.incognito, runningTitle }),
           h("span", { class: roomUnread(room) && !room.running ? "room-name unread" : "room-name", text: label }),
+          depth && room.running && since ? h("small", { class: "room-running-since", text: `· since ${since}` }) : null,
         ),
         h("small", {}, room.imported ? document.createTextNode(room.imported.slice(0, 10)) : PathText(room.path)),
       ),
@@ -441,57 +471,6 @@ function RoomContextMenu() {
       },
       text: room.favorite ? "Remove favorite" : "Add favorite",
     }),
-    // Project label — the sidebar's second grouping axis (day → project).
-    h("button", {
-      type: "button",
-      onclick: () => {
-        close();
-        void setRoomProject(room.id, room.project ?? "");
-      },
-      text: room.project ? `Set project… (${room.project})` : "Set project…",
-    }),
-    // Open a first-class side room NESTED under this one — the human's own
-    // parallel lane: no delivery back, no steer, the parent's running turn is
-    // never touched.
-    h("button", {
-      type: "button",
-      onclick: () => {
-        close();
-        void openSubroom(room.id);
-      },
-      text: "Open subroom",
-    }),
-    // Summon a worker INTO this room from the outside — works while the room's
-    // own turn is running (the daemon's summon path never touches the parent
-    // turn; the result arrives as a collapsed note). Click toggles the agent
-    // picker inline; picking one prompts for the task.
-    h("button", {
-      type: "button",
-      onclick: () => {
-        state.roomContextMenu = { ...open, summonOpen: !open.summonOpen };
-        markDirty("sidebar");
-      },
-      text: open.summonOpen ? "Summon agent ▾" : "Summon agent ▸",
-    }),
-    open.summonOpen
-      ? h(
-          "div",
-          { class: "room-menu-sub" },
-          (snapshot.agents ?? []).map((agent) =>
-            h("button", {
-              type: "button",
-              onclick: () => {
-                close();
-                void summonAgentInRoom(room.id, agent.id);
-              },
-              text:
-                agent.displayName && agent.displayName.toLowerCase() !== agent.id.toLowerCase()
-                  ? `@${agent.id} · ${agent.displayName}`
-                  : `@${agent.id}`,
-            }),
-          ),
-        )
-      : null,
   );
 }
 
@@ -511,6 +490,14 @@ function WorkspaceContextMenu() {
     h("div", { class: "room-menu-title", text: workspace.name }),
     h("button", {
       type: "button",
+      onclick: () => {
+        close();
+        void setWorkspaceFavorite(workspace.id, !workspace.favorite);
+      },
+      text: workspace.favorite ? "Remove favorite" : "Add favorite",
+    }),
+    h("button", {
+      type: "button",
       class: "danger",
       onclick: () => {
         close();
@@ -519,6 +506,153 @@ function WorkspaceContextMenu() {
       text: "Remove workspace",
     }),
   );
+}
+
+/** @param {PointerEvent} event @param {string} workspaceId */
+function beginWorkspaceDrag(event, workspaceId) {
+  if (event.button !== 0) return;
+  const el = /** @type {HTMLElement} */ (event.currentTarget);
+  const touch = isTouchPointer(event);
+  wsDrag = { workspaceId, startY: event.clientY, pointerId: event.pointerId, el, moved: false, dropIndex: -1, touch, armed: !touch, timer: null };
+  // Touch: this list is also the scroll surface → arm only after a still long
+  // press (press-drag.js); an earlier swipe stays a scroll.
+  if (touch) {
+    const d = wsDrag;
+    d.timer = setTimeout(() => {
+      if (wsDrag !== d) return;
+      d.armed = true;
+      d.timer = null;
+      holdTouchScroll();
+      hapticArm();
+    }, LONG_PRESS_MS);
+  }
+  // Freeze the list for the whole press so an unrelated re-render (activity
+  // dots, a background snapshot) can't detach the node we're about to capture.
+  wsDragActive = true;
+  try {
+    el.setPointerCapture(event.pointerId);
+  } catch {
+    // capture unsupported — the drag still works while the pointer stays inside.
+  }
+}
+
+/** @param {PointerEvent} event */
+function moveWorkspaceDrag(event) {
+  if (!wsDrag || event.pointerId !== wsDrag.pointerId) return;
+  if (!wsDrag.armed) {
+    if (Math.abs(event.clientY - wsDrag.startY) >= TOUCH_SLOP) abandonWorkspaceDrag();
+    return;
+  }
+  if (!wsDrag.moved) {
+    if (Math.abs(event.clientY - wsDrag.startY) < WS_DRAG_THRESHOLD) return;
+    wsDrag.moved = true;
+    wsDrag.el.classList.add("dragging");
+  }
+  updateWorkspaceDropTarget(event);
+}
+
+/** Where a release right now would land — the first OTHER item whose vertical
+ *  centre sits below the pointer; past them all, append. dropIndex is measured
+ *  against the list with the dragged item removed (what the splice below
+ *  expects). @param {PointerEvent} event */
+function updateWorkspaceDropTarget(event) {
+  if (!wsDrag) return;
+  const list = wsDrag.el.parentElement;
+  if (!list) return;
+  const rect = list.getBoundingClientRect();
+  const siblings = /** @type {HTMLElement[]} */ ([...list.querySelectorAll(".ws-item")]).filter((item) => item !== wsDrag?.el);
+  let index = siblings.length;
+  let boundary = siblings.length ? siblings[siblings.length - 1].getBoundingClientRect().bottom : rect.top;
+  for (let i = 0; i < siblings.length; i++) {
+    const r = siblings[i].getBoundingClientRect();
+    if (event.clientY < r.top + r.height / 2) {
+      index = i;
+      boundary = r.top;
+      break;
+    }
+  }
+  wsDrag.dropIndex = index;
+  showWorkspaceDropIndicator(list, rect, boundary);
+}
+
+/** @param {PointerEvent} event @param {import("./types.js").WorkspaceRecord} workspace */
+function endWorkspaceDrag(event, workspace) {
+  if (!wsDrag || event.pointerId !== wsDrag.pointerId) return;
+  const d = wsDrag;
+  wsDrag = null;
+  if (d.timer) clearTimeout(d.timer);
+  releaseTouchScroll();
+  try {
+    d.el.releasePointerCapture(event.pointerId);
+  } catch {
+    // nothing captured — fine.
+  }
+  // A press that never crossed the threshold is a click → open the workspace.
+  if (!d.moved) {
+    cleanupWorkspaceDrag(d.el);
+    state.sidebarFocus = { kind: "workspace", id: workspace.id };
+    if (workspace.isInitialized) void loadWorkspace(workspace.id);
+    else setError(`Missing .gaia workspace: ${workspace.path}`);
+    markDirty("sidebar");
+    return;
+  }
+  if (d.dropIndex >= 0) {
+    const ids = state.workspaces.map((w) => w.id).filter((id) => id !== d.workspaceId);
+    ids.splice(Math.max(0, Math.min(d.dropIndex, ids.length)), 0, d.workspaceId);
+    // Optimistic local reorder for instant feedback; the server response (still
+    // favorites-first, see WorkspaceRegistry.list) is the authority and
+    // overwrites this the moment it lands.
+    const byId = new Map(state.workspaces.map((w) => [w.id, w]));
+    state.workspaces = ids.map((id) => byId.get(id)).filter((w) => w !== undefined);
+    void reorderWorkspaces(ids);
+  }
+  cleanupWorkspaceDrag(d.el);
+}
+
+/** @param {PointerEvent} event */
+function cancelWorkspaceDrag(event) {
+  if (!wsDrag || event.pointerId !== wsDrag.pointerId) return;
+  abandonWorkspaceDrag();
+}
+
+/** Hand the gesture back to the browser (touch scroll won, or pointercancel). */
+function abandonWorkspaceDrag() {
+  if (!wsDrag) return;
+  const el = wsDrag.el;
+  const pointerId = wsDrag.pointerId;
+  if (wsDrag.timer) clearTimeout(wsDrag.timer);
+  wsDrag = null;
+  releaseTouchScroll();
+  try {
+    el.releasePointerCapture(pointerId);
+  } catch {
+    // nothing captured — fine.
+  }
+  cleanupWorkspaceDrag(el);
+}
+
+/** End-of-drag teardown: drop the indicator, clear the item's transient class,
+ *  release the render guard, and re-render once. @param {HTMLElement} el */
+function cleanupWorkspaceDrag(el) {
+  wsDragActive = false;
+  hideWorkspaceDropIndicator();
+  el.classList.remove("dragging");
+  markDirty("sidebar");
+}
+
+/** @param {HTMLElement} list @param {DOMRect} rect @param {number} clientY */
+function showWorkspaceDropIndicator(list, rect, clientY) {
+  if (!wsDropIndicator) {
+    wsDropIndicator = document.createElement("div");
+    wsDropIndicator.className = "workspace-drop-indicator";
+  }
+  if (wsDropIndicator.parentElement !== list) list.appendChild(wsDropIndicator);
+  const y = clientY - rect.top + list.scrollTop;
+  wsDropIndicator.style.top = `${Math.max(0, y - 1)}px`;
+}
+
+function hideWorkspaceDropIndicator() {
+  wsDropIndicator?.remove();
 }
 
 window.addEventListener("click", (event) => {

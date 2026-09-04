@@ -2,7 +2,7 @@
 // Compiles the gaia daemon into a standalone binary via `bun build --compile`,
 // then snapshots the runtime assets (web/, setups/) alongside it.
 //
-// Usage: bun scripts/build-daemon.mjs [--out <dir>]
+// Usage: bun scripts/build-daemon.mjs [--out <dir>] [--target <bun-target>]
 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -16,17 +16,25 @@ import {
   statSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+// Single source of truth shared with the /rebuild atomic swap (src/server/http.ts).
+import { BUNDLE_ASSET_DIRS, BUNDLE_ASSET_EXCLUDES } from "../src/core/bundle-assets.ts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
 
-function parseOutDir(argv) {
-  const i = argv.indexOf("--out");
-  if (i !== -1 && argv[i + 1]) return argv[i + 1];
-  return join(repoRoot, "dist");
+function option(argv, name, fallback) {
+  const i = argv.indexOf(name);
+  if (i === -1) return fallback;
+  const value = argv[i + 1];
+  if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
+  return value;
 }
 
-const outDir = parseOutDir(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const outDir = option(argv, "--out", join(repoRoot, "dist"));
+// Native by default: /rebuild must replace its executable with one for its own
+// host. Release builds select a deploy target explicitly (e.g. bun-linux-x64).
+const target = option(argv, "--target", `bun-${process.platform}-${process.arch}`);
 
 const timings = [];
 function timeStep(label, fn) {
@@ -44,19 +52,50 @@ timeStep("mkdir-out", () => {
   mkdirSync(outDir, { recursive: true });
 });
 
-const binaryTmp = join(outDir, "gaia-daemon.new");
-const binaryFinal = join(outDir, "gaia-daemon");
-
-timeStep("bun-build-compile", () => {
+function compileBinary(label, entrypoint, outputName) {
+  const binaryTmp = join(outDir, `${outputName}.new`);
+  const binaryFinal = join(outDir, outputName);
   // process.execPath, never a bare "bun" — this script is itself run BY bun,
   // so execPath is always correct and needs no PATH lookup. A GUI-launched
   // app (Finder/Dock, no login-shell PATH) does not have ~/.bun/bin on PATH,
   // so a bare "bun" spawn here fails silently (ENOENT) the moment /rebuild
   // runs from the compiled app instead of a terminal — observed live
   // 2026-07-11: /rebuild died instantly with no bundle/compile output at all.
+  timeStep(`${label}-compile`, () => {
+    const res = spawnSync(
+      process.execPath,
+      ["build", "--compile", "--target", target, entrypoint, "--outfile", binaryTmp],
+      { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }
+    );
+    if (res.status !== 0) {
+      console.error(res.stderr || res.stdout || `bun build exited ${res.status}`);
+      process.exit(1);
+    }
+    if (res.stdout) process.stdout.write(res.stdout);
+  });
+
+  timeStep(`${label}-install`, () => {
+    chmodSync(binaryTmp, 0o755);
+    renameSync(binaryTmp, binaryFinal);
+  });
+}
+
+compileBinary("daemon", join(repoRoot, "src/cli.ts"), "gaia-daemon");
+compileBinary("telegram-bridge", join(repoRoot, "scripts/telegram-bridge.mjs"), "gaia-telegram-bridge");
+
+// server/graphql.ts is deliberately excluded from cli.ts's `bun build
+// --compile` module graph (non-literal dynamic import — see cli.ts +
+// tsconfig.json's exclude comment: keeps graphql-yoga's DOM-polluting types
+// out of the main tsc program). So the compiled gaia-daemon binary never has
+// it on disk — pre-bundle it here instead (bun build, non-compile) into a
+// single self-contained ESM file shipped next to the binary
+// (core/bundle-assets.ts BUNDLE_BINARY_ARTIFACTS, core/paths.ts
+// graphqlAssetPath). A from-source run has no such file and falls back to
+// importing graphql.ts directly (cli.ts).
+timeStep("graphql-bundle", () => {
   const res = spawnSync(
     process.execPath,
-    ["build", "--compile", join(repoRoot, "src/cli.ts"), "--outfile", binaryTmp],
+    ["build", "--target", "bun", "--format", "esm", join(repoRoot, "src/server/graphql.ts"), "--outfile", join(outDir, "graphql.js")],
     { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }
   );
   if (res.status !== 0) {
@@ -66,18 +105,16 @@ timeStep("bun-build-compile", () => {
   if (res.stdout) process.stdout.write(res.stdout);
 });
 
-timeStep("install-binary", () => {
-  chmodSync(binaryTmp, 0o755);
-  renameSync(binaryTmp, binaryFinal);
-});
-
-for (const name of ["web", "setups"]) {
+for (const name of BUNDLE_ASSET_DIRS) {
   timeStep(`snapshot-${name}`, () => {
     const src = join(repoRoot, name);
     const dstTmp = join(outDir, `${name}.new`);
     const dstFinal = join(outDir, name);
     rmSync(dstTmp, { recursive: true, force: true });
     cpSync(src, dstTmp, { recursive: true });
+    for (const relative of BUNDLE_ASSET_EXCLUDES[name] ?? []) {
+      rmSync(join(dstTmp, relative), { recursive: true, force: true });
+    }
     rmSync(dstFinal, { recursive: true, force: true });
     renameSync(dstTmp, dstFinal);
   });
@@ -103,6 +140,7 @@ timeStep("write-source-json", () => {
         bun: process.execPath,
         commit,
         dirty: status !== null && status !== "",
+        target,
         builtAt: new Date().toISOString(),
       },
       null,
@@ -112,11 +150,16 @@ timeStep("write-source-json", () => {
 });
 
 const totalMs = performance.now() - totalStart;
-const binarySize = statSync(binaryFinal).size;
+const binarySize = statSync(join(outDir, "gaia-daemon")).size;
+const telegramBridgeSize = statSync(join(outDir, "gaia-telegram-bridge")).size;
+const graphqlAssetSize = statSync(join(outDir, "graphql.js")).size;
 
 console.log("---");
 for (const [label, ms] of timings) {
   console.log(`${label}: ${ms.toFixed(1)}ms`);
 }
 console.log(`total: ${totalMs.toFixed(1)}ms`);
-console.log(`binary: ${binaryFinal} (${binarySize} bytes)`);
+console.log(`target: ${target}`);
+console.log(`binary: ${join(outDir, "gaia-daemon")} (${binarySize} bytes)`);
+console.log(`telegram-bridge: ${telegramBridgeSize} bytes`);
+console.log(`graphql asset: ${join(outDir, "graphql.js")} (${graphqlAssetSize} bytes)`);

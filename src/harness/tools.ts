@@ -1,4 +1,4 @@
-// The single registry of GAIA daemon tools (memory / recall / summon). Add a
+// The single registry of GAIA daemon tools (unified gaia / memory / recall / summon). Add a
 // tool = one entry here and it appears in-process (Pi), as a Claude grant, in
 // the system-prompt pointer, in the `gaia` CLI dispatch, and in the settings
 // UI at once.
@@ -10,7 +10,8 @@
 import type { AgentDef, Workspace } from "../core/types.js";
 import type { ResumeCreate } from "./spec.js";
 import type { MemoryStore } from "../domain/memory.js";
-import type { GaiaTool, RecallSearch, SummonCreate } from "../harness/spec.js";
+import type { ContextDietAccess, EndConversation, GaiaTool, RecallSearch, SummonCreate, ToolResultFetch } from "../harness/spec.js";
+import type { ToolProviders } from "./protocol.js";
 
 /** Everything the in-process Pi tool factories might need. */
 export interface AgentRosterEntry {
@@ -37,6 +38,8 @@ export interface PiToolContext {
   roomDir: string;
   /** Harness execution cwd; native Pi tools resolve relative paths here. */
   workDir?: string;
+  /** Workspace image-read switch; omitted keeps GAIA's progressive renderer on. */
+  imageRead?: "gaia" | "native";
   /** Live workspace roster used to constrain self-describing tool schemas. */
   availableAgents?: readonly AgentRosterEntry[];
   summonCreate?: SummonCreate;
@@ -45,6 +48,16 @@ export interface PiToolContext {
   /** Daemon-side hybrid search; absent → the tool falls back to the local
    * transcript index (works without a bridge, lexical room-only). */
   recallSearch?: RecallSearch;
+  /** Backs the `gaia` tool's `tool_result_fetch` verb (09-MEMORY-CONTEXT);
+   * absent — no bridge — makes the verb unavailable, not the whole tool. */
+  toolResultFetch?: ToolResultFetch;
+  /** Backs the `gaia` tool's `diet` verb (09-MEMORY-CONTEXT); same store the
+   * `/diet` room command uses daemon-side. */
+  contextDiet?: ContextDietAccess;
+  /** Daemon bridge for the unified end_conversation verb. */
+  endConversation?: EndConversation;
+  /** Service implementations injected through the daemon bridge. */
+  toolProviders?: ToolProviders;
 }
 
 export interface GaiaToolSpec {
@@ -64,7 +77,9 @@ export const GAIA_TOOLS: GaiaToolSpec[] = [
   {
     id: "gaia",
     cliVerbs: [],
-    grant: "",
+    // Claude reaches this custom Pi/Codex tool through its locked `gaia` CLI
+    // prefix; other direct GAIA tools retain their narrower legacy grants.
+    grant: "Bash(gaia:*)",
     pointer: "- `gaia` custom tool — unified verb dispatcher: bash/read/write/edit/web/summon/resume/mem/recall/artifact/caryll; set raw:true for unformatted output.",
     makePiTool: async (ctx) => (await import("./tools-pi.js")).createGaiaTool(ctx),
   },

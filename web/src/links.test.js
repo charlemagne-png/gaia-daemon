@@ -1,45 +1,104 @@
-// @ts-nocheck — native bridge behavior + source seams; no visible shell/browser.
+// @ts-nocheck — minimal DOM shim; exercises the real link-token listeners.
 import { expect, test } from "bun:test";
-
-const calls = [];
-globalThis.window = {
-  __TAURI__: {
-    core: {
-      invoke(command, args) {
-        calls.push({ command, args });
-        return Promise.resolve("web-7");
-      },
-    },
-  },
+class Node {}
+class TextNode extends Node {
+  constructor(text) { super(); this.data = String(text); }
+}
+class Element extends Node {
+  constructor(tag) { super(); this.tagName = tag; this.childNodes = []; this.listeners = {}; }
+  set className(value) { this._class = String(value); }
+  setAttribute() {}
+  addEventListener(type, listener) { this.listeners[type] = listener; }
+  append(...children) { this.childNodes.push(...children.filter(Boolean)); }
+}
+globalThis.Node = Node;
+const documentListeners = {};
+globalThis.document = {
+  createElement: (tag) => new Element(tag),
+  createTextNode: (text) => new TextNode(text),
+  addEventListener: (type, listener) => { documentListeners[type] = listener; },
+  body: { classList: { toggle() {} } },
 };
+globalThis.location = { href: "http://localhost/", search: "", hash: "" };
+globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+const opened = [];
+globalThis.window = { open: (...args) => opened.push(args), addEventListener() {} };
+const { LinkedText, installOpenModifierTracking } = await import("./links.js");
+installOpenModifierTracking();
+function mouseEvent(modifier) {
+  return {
+    metaKey: modifier === "meta",
+    ctrlKey: modifier === "ctrl",
+    prevented: false,
+    stopped: false,
+    preventDefault() { this.prevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+}
+function nativeFetch(requests) {
+  globalThis.window.__TAURI__ = {};
+  globalThis.fetch = async (url, options) => {
+    requests.push([url, options]);
+    return { ok: true, json: async () => ({}) };
+  };
+}
+test("browser Cmd/Ctrl mousedown opens a chat link immediately and its following click does not double-open", () => {
+  delete globalThis.window.__TAURI__;
+  opened.length = 0;
+  const root = LinkedText("See https://example.com/docs.");
+  const token = root.childNodes.find((node) => node instanceof Element && node._class === "link-token");
+  expect(token).toBeDefined();
+  const down = mouseEvent("meta");
+  token.listeners.mousedown(down);
+  expect(down.prevented).toBe(true);
+  expect(down.stopped).toBe(true);
+  expect(opened).toEqual([["https://example.com/docs", "_blank", "noopener"]]);
 
-const { openWebWindow } = await import("./native.js");
-const linksSource = await Bun.file(new URL("./links.js", import.meta.url)).text();
-const shellSource = await Bun.file(new URL("../../src-tauri/src/lib.rs", import.meta.url)).text();
+  token.listeners.click(mouseEvent("meta"));
+  expect(opened).toHaveLength(1);
 
-test("native web links use the dedicated new-window IPC", async () => {
-  expect(await openWebWindow("https://example.com/path")).toBe("web-7");
-  expect(calls).toEqual([
-    { command: "open_web_window", args: { url: "https://example.com/path" } },
-  ]);
+  const ctrlRoot = LinkedText("https://example.org");
+  const ctrlToken = ctrlRoot.childNodes.find((node) => node instanceof Element && node._class === "link-token");
+  ctrlToken.listeners.mousedown(mouseEvent("ctrl"));
+  expect(opened.at(-1)).toEqual(["https://example.org", "_blank", "noopener"]);
 });
-
-test("link tokens retain local open-target and route native web targets separately", () => {
-  expect(linksSource).toContain('api("/api/open-target"');
-  expect(linksSource).toContain("await openWebWindow(url);");
-  expect(linksSource).toContain('window.open(url, "_blank", "popup,noopener,noreferrer")');
+test("native chat web links use the daemon open-target API", () => {
+  const requests = [];
+  nativeFetch(requests);
+  opened.length = 0;
+  const root = LinkedText("https://example.com/docs");
+  const token = root.childNodes.find((node) => node instanceof Element && node._class === "link-token");
+  token.listeners.mousedown(mouseEvent("meta"));
+  expect(opened).toEqual([]);
+  expect(requests).toEqual([["/api/open-target", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target: "https://example.com/docs", workspaceId: undefined }),
+  }]]);
 });
+test("native captures HTTP(S) anchors, including plain clicks, but leaves attachment links alone", () => {
+  const requests = [];
+  nativeFetch(requests);
+  const anchor = {
+    closest: (selector) => selector === "a[href]" ? anchor : null,
+    getAttribute: (name) => name === "href" ? "https://example.com/sign-in" : null,
+  };
+  const click = { target: anchor, ...mouseEvent() };
+  documentListeners.click(click);
+  expect(click.prevented).toBe(true);
+  expect(click.stopped).toBe(true);
+  expect(requests).toEqual([["/api/open-target", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target: "https://example.com/sign-in", workspaceId: undefined }),
+  }]]);
 
-test("modified real anchors are captured only in the native shell", () => {
-  expect(linksSource).toContain('clicked?.closest("a[href]")');
-  expect(linksSource).toContain("if (!isNative() || !isOpenModifier(event)) return;");
-  expect(linksSource).toContain('document.addEventListener(\n    "click"');
-  expect(linksSource).toContain("    true,\n  );");
-});
-
-test("Rust command creates a distinct external WebviewWindow and rejects non-web schemes", () => {
-  expect(shellSource).toContain("fn open_web_window(app: tauri::AppHandle, url: String)");
-  expect(shellSource).toContain('format!("web-{}", WINDOW_SEQ.fetch_add(1, Ordering::Relaxed))');
-  expect(shellSource).toContain("WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))");
-  expect(shellSource).toContain('matches!(parsed.scheme(), "http" | "https")');
+  const attachment = {
+    closest: () => attachment,
+    getAttribute: () => "/api/attachments/a.png",
+  };
+  const attachmentClick = { target: attachment, ...mouseEvent("meta") };
+  documentListeners.click(attachmentClick);
+  expect(attachmentClick.prevented).toBe(false);
+  expect(requests).toHaveLength(1);
 });

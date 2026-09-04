@@ -11,6 +11,11 @@ import { env } from "./env.js";
 export function gaiaHome(): string {
   return resolve(env("GAIA_HOME") ?? join(homedir(), ".gaia"));
 }
+/** Expand only a home-directory path; relative paths remain relative. */
+export function expandHome(path: string): string {
+  if (path === "~") return homedir();
+  return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+}
 
 // --- global layout ---------------------------------------------------------
 
@@ -19,9 +24,16 @@ export const globalPaths = {
    * etc.) — merged as the base under every workspace's own env, see
    * domain/workspace.ts loadWorkspace. */
   config: () => join(gaiaHome(), "config.json"),
+  /** Optional machine-local API credentials for daemon-owned integrations. */
+  secrets: () => join(gaiaHome(), "secrets.env"),
   /** Daemon-global app state (workspace registry, current workspace). */
   appSettings: () => join(gaiaHome(), "app.json"),
   accounts: () => join(gaiaHome(), "accounts.json"),
+  /** Human user accounts (login/multi-user), distinct from provider
+   * credential `accounts`. */
+  users: () => join(gaiaHome(), "users.json"),
+  /** HMAC secret signing session tokens issued at login. */
+  sessionSecret: () => join(gaiaHome(), "session-secret"),
   agentsDir: () => join(gaiaHome(), "agents"),
   /** Always-loaded global prompt protocols: every *.md here (sorted by
    * filename) loads verbatim into EVERY agent's system prompt as a
@@ -39,6 +51,9 @@ export const globalPaths = {
    * at boot; see harness/runner-plugins.ts. Out-of-tree fetch transforms live
    * here, never in the repo. */
   runnerPluginsDir: () => join(gaiaHome(), "plugins", "runner"),
+  commandPluginsDir: () => join(gaiaHome(), "plugins"),
+  ambientWatchdogDir: () => join(gaiaHome(), "ambient-watchdog"),
+  cacheBinDir: () => join(gaiaHome(), "cache", "bin"),
   voiceSettings: () => join(gaiaHome(), "voice.json"),
   /** Durable record of live voice-call overrides — swept on boot so a crash
    * mid-call can never leave a "temporary" override applied forever. */
@@ -124,6 +139,10 @@ export const workspacePaths = {
   /** Per-room writable scratch a credential-proxied harness may relocate its
    * store into (see HarnessSpec.credentialProxy) — generic, harness-declared. */
   roomProxyScratch: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "proxy-scratch"),
+  /** Context-diet (09-MEMORY-CONTEXT): workspace-wide default policy, room
+   * overrides layer on top (services/context-policy-store.ts). Default OFF. */
+  contextDietPolicy: (rootDir: string) => join(rootDir, ".gaia", "context-diet.json"),
+  roomContextDietPolicy: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "context-diet.json"),
 };
 
 /** Invert workspacePaths.roomDir: <root>/.gaia/rooms/<id> → <root>. The bare
@@ -156,4 +175,27 @@ const bundleRoot: string = (() => {
 /** Bundled resources (setups/, web/) shipped inside the install itself. */
 export function bundledDir(...segments: string[]): string {
   return resolve(bundleRoot, ...segments);
+}
+
+/** Compiled binary's pre-bundled server/graphql.ts asset (see
+ * bundle-assets.ts BUNDLE_BINARY_ARTIFACTS doc + scripts/build-daemon.mjs
+ * "graphql-bundle" step), or undefined when running from source (bundleRoot
+ * === the repo checkout itself, which has no graphql.js next to gaia-daemon
+ * because none was ever built there — cli.ts falls back to importing
+ * graphql.ts directly in that case). */
+export function graphqlAssetPath(): string | undefined {
+  const candidate = bundledDir("graphql.js");
+  return existsSync(candidate) ? candidate : undefined;
+}
+
+/** Vendored @silvia-odwyer/photon-node (vendor/photon-node, BUNDLE_ASSET_DIRS
+ * "vendor") — see vendor/photon-node/README-GAIA.md for why this can't be a
+ * bare package import in a compiled binary. Returns the real on-disk
+ * photon_rs.js path (loaded via a genuine runtime import(), never bundled)
+ * or undefined when no snapshot exists, so harness/image-read.ts falls back
+ * to importing the bare package specifier (fine unbundled, e.g. dev/source
+ * runs before any build has produced a vendor/ snapshot). */
+export function photonNodeAssetPath(): string | undefined {
+  const candidate = bundledDir("vendor", "photon-node", "photon_rs.js");
+  return existsSync(candidate) ? candidate : undefined;
 }

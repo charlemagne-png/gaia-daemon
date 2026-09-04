@@ -4,12 +4,14 @@
 // preview, thinking control, voice buttons), so typing never loses the caret.
 //
 // Features: / command preview + @ agent preview (↑/↓/Tab/Enter/Esc), thinking
-// control (💭 #level: click toggles off, right-click menu), queueing while
+// control (◌ #level: click toggles off, right-click menu), queueing while
 // busy, panic stop, and bare-key routing (typing anywhere lands here).
 import { editMessage, selectRoom, sendMessage, stopActiveRoom, stopAll, uploadAttachment } from "./actions.js";
+import { agentGlyph, KIND, UI } from "./glyphs.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
 import { CompactBar, compactDetail } from "./compactprogress.js";
+import { clearComposerDraft, composerDraftKey, composerDraftStatus, loadComposerDraft, saveComposerDraft } from "./composer-drafts.js";
 import { $, h } from "./dom.js";
 import { shortModel } from "./models.js";
 import { markDirty, registerRegion, setError } from "./render.js";
@@ -41,7 +43,10 @@ import {
 // of the daemon snapshot; the name de-duplication in completionFor prevents a
 // second /design row after the rebuilt daemon also advertises it.
 /** @type {Array<{ name: string, description: string, native?: boolean }>} */
-const LOCAL_SLASH_COMMANDS = [{ name: "design", description: "toggle artifacts, or /design <request> to ask the active agent" }];
+const LOCAL_SLASH_COMMANDS = [
+  { name: "design", description: "toggle artifacts, or /design <request> to ask the active agent" },
+  { name: "archtree", description: "toggle the 3D room tree (summon lanes, status, roomId)" },
+];
 
 /** @type {HTMLTextAreaElement|null} */
 let textarea = null;
@@ -74,38 +79,52 @@ let modelWrapEl = null;
 /** @type {HTMLElement|null} */
 let voiceWrapEl = null;
 /** @type {HTMLElement|null} */
+let micLevelEl = null;
+/** @type {HTMLButtonElement|null} */
+let retranscribeEl = null;
+/** @type {HTMLElement|null} */
+let draftStatusEl = null;
+/** @type {HTMLElement|null} */
 let ultrawhipWrapEl = null;
 
-// Draft persistence (composer durability — "nothing is ever lost"): the
-// in-progress text survives a reload/crash and is restored per-room.
+// Synchronous local cache survives reload/rebuild without a pending timer.
 /** @returns {string|null} */
 function draftKey() {
   const s = state.snapshot;
-  return s ? `gaia.draft.${s.workspace.id}.${s.room.id}` : null;
+  return s ? composerDraftKey(s.workspace.id, s.room.id) : null;
 }
 
 /** @param {string} text */
 function persistDraft(text) {
-  const k = draftKey();
-  if (!k) return;
+  const key = draftKey();
+  if (!key) return;
   try {
-    if (text.trim()) localStorage.setItem(k, text);
-    else localStorage.removeItem(k);
+    saveComposerDraft(localStorage, key, text);
   } catch {}
 }
 
 function clearDraft() {
-  const k = draftKey();
-  if (!k) return;
+  const key = draftKey();
+  if (!key) return;
   try {
-    localStorage.removeItem(k);
+    clearComposerDraft(localStorage, key);
   } catch {}
 }
 
-// Tracks which room's draft has already been restored into state.composerText,
-// so switching rooms restores at most once (and doesn't clobber live typing).
+function draftStatus() {
+  const key = draftKey();
+  if (!key) return "";
+  try {
+    return composerDraftStatus(localStorage, key, state.composerText);
+  } catch {
+    return "draft unavailable";
+  }
+}
+
 /** @type {string|null} */
 let restoredRoomKey = null;
+/** @type {Snapshot|null} */
+let restoredSnapshot = null;
 
 export function initComposer() {
   const form = $("#composer");
@@ -134,8 +153,8 @@ export function initComposer() {
       onkeydown: onComposerKeydown,
     })
   );
-  sendButton = /** @type {HTMLButtonElement} */ (h("button", { class: "send-button", text: ">" }));
-  autocompleteEl = h("div", { class: "autocomplete", hidden: true });
+  sendButton = /** @type {HTMLButtonElement} */ (h("button", { type: "submit", class: "send-button", title: "send", text: UI.send }));
+  autocompleteEl = h("div", { class: "command-suggestions", hidden: true });
   // Clicking the label toggles the summon list (only meaningful when this room
   // has running summons — renderComposer adds/removes the `has-summons` class).
   bannerLabelEl = h("span", {
@@ -151,7 +170,7 @@ export function initComposer() {
   // sub-room. Anchored above the banner, populated + shown in renderComposer.
   summonListEl = h("div", { class: "summon-list", hidden: true });
   stopBtnEl = /** @type {HTMLButtonElement} */ (
-    h("button", { type: "button", class: "stop-btn", title: "stop this room's turn (Esc)", text: "■ stop", onclick: () => void stopActiveRoom() })
+    h("button", { type: "button", class: "stop-btn", title: "stop this room's turn (Esc)", text: `${UI.stop} stop`, onclick: () => void stopActiveRoom() })
   );
   bannerEl = h(
     "div",
@@ -165,20 +184,25 @@ export function initComposer() {
   editBannerEl = h(
     "div",
     { class: "editing-banner", hidden: true },
-    h("span", { text: "✎ editing message — Enter re-sends from that point, later replies are rewound" }),
+    h("span", { text: `${UI.edit} editing message — Enter re-sends from that point, later replies are rewound` }),
     h("button", { type: "button", class: "stop-btn", title: "cancel editing (Esc)", text: "cancel", onclick: () => cancelEditing() }),
   );
-  attachmentsEl = h("div", { class: "attachment-strip", hidden: true });
+  attachmentsEl = h("div", { class: "composer-attachments", hidden: true });
   dictationStatusEl = h("div", { class: "dictation-status", hidden: true });
   targetStatusEl = h("div", { class: "target-status" });
   thinkingWrapEl = h("div", { class: "thinking-wrap" });
   modelWrapEl = h("div", { class: "model-wrap" });
   voiceWrapEl = h("div", { class: "voice-wrap" });
+  micLevelEl = h("span", { class: "mic-level", hidden: true, title: "microphone level" });
+  retranscribeEl = /** @type {HTMLButtonElement} */ (
+    h("button", { type: "button", class: "retranscribe-button", hidden: true, title: "retranscribe the last recording", text: `${UI.retry} retranscribe`, onclick: () => void retryDictation() })
+  );
+  draftStatusEl = h("output", { class: "draft-status", "aria-live": "polite" });
   ultrawhipWrapEl = h("span", {
     class: "ultrawhip-chip",
     hidden: true,
     title: "UltraWhip is on — an auto-repeating steer lands every N tool calls, in whatever turn is running. /ultrawhip to toggle off.",
-    text: "🖤 UltraWhip",
+    text: `${UI.watchdog} UltraWhip`,
   });
 
   form.replaceChildren(
@@ -191,15 +215,20 @@ export function initComposer() {
     editBannerEl,
     attachmentsEl,
     dictationStatusEl,
-    h("div", { class: "input-shell" }, textarea, sendButton),
     h(
       "div",
       { class: "composer-row" },
-      targetStatusEl,
-      thinkingWrapEl,
-      modelWrapEl,
-      ultrawhipWrapEl,
-      h("div", { class: "composer-spacer" }),
+      h("span", { class: "composer-caret", "aria-hidden": "true", text: "▌" }),
+      textarea,
+      sendButton,
+    ),
+    h(
+      "div",
+      { class: "composer-meta-row" },
+      h("div", { class: "composer-meta" }, targetStatusEl, modelWrapEl, thinkingWrapEl, ultrawhipWrapEl),
+      draftStatusEl,
+      retranscribeEl,
+      micLevelEl,
       voiceWrapEl,
     ),
   );
@@ -219,29 +248,32 @@ function renderComposer() {
     !thinkingWrapEl ||
     !modelWrapEl ||
     !voiceWrapEl ||
+    !micLevelEl ||
+    !retranscribeEl ||
+    !draftStatusEl ||
     !ultrawhipWrapEl
   )
     return;
   const snapshot = state.snapshot;
   const busy = isBusy(snapshot);
 
-  // Restore a persisted draft once per room switch (never clobbers text
-  // already typed for this room, e.g. from a fresh page load mid-composition).
   const currentDraftKey = draftKey();
-  if (currentDraftKey !== restoredRoomKey) {
+  const roomChanged = currentDraftKey !== restoredRoomKey;
+  const snapshotReset = snapshot !== restoredSnapshot;
+  if (roomChanged || snapshotReset) {
     restoredRoomKey = currentDraftKey;
-    if (!state.composerText.trim()) {
+    restoredSnapshot = snapshot;
+    // Room switches adopt that room's text. Same-room reconnects restore only
+    // when the fresh snapshot reset the live composer.
+    if (roomChanged || !state.composerText) {
       try {
-        const stored = currentDraftKey ? localStorage.getItem(currentDraftKey) : null;
-        if (stored) {
-          state.composerText = stored;
-          textarea.value = stored;
-        }
+        const stored = currentDraftKey ? loadComposerDraft(localStorage, currentDraftKey) : "";
+        state.composerText = stored;
+        textarea.value = stored;
+        textarea.setSelectionRange(stored.length, stored.length);
       } catch {}
     }
-    // Recovered dictation clips (crash/reload durability, server-backed) are
-    // per-room too — refresh the chip list whenever the room switches.
-    void refreshRecoveredClips();
+    if (roomChanged) void refreshRecoveredClips();
   }
 
   // Textarea chrome; the value is only written when state changed elsewhere
@@ -251,7 +283,7 @@ function renderComposer() {
     : state.voice
       ? `on call with @${state.voice.agentId} - speak, or type`
       : snapshot.room.incognito
-        ? "🕶 incognito — message @agent or /command (nothing saved to memory)"
+        ? `${UI.incognito} incognito — message @agent or /command (nothing saved to memory)`
         : "message @agent or /command";
   textarea.disabled = !snapshot;
   if (textarea.value !== state.composerText) {
@@ -263,7 +295,7 @@ function renderComposer() {
 
   const dictationPending = state.dictating || state.dictationBusy;
   sendButton.disabled = !snapshot;
-  sendButton.textContent = state.dictationBusy ? "…" : busy ? "»" : ">";
+  sendButton.textContent = state.dictationBusy ? "…" : busy ? UI.sendBusy : UI.send;
   sendButton.title = dictationPending
     ? "send voice message — stops recording, transcribes, then sends"
     : busy
@@ -281,7 +313,7 @@ function renderComposer() {
   if (stopBtnEl) {
     const roomBusy = Boolean(activeTask(snapshot));
     stopBtnEl.disabled = !roomBusy;
-    stopBtnEl.textContent = "■ stop";
+    stopBtnEl.textContent = `${UI.stop} stop`;
     stopBtnEl.title = roomBusy
       ? "stop this room's turn (Esc) — summons unaffected; Ctrl+C stops everything"
       : "nothing running in this room — Ctrl+C stops summons too";
@@ -343,7 +375,7 @@ function renderComposer() {
   // fall back to the original generic wording rather than assume a specific
   // plugin is the one running.
   if (ambientWatchdog) {
-    ultrawhipWrapEl.textContent = `${ambientWatchdog.label ?? "🖤 UltraWhip"} ·${ambientWatchdog.toolCalls}`;
+    ultrawhipWrapEl.textContent = `${ambientWatchdog.label ?? `${UI.watchdog} UltraWhip`} ·${ambientWatchdog.toolCalls}`;
     ultrawhipWrapEl.title = `An auto-repeating steer lands every ${ambientWatchdog.toolCalls} tool calls, in whatever turn is running. Toggle off with the command that turned it on (e.g. /ultrawhip, /ultralove).`;
   }
 
@@ -355,6 +387,11 @@ function renderComposer() {
   const memory = MemoryChip(snapshot);
   modelWrapEl.replaceChildren(...[model, context, memory].filter((chip) => chip !== null));
 
+  draftStatusEl.textContent = draftStatus();
+  const failedDictation = hasFailedDictation();
+  retranscribeEl.hidden = !failedDictation;
+  micLevelEl.hidden = !state.dictating;
+  micLevelEl.style.setProperty("--level", String(Math.max(0, Math.min(1, state.dictationLevel))));
   voiceWrapEl.replaceChildren(...VoiceButtons());
 }
 
@@ -420,6 +457,11 @@ async function submitComposer(options = {}) {
     // receives a second command turn after it is rebuilt.
     setArtifactPanelOpen(true);
     restoreOnFailure(sendArtifactPrompt(designPrompt));
+  } else if (!editing && pending.length === 0 && archtreeCommandText(text)) {
+    // /archtree is entirely client-side (same seam as /design's toggle path):
+    // it never reaches the daemon, so it works before any rebuild.
+    clearDraft();
+    void import("./archtree/index.js").then((mod) => mod.openArchtree());
   } else if (editing && text.trim()) {
     releasePreviews(pending);
     restoreOnFailure(editMessage(editing, text, editingAttachments.map((a) => a.path)));
@@ -541,7 +583,7 @@ function PendingAttachmentChips() {
       type: "button",
       class: "attach-remove",
       title: `remove ${item.name}`,
-      text: "×",
+      text: UI.close,
       onclick: () => {
         if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
         state.pendingAttachments.splice(index, 1);
@@ -551,15 +593,15 @@ function PendingAttachmentChips() {
     if (item.previewUrl) {
       return h(
         "div",
-        { class: "attach-chip image", title: `${item.name} (${humanSize(item.size)})` },
+        { class: "composer-attachment attach-chip image", title: `${item.name} (${humanSize(item.size)})` },
         h("img", { class: "attach-thumb", src: item.previewUrl, alt: item.name }),
         remove,
       );
     }
     return h(
       "div",
-      { class: "attach-chip", title: item.name },
-      h("span", { class: "attach-icon", text: "📎" }),
+      { class: "composer-attachment attach-chip", title: item.name },
+      h("span", { class: "attach-icon", text: UI.attach }),
       h("span", { class: "attach-name", text: item.name }),
       h("small", { text: humanSize(item.size) }),
       remove,
@@ -576,7 +618,7 @@ function EditingAttachmentChips() {
       type: "button",
       class: "attach-remove",
       title: `remove ${item.name}`,
-      text: "×",
+      text: UI.close,
       onclick: () => {
         state.editingAttachments.splice(index, 1);
         markDirty("composer");
@@ -585,15 +627,15 @@ function EditingAttachmentChips() {
     if (item.mime.startsWith("image/")) {
       return h(
         "div",
-        { class: "attach-chip image", title: `${item.name} (${humanSize(item.size)})` },
+        { class: "composer-attachment attach-chip image", title: `${item.name} (${humanSize(item.size)})` },
         h("img", { class: "attach-thumb", src: attachmentUrl(item), alt: item.name }),
         remove,
       );
     }
     return h(
       "div",
-      { class: "attach-chip", title: item.name },
-      h("span", { class: "attach-icon", text: "📎" }),
+      { class: "composer-attachment attach-chip", title: item.name },
+      h("span", { class: "attach-icon", text: UI.attach }),
       h("span", { class: "attach-name", text: item.name }),
       h("small", { text: humanSize(item.size) }),
       remove,
@@ -679,6 +721,12 @@ function designCommandPrompt(text) {
   return match ? (match[1]?.trim() ?? "") : null;
 }
 
+/** /archtree takes no argument — it only toggles the 3D room-tree overlay.
+ * @param {string} text */
+function archtreeCommandText(text) {
+  return /^\/archtree\s*$/.test(text.trim());
+}
+
 /** @param {string} text @returns {Completion|null} */
 function completionFor(text) {
   if (!state.snapshot) return null;
@@ -729,11 +777,12 @@ function applyCompletion(completion, option) {
   state.composerText = `${state.composerText.slice(0, completion.start)}${option.value}${option.suffix ?? ""}`;
   state.completionIndex = 0;
   state.completionHidden = true;
+  persistDraft(state.composerText);
 }
 
 /** @param {Completion} completion @returns {HTMLElement[]} */
 function AutocompleteRows(completion) {
-  const options = completion.options.slice(0, 8);
+  const options = completion.options;
   if (options.length === 0) {
     return [h("div", { class: "completion-row empty", text: `${completion.kind}${completion.query}  no matches` })];
   }
@@ -848,7 +897,9 @@ function composerTargetStatus(snapshot, text) {
   const knownAgents = new Set((snapshot.agents ?? []).map((agent) => agent.id));
   const unknown = leadingMentionIds(text).filter((id) => !knownAgents.has(id));
   if (unknown.length) return `unknown: ${unknown.map((id) => `@${id}`).join(", ")}`;
-  return composerTargets(snapshot, text).map((target) => `@${target}`).join(", ");
+  // Composer meta line: speaker/target name renders PLAIN, glyph only
+  // (V2-SKIN.md design law — @ is for addressing/mentions, not a header).
+  return composerTargets(snapshot, text).map((target) => `${agentGlyph(target)} ${target}`).join(", ");
 }
 
 // Last non-off level per agent, so the off-toggle can come back to it.
@@ -921,7 +972,7 @@ function ThinkingControl(snapshot, text) {
       state.thinkingMenuOpen = !state.thinkingMenuOpen;
       markDirty("composer");
     },
-    text: `\u{1F4AD} #${effective}`,
+    text: `${KIND.thinking} #${effective}`,
   });
 
   return h(
@@ -984,13 +1035,13 @@ function ModelChip(snapshot, text) {
         `provider switched models on the last turn: ${fallback.from} → ${fallback.to} — ${fallback.reason} ` +
         `(configured: ${agent.configuredModel}; each turn re-requests it, so this usually reverts on the next clean turn — ` +
         `this chip and each message's model tag always show what actually ran)`,
-      text: `⚠ ${shortModel(agent.modelLabel)}`,
+      text: `${KIND.warning} ${shortModel(agent.modelLabel)}`,
     });
   }
   return h("span", {
     class: "model-chip",
     title: `model for @${agent.id} (configured: ${agent.configuredModel}; ran: ${agent.modelLabel})`,
-    text: shortModel(agent.modelLabel),
+    text: `${shortModel(agent.modelLabel)}${agent.account ? ` (${agent.account})` : ""}`,
   });
 }
 
@@ -1028,7 +1079,7 @@ function MemoryChip(snapshot) {
   return h("span", {
     class: "model-chip fallback",
     title: `memory subsystem degraded: ${chips.join("; ")} — run \`gaia memory status\` in the workspace for detail`,
-    text: `⚠ memory: ${chips.join(", ")}`,
+    text: `${KIND.warning} memory: ${chips.join(", ")}`,
   });
 }
 
@@ -1120,14 +1171,14 @@ function VoiceButtons() {
         class: state.micMuted ? "voice-button muted" : "voice-button",
         title: state.micMuted ? "unmute microphone" : "mute microphone",
         onclick: () => setMicMuted(!state.micMuted),
-        text: state.micMuted ? "\u{1F507}" : "\u{1F3A4}",
+        text: state.micMuted ? UI.micMuted : UI.mic,
       }),
       h("button", {
         type: "button",
         class: "voice-button end-call",
         title: `hang up @${state.voice.agentId}`,
         onclick: () => void endCall(),
-        text: "⏹",
+        text: UI.stop,
       }),
     ];
   }
@@ -1141,7 +1192,7 @@ function VoiceButtons() {
   return [
     h("button", {
       type: "button",
-      class: `voice-button dictation${recording ? " recording" : ""}${busy ? " busy" : ""}`,
+      class: `mic-button voice-button dictation${recording ? " recording" : ""}${busy ? " busy" : ""}`,
       title: busy
         ? "transcribing…"
         : recording
@@ -1153,7 +1204,7 @@ function VoiceButtons() {
         event.preventDefault();
         if (recording) cancelDictation();
       },
-      text: busy ? "…" : recording ? "⏺" : "\u{1F3A4}",
+      text: busy ? "…" : recording ? UI.recording : UI.mic,
     }),
     h("button", {
       type: "button",
@@ -1175,7 +1226,7 @@ function VoiceButtons() {
 /** @param {HTMLTextAreaElement} el */
 function resizeComposer(el) {
   el.style.height = "0px";
-  el.style.height = `${Math.min(180, Math.max(34, el.scrollHeight))}px`;
+  el.style.height = `${Math.min(180, Math.max(28, el.scrollHeight))}px`;
 }
 
 /** @param {number} [selectionStart] @param {number} [selectionEnd] */
@@ -1198,10 +1249,20 @@ export function isEditableElement(element) {
 }
 
 /** @param {KeyboardEvent} event */
+/** Surfaces that run their own keyboard (the artifact canvas: v/r/o/t tools,
+ * arrows, Backspace, Enter). Bare-key routing must stay out of them, or typing
+ * on the canvas ends up in the composer and the canvas command never fires.
+ * @param {EventTarget|null} node @returns {boolean} */
+function ownsItsKeyboard(node) {
+  return node instanceof HTMLElement && Boolean(node.closest(".artifact-panel"));
+}
+
+/** @param {KeyboardEvent} event @returns {boolean} */
 function shouldRouteKeyToComposer(event) {
   if (!state.snapshot || state.dario.open || state.search.open) return false;
   if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return false;
   if (isEditableElement(event.target)) return false;
+  if (ownsItsKeyboard(event.target) || ownsItsKeyboard(document.activeElement)) return false;
   if (event.key.length === 1) return true;
   return ["Enter", "Backspace", "Delete"].includes(event.key);
 }
@@ -1216,6 +1277,7 @@ export function installComposerRouting() {
     (event) => {
       if (!state.snapshot || state.dario.open || state.search.open) return;
       if (event.defaultPrevented || isEditableElement(event.target)) return;
+      if (ownsItsKeyboard(event.target) || ownsItsKeyboard(document.activeElement)) return;
       if (capturePastedFiles(event)) focusComposer();
     },
     true,
@@ -1313,6 +1375,7 @@ export function installComposerRouting() {
         state.completionHidden = false;
       }
 
+      persistDraft(state.composerText);
       focusComposer();
       markDirty("composer");
     },
@@ -1328,5 +1391,8 @@ export function focusComposerFromBackground(event) {
   if (state.dario.open || state.search.open) return;
   if (isEditableElement(event.target)) return;
   if (event.target instanceof HTMLElement && event.target.closest("button")) return;
+  // The artifact panel is an editor with its own keyboard (undo, nudge, tools);
+  // stealing focus out of it on every click disarmed every canvas shortcut.
+  if (ownsItsKeyboard(event.target)) return;
   focusComposer();
 }

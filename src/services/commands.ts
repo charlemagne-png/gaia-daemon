@@ -21,13 +21,17 @@ export type SlashCommand =
   | { type: "setup"; sub?: string; id?: string; room?: string }
   | { type: "consolidate"; agent?: string }
   | { type: "dream"; agent?: string; apply?: boolean }
-  | { type: "compact"; agent?: string }
+  | { type: "compact"; agent?: string; edit?: boolean | string }
+  | { type: "stt"; engine?: string; alias?: "tts" }
+| { type: "diet"; sub: "on" | "off" | "status"; scope: "room" | "workspace" }
   | { type: "schedule"; sub: "list" | "run"; id?: string }
   | { type: "steer"; text?: string }
   | { type: "queue"; text?: string }
   | { type: "note"; text?: string }
   | { type: "scaffold"; task?: string }
   | { type: "cancel" }
+  | { type: "goal"; sub: "set"; objective: string; tokens?: number }
+  | { type: "goal"; sub: "status" | "pause" | "resume" | "clear" }
   | { type: "recall"; agent?: string; query?: string }
   | { type: "gaiago"; text?: string }
   | { type: "berserk"; off?: boolean }
@@ -53,6 +57,11 @@ export function validateThinkingLevel(level: number): string | null {
 
 export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "help", type: "help", description: "show command help" },
+  {
+    name: "goal",
+    type: "goal",
+    description: "pin an autonomous objective on this room: /goal [--tokens N] <objective> | status | pause | resume | clear",
+  },
   { name: "agents", type: "agents", description: "list available agents" },
   { name: "roles", type: "roles", description: "list roles for an agent" },
   { name: "role", type: "role", description: "set or clear an agent role" },
@@ -71,7 +80,14 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "setup", type: "setup", description: "load a saved multi-agent setup into this room: /setup activate <id>" },
   { name: "consolidate", type: "consolidate", description: "distill recent episodes into long-term memory: /consolidate [agent]" },
   { name: "dream", type: "dream", description: "propose (or apply) a reviewable memory consolidation: /dream [agent] [--apply]" },
-  { name: "compact", type: "compact", description: "compact an agent's session context via its harness: /compact [agent]" },
+  { name: "compact", type: "compact", description: "compact an agent's session context via its harness: /compact [agent] | /compact --edit [text]" },
+  { name: "stt", type: "stt", description: "show or switch the speech-to-text engine: /stt [replicate|elevenlabs|openai]" },
+  { name: "tts", type: "stt", description: "voice-input engine switch (alias of /stt): /tts [replicate|elevenlabs|openai]" },
+{
+    name: "diet",
+    type: "diet",
+    description: "context-diet render decay (09-MEMORY-CONTEXT, default OFF): /diet on|off|status [--workspace]",
+  },
   { name: "schedule", type: "schedule", description: "list scheduled jobs or run one now: /schedule [run <id>]" },
   { name: "steer", type: "steer", description: "inject guidance into the running turn: /steer <text>" },
   { name: "queue", type: "queue", description: "park an idea on the durable queue without steering the running turn: /queue <text> (pause/resume it in the tasks panel)" },
@@ -96,6 +112,11 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
     aliases: ["dario"],
   },
   { name: "rebuild", type: "reload", description: "rebuild the daemon and re-exec onto the fresh binary (sessions and queue survive)" },
+  // DogMode (/dog, /slap, /shock, /toilet, /stfu, /push, /swallow, /facial,
+  // /release, /doggy, /creampie) is a bundled command-plugin now (whip 348,
+  // see plugins/defaults/dog-mode.mjs) — not a core SlashCommand, same as
+  // /whip or /ultrawhip. parseCommand below never claims these names; they
+  // fall through to `unknown` and RoomService's plugin dispatch resolves them.
 ];
 
 const COMMAND_BY_NAME = new Map<string, SlashCommandDefinition>(
@@ -167,8 +188,24 @@ export function parseCommand(input: string): SlashCommand {
       const agent = stripped.find((arg) => arg.toLowerCase() !== "--apply");
       return { type: "dream", agent: agent || undefined, apply };
     }
-    case "compact":
-      return { type: "compact", agent: stripped[0] || undefined };
+    case "compact": {
+      const editAt = args.findIndex((arg) => arg.toLowerCase() === "--edit");
+      if (editAt < 0) return { type: "compact", agent: stripped[0] || undefined };
+      const edited = args.slice(editAt + 1).join(" ");
+      return {
+        type: "compact",
+        agent: stripped.slice(0, editAt)[0] || undefined,
+        edit: edited || true,
+      };
+    }
+    case "stt":
+      return { type: "stt", engine: stripped[0]?.toLowerCase(), ...(name === "tts" ? { alias: "tts" as const } : {}) };
+    case "diet": {
+      const scope: "room" | "workspace" = args.some((arg) => arg.toLowerCase() === "--workspace") ? "workspace" : "room";
+      const first = stripped.find((arg) => arg.toLowerCase() !== "--workspace")?.toLowerCase();
+      const sub: "on" | "off" | "status" = first === "on" ? "on" : first === "off" ? "off" : "status";
+      return { type: "diet", sub, scope };
+    }
     case "schedule":
       return args[0]?.toLowerCase() === "run" ? { type: "schedule", sub: "run", id: args[1] } : { type: "schedule", sub: "list" };
     case "steer":
@@ -210,6 +247,33 @@ export function parseCommand(input: string): SlashCommand {
       return { type: "gaiago", text: args.join(" ") || undefined };
     case "rewind":
       return { type: "rewind", count: stripped[0] };
+    case "goal": {
+      // Sub-commands are exact single words; anything else is the objective
+      // (a real objective may of course start with the word "status" — only a
+      // LONE token counts as the sub-command).
+      const sub = args.length === 1 ? args[0]?.toLowerCase() : undefined;
+      if (sub === "status" || sub === "pause" || sub === "resume" || sub === "clear") return { type: "goal", sub };
+      if (args.length === 0) return { type: "goal", sub: "status" };
+      // `--tokens N` (or `--tokens=N`) anywhere in the args, stripped from the objective.
+      let tokens: number | undefined;
+      const rest: string[] = [];
+      for (let i = 0; i < args.length; i += 1) {
+        const arg = args[i] ?? "";
+        const inline = /^--tokens=(\d+)$/.exec(arg);
+        if (inline) {
+          tokens = Number(inline[1]);
+          continue;
+        }
+        if (arg === "--tokens" && /^\d+$/.test(args[i + 1] ?? "")) {
+          tokens = Number(args[i + 1]);
+          i += 1;
+          continue;
+        }
+        rest.push(arg);
+      }
+      const objective = rest.join(" ").trim();
+      return { type: "goal", sub: "set", objective, ...(tokens && tokens > 0 ? { tokens } : {}) };
+    }
     case "thanks-dario": {
       const sub = args[0]?.toLowerCase();
       return { type: "thanks-dario", sub: sub === "on" || sub === "off" ? sub : "run" };
@@ -227,7 +291,7 @@ export function parseCommand(input: string): SlashCommand {
 
 export const HELP_TEXT = `Commands:\n${SLASH_COMMANDS.map((command) => `  /${command.name.padEnd(8)} ${command.description}`).join(
   "\n",
-)}\n\nRole commands:\n  /roles [agent]       list roles (default agent if omitted)\n  /role <role>         set a role on the default agent\n  /role <agent> <role> set a role on a specific agent\n  /role [agent] none   clear a role\n\nSummon commands:\n  /summon <agent> <task>  launch a private worker agent\n\nThinking commands:\n  /thinking <level>          set the default agent's thinking effort\n  /thinking <agent> <level>  set another agent's thinking effort\n  (during a voice call with that agent the change lasts only for the call)\n\nPet commands (native desktop only):\n  /pet                       spawn the default pet for the agent you're talking to\n  /pet <package>             spawn a specific pet package instead\n  /pet @agent [package]      target a different agent (defaults if package omitted)\n  /pet off [@agent]          remove one binding\n  /pet list                  list this room's bindings\n\nSetup commands:\n  /setup list                list available multi-agent setups\n  /setup activate <id>       load a setup into this room (becomes a monad room)\n  /setup status              show this room's active setup\n  /setup off                 clear the monad from this room\n\nThanks-Dario commands:\n  /thanks-dario              Dario reviews recent messages and proposes redactions (popup shows a diff; originals are preserved)\n  /thanks-dario on|off       auto-review whenever the provider reroutes the model mid-turn\n\nUse @agent mentions to route a message, for example:\n  @sidia critique this plan\n  @gaia @terry compare and implement`;
+)}\n\nRole commands:\n  /roles [agent]       list roles (default agent if omitted)\n  /role <role>         set a role on the default agent\n  /role <agent> <role> set a role on a specific agent\n  /role [agent] none   clear a role\n\nSummon commands:\n  /summon <agent> <task>  launch a private worker agent\n\nThinking commands:\n  /thinking <level>          set the default agent's thinking effort\n  /thinking <agent> <level>  set another agent's thinking effort\n  (during a voice call with that agent the change lasts only for the call)\n\nPet commands (native desktop only):\n  /pet                       spawn the default pet for the agent you're talking to\n  /pet <package>             spawn a specific pet package instead\n  /pet @agent [package]      target a different agent (defaults if package omitted)\n  /pet off [@agent]          remove one binding\n  /pet list                  list this room's bindings\n\nSetup commands:\n  /setup list                list available multi-agent setups\n  /setup activate <id>       load a setup into this room (becomes a monad room)\n  /setup status              show this room's active setup\n  /setup off                 clear the monad from this room\n\nGoal commands:\n  /goal <objective>          pin an objective; the room's agent keeps working until it emits GOAL-COMPLETE\n  /goal --tokens N <obj>     same, with a token budget (reaching it pauses the goal)\n  /goal status               show the pinned goal, its progress and budget\n  /goal pause|resume         hold or restart the continuation loop\n  /goal clear                drop the goal\n\nSpeech-input commands:\n  /stt                       show the selected STT engine and available engines\n  /stt <engine>              switch the global dictation engine\n  /tts [engine]              same switch; explicit voice-input alias\n\nThanks-Dario commands:\n  /thanks-dario              Dario reviews recent messages and proposes redactions (popup shows a diff; originals are preserved)\n  /thanks-dario on|off       auto-review whenever the provider reroutes the model mid-turn\n\nUse @agent mentions to route a message, for example:\n  @sidia critique this plan\n  @gaia @terry compare and implement`;
 
 // --- mention routing -----------------------------------------------------------
 //

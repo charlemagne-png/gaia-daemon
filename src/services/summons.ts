@@ -28,9 +28,11 @@
 // summoning. Nested summons are default-deny. No approval gates anywhere —
 // summons run autonomously; the trust tier IS the boundary.
 
-import { appendFile, mkdir, readdir, readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { appendFile, mkdir, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentDef, SummonDelivery, Workspace } from "../core/types.js";
+import { ResumeEpochRegistry, type ResumeEpoch } from "./resume-epoch.js";
 
 /** How a finished worker's result lands in the parent room (see
  * SummonRoomAccess.deliverAgentResult). */
@@ -44,10 +46,10 @@ export interface SummonResultDelivery {
   triggerTarget?: string;
 }
 
-import { normalizeRoomState } from "../domain/rooms.js";
+import { RoomHandle, readTranscriptRecordsFrom } from "../domain/rooms.js";
 import { ensureRoomWorktree, resolveRoomWorkDir } from "../domain/worktree.js";
 import { workspacePaths } from "../core/paths.js";
-import { readJson, writeJsonAtomic } from "../core/store.js";
+import { sleep } from "../core/retry.js";
 import { ensureWorkspaceRoom } from "../domain/workspace.js";
 
 export function isTrusted(agent: AgentDef): boolean {
@@ -103,6 +105,44 @@ export interface SummonChild {
   untrusted: boolean;
 }
 
+/** Fix #2 (`gaia summon --status` census): one summon lane's read-only status,
+ * as seen from disk + this process's own in-memory tracking — never mutates
+ * anything, never blocks on a live turn.
+ * `state`:
+ *  - "running": this daemon process currently has the lane's turn in flight
+ *    (first-turn OR a Fix #1 resume) — present in the coordinator's own
+ *    `running` map.
+ *  - "completed-undelivered": NOT tracked live, but the durable record still
+ *    reads status/resumeStatus "running" — EXACTLY recoverUndelivered's own
+ *    re-arm predicate (the next boot sweep would pick this up). This is the
+ *    lampas class: transcript ended, no delivery ever posted.
+ *  - "dead": settled and delivered, but the transcript's last recorded line
+ *    for this worker is a `⚠ turn failed` system entry — a terminally
+ *    failed lane (its failure WAS delivered; the lane itself is spent).
+ *  - "idle": settled, delivered, no pending work, no recorded failure —
+ *    ordinary quiescent completion. */
+export interface SummonCensusEntry {
+  roomId: string;
+  agentId: string;
+  parentRoomId: string;
+  state: "running" | "idle" | "completed-undelivered" | "dead";
+  /** First-turn delivery already landed in the parent room. */
+  delivered: boolean;
+  /** Present only once a `gaia resume` has ever been tracked for this child
+   * (Fix #1) — see SummonDelivery.resumeStatus. */
+  resumeStatus?: "running" | "delivered";
+  /** ISO mtime of transcript.jsonl — cheap (fs.stat, no parse), the closest
+   * available proxy for "last event time" without reading the file. Absent
+   * when the transcript is unreadable (should not happen for a real lane). */
+  lastEventAt?: string;
+  launchedAt: string;
+  /** Best-effort `git status --porcelain` on the lane's own workDir, only
+   * when one is cheaply known (ownWorktree summons carry state.workDir).
+   * Absent — not present, not a git repo, `git` missing, or timed out —
+   * means "no hint available", never "clean". */
+  dirtyWorktree?: boolean;
+}
+
 /** A task chip as the coordinator sees it (RoomService.Task, structurally). */
 export interface SummonTask {
   id: string;
@@ -117,7 +157,11 @@ export interface SummonTaskEvent {
 
 /** What the coordinator needs from a room service (narrow, injectable). */
 export interface SummonRoomAccess {
-  sendMessage(text: string, options: { targets: string[]; bypassContextGate?: boolean }): Promise<SummonTask>;
+  /** `targets` is required for a first-turn launch (runFirstTurn always names
+   * the worker agent explicitly); Fix #1's resume path calls this WITHOUT
+   * targets (steer-by-default / recordUserMessage:true), mirroring the plain
+   * `gaia resume` behavior exactly — hence optional here. */
+  sendMessage(text: string, options: { targets?: string[]; bypassContextGate?: boolean; recordUserMessage?: boolean }): Promise<SummonTask>;
   subscribe(listener: (event: SummonTaskEvent) => void): () => void;
   latestReplyFrom(agentId: string): Promise<string>;
   /** Opt-in worker self-episode (AgentDef.selfEpisode): record ONE distilled
@@ -141,6 +185,11 @@ export interface SummonRoomAccess {
   deliverAgentResult(fromAgentId: string, reply: string, delivery: SummonResultDelivery): Promise<void>;
   /** Stamp this CHILD room's summon record delivered (idempotent). */
   markSummonDelivered(): Promise<void>;
+  /** Fix #1: stamp this CHILD room's MOST RECENT resume record delivered
+   * (idempotent) — independent of markSummonDelivered's `status`, which
+   * stays "delivered" from the original first-turn summon. See
+   * SummonDelivery.resumeStatus. */
+  markSummonResumeDelivered(token: ResumeEpoch): Promise<void>;
   /** Rebroadcast the workspace rooms list (see RoomService.broadcastRoomsChanged). */
   broadcastRoomsChanged(): Promise<void>;
   /** Panic-stop this room's active turn — the EXACT plumbing the /cancel
@@ -188,9 +237,9 @@ export function awaitTask(room: { subscribe(listener: (event: SummonTaskEvent) =
  * turn-failure line (failure) so a summon failure message can always show
  * the real error even when the worker itself wrote nothing. */
 async function inspectWorker(rootDir: string, roomId: string, agentId: string): Promise<{ digest: string; active: boolean; lastText: string; failure: string }> {
-  let raw: string;
+  let events: Awaited<ReturnType<typeof readTranscriptRecordsFrom>>["items"];
   try {
-    raw = await readFile(workspacePaths.transcript(rootDir, roomId), "utf8");
+    events = (await readTranscriptRecordsFrom(workspacePaths.transcript(rootDir, roomId))).items;
   } catch {
     return { digest: "", active: false, lastText: "", failure: "" };
   }
@@ -199,20 +248,14 @@ async function inspectWorker(rootDir: string, roomId: string, agentId: string): 
   const texts: string[] = [];
   let active = false;
   let failure = "";
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let event: { author?: unknown; text?: unknown; timestamp?: unknown; details?: { tools?: unknown[] } };
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
+  for (const event of events) {
     if (event.author === "system" && typeof event.text === "string" && event.text.startsWith("⚠ turn failed")) {
       failure = event.text;
       continue;
     }
     if (event.author !== agentId) continue;
-    if (Array.isArray(event.details?.tools) && event.details.tools.length > 0) active = true;
+    const details = event.details;
+    if (details && typeof details === "object" && Array.isArray((details as { tools?: unknown[] }).tools) && (details as { tools: unknown[] }).tools.length > 0) active = true;
     if (typeof event.text !== "string" || event.text.length === 0) continue;
     active = true;
     if (!firstTs) firstTs = typeof event.timestamp === "string" ? event.timestamp : "";
@@ -273,6 +316,12 @@ export interface SummonHost {
  * see SummonRoomAccess.runCancelCommand) and the summon fails loudly instead
  * of leaving an orphaned turn running. */
 export const SUMMON_TIMEOUT_MS = 30 * 60_000; // 30 minutes
+
+/** Fix #2 (`gaia summon --status` census): hard cap on the best-effort `git
+ * status --porcelain` used for the dirty-worktree hint — a wedged/locked repo
+ * must never make a read-only census call hang. IRON param, no bare literal
+ * at the call site (mirrors SUMMON_TIMEOUT_MS's own convention). */
+export const CENSUS_GIT_STATUS_TIMEOUT_MS = 3_000; // 3 seconds
 
 function levenshteinDistance(left: string, right: string): number {
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -373,6 +422,13 @@ export class SummonCoordinator implements SummonHost {
   /** childRoomId -> info, for summons whose first turn is still running (the
    * cap + live snapshot). Completed summons live on as child rooms on disk. */
   private readonly running = new Map<string, SummonChild>();
+  /** Mints the identity of each resume contract (RC6) — clock + per-room
+   * sequence, so same-millisecond resumes never share a token. */
+  private readonly resumeEpochs = new ResumeEpochRegistry();
+  /** Completion for every live child. A parent summon waits on its direct
+   * children, then on the callback turns they enqueue, before it can itself
+   * settle and deliver upstream. */
+  private readonly completions = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly workspace: Workspace,
@@ -425,13 +481,12 @@ export class SummonCoordinator implements SummonHost {
     // service reads state at init, so both survive the service's own state
     // writes. The delivery record is what makes the callback durable: a
     // restart finds it and re-arms (recoverUndelivered).
-    const statePath = workspacePaths.roomState(this.workspace.rootDir, childRoomId);
-    const state = normalizeRoomState(await readJson(statePath));
-    state.parentRoomId = parentRoomId;
-    // The tier rides the room's durable state (like incognito: stamped once at
-    // creation, immutable) so a daemon restart resumes the child's turn under
-    // the SAME forced sandbox instead of quietly promoting it to trusted.
-    if (untrusted) state.summonUntrusted = true;
+    // RoomHandle is the sole serialized writer of a room's state.json: the
+    // seeding below is a DELTA over the child's document, so unknown/future
+    // fields survive and no write races the child service's own chain.
+    const childRoom = await RoomHandle.open(this.workspace.rootDir, childRoomId);
+    const seeded = await childRoom.state();
+
     // Worktree isolation (collab.isolation "worktree"): summons inherit the
     // parent room's checkout by default. ownWorktree is an explicit opt-in for
     // a child-owned checkout; if that cannot be created, degrade to the normal
@@ -440,18 +495,25 @@ export class SummonCoordinator implements SummonHost {
     if (options.ownWorktree && this.workspace.config.collab?.isolation === "worktree") {
       workDir = ensureRoomWorktree(this.workspace.rootDir, childRoomId, this.workspace.config.collab.branchPrefix);
     }
-    workDir ??= await resolveRoomWorkDir(this.workspace.rootDir, this.workspace.config.collab, state, childRoomId);
-    if (workDir) state.workDir = workDir;
-    if (options.deliver) {
-      state.summon = {
-        agentId,
-        deliver: options.deliver,
-        ...(options.callerAgentId ? { callerAgentId: options.callerAgentId } : {}),
-        status: "running",
-        launchedAt: new Date().toISOString(),
-      };
-    }
-    await writeJsonAtomic(statePath, state);
+    workDir ??= await resolveRoomWorkDir(this.workspace.rootDir, this.workspace.config.collab, seeded, childRoomId);
+    const launchedAt = new Date().toISOString();
+    await childRoom.updateState((state) => {
+      state.parentRoomId = parentRoomId;
+      // The tier rides the room's durable state (like incognito: stamped once
+      // at creation, immutable) so a daemon restart resumes the child's turn
+      // under the SAME forced sandbox instead of quietly promoting it.
+      if (untrusted) state.summonUntrusted = true;
+      if (workDir) state.workDir = workDir;
+      if (options.deliver) {
+        state.summon = {
+          agentId,
+          deliver: options.deliver,
+          ...(options.callerAgentId ? { callerAgentId: options.callerAgentId } : {}),
+          status: "running",
+          launchedAt,
+        };
+      }
+    });
 
     const child = await this.serviceForRoom(childRoomId);
     const info: SummonChild = { roomId: childRoomId, parentRoomId, agentId, prompt: task, untrusted };
@@ -477,8 +539,10 @@ export class SummonCoordinator implements SummonHost {
     );
     const done = ledgered.finally(() => {
       this.running.delete(childRoomId);
+      this.completions.delete(childRoomId);
       this.notifyParentRoomsChanged(parentRoomId);
     });
+    this.completions.set(childRoomId, done);
     // Don't crash on background summons whose result no one awaits.
     done.catch(() => {});
     return { roomId: childRoomId, done };
@@ -518,6 +582,26 @@ export class SummonCoordinator implements SummonHost {
     return reply;
   }
 
+  /** A delegation turn is not a completed worker. Wait for every direct child
+   * summon and then for the callback turns those children enqueue. Repeat:
+   * a callback may launch another wave. This keeps the outer summon live until
+   * its whole delegation subtree has been integrated. */
+  private async waitForDelegatedWork(room: SummonRoomAccess, roomId: string): Promise<void> {
+    for (;;) {
+      const direct = this.runningChildren(roomId);
+      const completions = direct
+        .map((child) => this.completions.get(child.roomId))
+        .filter((completion): completion is Promise<unknown> => completion !== undefined);
+      if (completions.length > 0) await Promise.allSettled(completions);
+      else if (direct.length > 0) await sleep(10);
+
+      // Delivery queues (or starts) the parent callback before the child leaves
+      // the running set. Waiting here therefore closes the hand-off race.
+      await room.waitForSettled();
+      if (this.runningChildren(roomId).length === 0 && !(await room.hasPendingWork())) return;
+    }
+  }
+
   /** Summons run autonomously: the context gate (a human decision modal) must
    * never hold a worker's first turn. */
   private async runFirstTurn(child: SummonRoomAccess, agentId: string, task: string, roomId: string): Promise<string> {
@@ -535,6 +619,10 @@ export class SummonCoordinator implements SummonHost {
     }
     if (turn.status === "error" && (await child.hasPendingWork())) {
       await child.waitForSettled();
+      turn = (await child.getSnapshot()).tasks.at(-1) ?? turn;
+    }
+    if (turn.status !== "error" && turn.status !== "cancelled") {
+      await this.waitForDelegatedWork(child, roomId);
       turn = (await child.getSnapshot()).tasks.at(-1) ?? turn;
     }
     const worker = await inspectWorker(this.workspace.rootDir, roomId, agentId);
@@ -581,10 +669,58 @@ export class SummonCoordinator implements SummonHost {
     await child.markSummonDelivered();
   }
 
+  /** Shared outcome classifier for "a turn already ran to completion (or was
+   * cancelled); read back what happened" — used by first-turn boot recovery
+   * (recoverOne) and Fix #1's resume-completion paths (runResume /
+   * recoverResumeOne) alike, so all three agree on what counts as
+   * failed/cancelled/empty-but-active. Pure read, no delivery side effect. */
+  private async settledOutcome(
+    child: SummonRoomAccess,
+    roomId: string,
+    agentId: string,
+    onIdleObserved?: () => void,
+  ): Promise<{ reply: string; failed: boolean; cancelled: boolean }> {
+    let lastTask = (await child.getSnapshot()).tasks.at(-1);
+    while (lastTask?.status === "error" && (await child.hasPendingWork())) {
+      await child.waitForSettled();
+      lastTask = (await child.getSnapshot()).tasks.at(-1);
+    }
+    // RC8: idle is observed HERE — everything below (inspectWorker,
+    // latestReplyFrom) is tail I/O against an ALREADY-FIXED view of the room.
+    // A resume landing during that tail must not merge into this contract, so
+    // the caller seals now, not after this function returns.
+    onIdleObserved?.();
+    const worker = await inspectWorker(this.workspace.rootDir, roomId, agentId);
+    if (lastTask?.status === "error") {
+      return { reply: [lastTask.error || worker.failure || "summon turn failed", worker.digest].filter(Boolean).join("\n\n"), failed: true, cancelled: false };
+    }
+    if (lastTask?.status === "cancelled") {
+      return { reply: ["cancelled before completion", worker.digest].filter(Boolean).join("\n\n"), failed: true, cancelled: true };
+    }
+    const raw = (await child.latestReplyFrom(agentId)).trim();
+    if (raw) return { reply: raw, failed: false, cancelled: false };
+    if (worker.active) {
+      // Did something, wrote no closing prose — progress, not failure.
+      return { reply: `(no final reply)\n\n${worker.digest}`, failed: false, cancelled: false };
+    }
+    // Never got going at all — same empty-completion failure bar as
+    // runFirstTurn.
+    return {
+      reply: [worker.lastText || worker.failure || "worker produced no output — likely out of usage or failed to start", worker.digest].filter(Boolean).join("\n\n"),
+      failed: true,
+      cancelled: false,
+    };
+  }
+
   /** Boot sweep: find child rooms whose delivery record is still "running" —
    * a prior process launched them and died (mid-turn or between finishing and
    * delivering) — reopen each (init resumes its turn from the WAL), wait for
-   * it to settle, and deliver. NO PROGRESS EVER LOST. */
+   * it to settle, and deliver. NO PROGRESS EVER LOST.
+   * Fix #1 (RC4): the SAME sweep also re-arms an INTERRUPTED RESUME — a
+   * `gaia resume` into an already-delivered summon child whose resumeStatus
+   * still reads "running" because the daemon died mid-turn or between
+   * finishing and delivering, exactly the first-turn failure mode this sweep
+   * already covers. */
   async recoverUndelivered(): Promise<void> {
     let roomIds: string[];
     try {
@@ -592,67 +728,416 @@ export class SummonCoordinator implements SummonHost {
     } catch {
       return;
     }
+    const pendingFirstTurn: Array<{ info: SummonChild; record: SummonDelivery }> = [];
+    const pendingResume: Array<{ info: SummonChild; epoch?: ResumeEpoch }> = [];
     for (const roomId of roomIds) {
       if (this.running.has(roomId)) continue;
       let record: SummonDelivery | undefined;
       let parentRoomId: string | undefined;
       let untrusted = false;
       try {
-        const state = normalizeRoomState(await readJson(workspacePaths.roomState(this.workspace.rootDir, roomId)));
+        // Strict RoomHandle.state() refuses malformed bytes. Recovery must not
+        // guess a missing summonUntrusted bit as trusted and weaken its sandbox.
+        const state = await RoomHandle.open(this.workspace.rootDir, roomId).then((room) => room.state());
         record = state.summon;
         parentRoomId = state.parentRoomId;
         untrusted = state.summonUntrusted === true;
-      } catch {
+      } catch (error) {
+        // One corrupt child cannot block recovery of every other child, but it
+        // must never reach a service with its security state guessed.
+        this.log(`summon recovery skipped unsafe '${roomId}': ${error instanceof Error ? error.message : String(error)}`);
         continue;
       }
-      if (!record || record.status !== "running" || !parentRoomId) continue;
+      if (!record || !parentRoomId) continue;
+      // The initial check precedes disk I/O; an overlapping recovery sweep may
+      // have claimed this room while this sweep awaited state().
+      if (this.running.has(roomId)) continue;
       const info: SummonChild = { roomId, parentRoomId, agentId: record.agentId, prompt: "", untrusted };
-      this.running.set(roomId, info);
-      this.log(`summon recovery: re-arming '${roomId}' (@${record.agentId} → '${parentRoomId}')`);
-      void this.recoverOne(info, record)
-        .catch((error) => this.log(`summon recovery for '${roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
+      if (record.status === "running") {
+        // First-turn delivery still pending takes priority — recoverOne owns
+        // the WHOLE lane; any resume stamp on an undelivered first turn is
+        // moot (the first turn hasn't even landed yet to be resumed).
+        this.running.set(roomId, info);
+        pendingFirstTurn.push({ info, record });
+      } else if (record.status === "delivered" && record.resumeStatus === "running") {
+        this.running.set(roomId, info);
+        // Lift the mint counter past whatever this room already carries, so a
+        // rebooted daemon can never mint a token that is already on disk.
+        this.resumeEpochs.observe(roomId, record.resumeStartedAt);
+        pendingResume.push({ info, ...(record.resumeStartedAt ? { epoch: record.resumeStartedAt } : {}) });
+      }
+    }
+    // Register the entire recovered tree before any lane can settle. Otherwise
+    // a parent discovered first can miss its still-undelivered child.
+    for (const { info, record } of pendingFirstTurn) {
+      this.log(`summon recovery: re-arming '${info.roomId}' (@${record.agentId} → '${info.parentRoomId}')`);
+      const completion = this.recoverOne(info, record)
+        .catch((error) => this.log(`summon recovery for '${info.roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
         .finally(() => {
-          this.running.delete(roomId);
-          this.notifyParentRoomsChanged(parentRoomId);
+          this.running.delete(info.roomId);
+          this.completions.delete(info.roomId);
+          this.notifyParentRoomsChanged(info.parentRoomId);
         });
+      this.completions.set(info.roomId, completion);
+      void completion;
+    }
+    for (const { info, epoch } of pendingResume) {
+      this.log(`resume recovery: re-arming '${info.roomId}' (@${info.agentId} → '${info.parentRoomId}')`);
+      const completion = this.recoverResumeOne(info, epoch)
+        .catch((error) => this.log(`resume recovery for '${info.roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => {
+          this.running.delete(info.roomId);
+          this.completions.delete(info.roomId);
+          this.notifyParentRoomsChanged(info.parentRoomId);
+        });
+      this.completions.set(info.roomId, completion);
+      void completion;
     }
   }
 
   private async recoverOne(info: SummonChild, record: SummonDelivery): Promise<void> {
     const child = await this.serviceForRoom(info.roomId); // init() resumes the WAL turn / queue
-    await child.waitForSettled();
-    let lastTask = (await child.getSnapshot()).tasks.at(-1);
-    while (lastTask?.status === "error" && (await child.hasPendingWork())) {
-      await child.waitForSettled();
-      lastTask = (await child.getSnapshot()).tasks.at(-1);
-    }
-    const worker = await inspectWorker(this.workspace.rootDir, info.roomId, info.agentId);
-    let reply: string;
-    let failed: boolean;
-    let cancelled = false;
-    if (lastTask?.status === "error") {
-      reply = [lastTask.error || worker.failure || "summon turn failed", worker.digest].filter(Boolean).join("\n\n");
-      failed = true;
-    } else if (lastTask?.status === "cancelled") {
-      reply = ["cancelled before completion", worker.digest].filter(Boolean).join("\n\n");
-      failed = true;
-      cancelled = true;
-    } else {
-      const raw = (await child.latestReplyFrom(info.agentId)).trim();
-      if (raw) {
-        reply = raw;
-        failed = false;
-      } else if (worker.active) {
-        // Did something, wrote no closing prose — progress, not failure.
-        reply = `(no final reply)\n\n${worker.digest}`;
-        failed = false;
-      } else {
-        // Never got going at all — same empty-completion failure bar as
-        // runFirstTurn.
-        reply = [worker.lastText || worker.failure || "worker produced no output — likely out of usage or failed to start", worker.digest].filter(Boolean).join("\n\n");
-        failed = true;
-      }
-    }
+    await this.waitForDelegatedWork(child, info.roomId);
+    const { reply, failed, cancelled } = await this.settledOutcome(child, info.roomId, info.agentId);
     await this.deliver(child, info, record, reply, failed, cancelled);
+  }
+
+  // --- Fix #1: resume-completion tracking --------------------------------
+
+  /** `gaia resume` into an EXISTING room. Plain rooms (no `state.summon`, or
+   * a summon child whose first turn hasn't delivered yet — see
+   * recoverUndelivered's own priority note) get the ORIGINAL, untracked
+   * behavior: kick the message and return, no durable record. An
+   * ALREADY-delivered summon child instead registers a NEW durable delivery
+   * contract for THIS resumed turn, mirroring the first-turn contract: when
+   * the resumed turn (and anything it delegates) settles, the result posts
+   * back to the SAME parent room via the SAME deliver/callerAgentId recorded
+   * at launch — the exact path deliverAgentResult already uses for a
+   * first-turn summon.
+   *
+   * Stamped BEFORE `sendMessage` kicks the turn — the SAME "stamp before it
+   * can run" ordering launch() uses for `status` — so a daemon crash between
+   * the stamp and settlement is recoverable at next boot (recoverUndelivered
+   * rescans resumeStatus too, RC4). The HTTP/CLI caller still gets the
+   * documented fire-and-forget contract: this call resolves once the message
+   * is kicked off (send errors surface synchronously, same as before this
+   * fix), never once the whole turn settles. */
+  async resume(roomId: string, room: SummonRoomAccess, message: string): Promise<{ tracked: boolean }> {
+    const handle = await RoomHandle.open(this.workspace.rootDir, roomId);
+    const state = await handle.state();
+    const record = state.summon;
+    const parentRoomId = state.parentRoomId;
+    if (!record || !parentRoomId || record.status !== "delivered") {
+      // Not a summon child, or its first turn hasn't delivered yet (that lane's
+      // own runChild/recoverOne already owns delivery) — untouched behavior.
+      await room.sendMessage(message, { recordUserMessage: true });
+      return { tracked: false };
+    }
+    // A resume is ALREADY in flight for this room (live watcher, or a boot
+    // sweep re-arm): join it instead of registering a second contract. Two
+    // watchers on one room = two deliveries of the same settled turn into the
+    // parent. The in-flight watcher settles the merged turn too (the room runs
+    // one turn queue), so the merged message is covered by the existing
+    // contract.
+    if (this.completions.has(roomId) || this.resumeInFlight.has(roomId) || record.resumeStatus === "running") {
+      const predecessor = this.completions.get(roomId);
+      let predecessorSettled = false;
+      predecessor?.finally(() => { predecessorSettled = true; }).catch(() => {});
+      await room.sendMessage(message, { recordUserMessage: true });
+      // The predecessor may have delivered while sendMessage awaited. Its
+      // contract cannot observe this newly queued turn, so arm a successor
+      // only in that completed-before-send window; normal concurrent steers
+      // remain one watcher and one parent delivery.
+      // A live watcher still running covers the merged turn. But a durable
+      // "running" stamp with NO watcher in this process (predecessor already
+      // settled, or the stamp survived a crash) covers nothing — returning
+      // here would strand turn B exactly like the epoch collision does. Arm a
+      // fresh contract in that case; only a genuinely in-flight resume merges.
+      // ...and "live" means CAN STILL OBSERVE turn B. A watcher that already
+      // sampled its outcome (RC7: sealed — past settledOutcome, inside the
+      // parent write) is unsettled but covers nothing new; merging into it
+      // strands B exactly like a collided epoch.
+      const sealed = this.resumeSealed.has(roomId);
+      if (!sealed && this.resumeInFlight.has(roomId)) return { tracked: true };
+      if (!sealed && predecessor && !predecessorSettled) return { tracked: true };
+      this.resumeEpochs.observe(roomId, record.resumeStartedAt);
+      const resumeStartedAt = this.resumeEpochs.mint(roomId);
+      await handle.updateState((s) => {
+        if (s.summon) {
+          s.summon.resumeStatus = "running";
+          s.summon.resumeStartedAt = resumeStartedAt;
+        }
+      });
+      const info: SummonChild = { roomId, parentRoomId, agentId: record.agentId, prompt: message, untrusted: state.summonUntrusted === true };
+      this.running.set(roomId, info);
+      // The successor OWNS the in-flight flag from here (RC7) — otherwise a
+      // sealed predecessor's cleanup would leave it set with no watcher.
+      this.resumeInFlight.add(roomId);
+      const completion = this.runResume(room, info, resumeStartedAt)
+        .catch((error) => this.log(`resume successor tracking for '${roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => {
+          if (this.running.get(roomId) === info) this.running.delete(roomId);
+          if (this.completions.get(roomId) === completion) {
+            this.completions.delete(roomId);
+            this.resumeInFlight.delete(roomId);
+          }
+          this.notifyParentRoomsChanged(parentRoomId);
+        });
+      this.completions.set(roomId, completion);
+      completion.catch(() => {});
+      return { tracked: true };
+    }
+    // Claim BEFORE the next await: check+add is atomic w.r.t. the event loop,
+    // so two resume() calls interleaving on their disk reads still produce
+    // exactly one watcher (the disk stamp alone is too late to serialize them).
+    this.resumeInFlight.add(roomId);
+    this.resumeEpochs.observe(roomId, record.resumeStartedAt);
+    const resumeStartedAt = this.resumeEpochs.mint(roomId);
+    await handle.updateState((s) => {
+      if (s.summon) {
+        s.summon.resumeStatus = "running";
+        s.summon.resumeStartedAt = resumeStartedAt;
+      }
+    });
+    const info: SummonChild = { roomId, parentRoomId, agentId: record.agentId, prompt: message, untrusted: state.summonUntrusted === true };
+    this.running.set(roomId, info); // Fix #2 census visibility + counts toward the parent's summon cap while in flight
+    try {
+      await room.sendMessage(message, { recordUserMessage: true });
+    } catch (error) {
+      this.running.delete(roomId);
+      this.resumeInFlight.delete(roomId);
+      // Nothing was ever kicked off — roll back THIS stamp (keyed by its own
+      // timestamp so a concurrent, genuinely-in-flight resume is never
+      // clobbered) so a dead stamp never fools the boot sweep into "recovering"
+      // a resume that never ran.
+      await handle.updateState((s) => {
+        if (s.summon && s.summon.resumeStartedAt === resumeStartedAt) s.summon.resumeStatus = "delivered";
+      }).catch(() => {});
+      throw error;
+    }
+    const completion = this.runResume(room, info, resumeStartedAt)
+      .catch((error) => this.log(`resume-completion tracking for '${roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => {
+        // Identity-guarded (RC7): a successor contract armed while this watcher
+        // was sealed owns these slots now — clearing them blind would hide
+        // still-in-flight work from the parent's delegated-work wait and let a
+        // later resume arm a duplicate watcher on the same turn.
+        if (this.running.get(roomId) === info) this.running.delete(roomId);
+        if (this.completions.get(roomId) === completion) {
+          this.completions.delete(roomId);
+          this.resumeInFlight.delete(roomId);
+        }
+        this.notifyParentRoomsChanged(parentRoomId);
+      });
+    this.completions.set(roomId, completion);
+    completion.catch(() => {}); // don't crash the daemon on an unwatched resume
+    return { tracked: true };
+  }
+
+  /** Watches a resumed turn (Fix #1) through to settlement — including
+   * anything it delegates — then delivers the result via the SAME
+   * parent-room contract as a first-turn summon, and marks THIS resume's own
+   * durable record delivered. Shared by the live path (resume) and boot
+   * recovery (recoverResumeOne) — same code, same guarantees either way. */
+  private async runResume(child: SummonRoomAccess, info: SummonChild, token: ResumeEpoch): Promise<void> {
+    await this.waitForDelegatedWork(child, info.roomId);
+    // Sealed the instant the room is observed idle (RC8) — not after the
+    // outcome read returns: this contract's view of the room is fixed from
+    // that observation on, and any resume arriving during the outcome's tail
+    // I/O needs its own watcher (see resume()'s merge guard).
+    const seal = () => this.resumeSealed.set(info.roomId, token);
+    const { reply, failed, cancelled } = await this.settledOutcome(child, info.roomId, info.agentId, seal);
+    seal();
+    try {
+      await this.deliverResume(child, info, reply, failed, cancelled, token);
+    } finally {
+      if (this.resumeSealed.get(info.roomId) === token) this.resumeSealed.delete(info.roomId);
+    }
+  }
+
+  /** Land a resumed turn's result in the parent room (deliverAgentResult,
+   * same as a first-turn summon), then mark ONLY this resume's record
+   * delivered — a single state write, so a crash never leaves the parent
+   * notified while the durable record still claims "running" (which would
+   * cause a duplicate boot-sweep re-delivery). Reads the summon record FRESH
+   * off disk rather than trusting a caller-held snapshot: deliver/
+   * callerAgentId are stamped once at ORIGINAL launch and never change, but
+   * this keeps the path correct even if that ever stops being true. */
+  private readonly deliveringResume = new Set<string>();
+
+  /** Rooms with a live resume watcher (Fix: concurrent-resume double delivery)
+   * — see resume()'s merge guard. */
+  private readonly resumeInFlight = new Set<string>();
+
+  /** Rooms whose live resume watcher has already sampled its outcome (RC7). */
+  private readonly resumeSealed = new Map<string, ResumeEpoch>();
+
+  private async deliverResume(child: SummonRoomAccess, info: SummonChild, reply: string, failed: boolean, cancelled: boolean, token: ResumeEpoch): Promise<void> {
+    const state = await (await RoomHandle.open(this.workspace.rootDir, info.roomId)).state();
+    const record = state.summon;
+    if (!record) return; // record vanished (shouldn't happen) — nothing durable to deliver against
+    // Atomic claim IMMEDIATELY before delivery: first watcher to reach this
+    // line for the room wins; any other watcher that raced past the merge
+    // guard (e.g. a boot-sweep re-arm meeting a live watcher) drops out, so a
+    // single settled turn is delivered exactly once. Claim is in-process only
+    // BY DESIGN — the durable resumeStatus flip stays AFTER delivery so a
+    // crash mid-delivery still re-delivers at next boot (never loses a
+    // result); duplicates can only ever arise within one live daemon.
+    // Keyed by room AND epoch (RC7): duplicate watchers of ONE resume share its
+    // token (boot-sweep re-arm meeting a live watcher) and must collapse to one
+    // delivery; watchers of DIFFERENT epochs are different turns and each owes
+    // the parent its own result.
+    const claim = `${info.roomId}\u0000${token}`;
+    if (this.deliveringResume.has(claim)) return;
+    this.deliveringResume.add(claim);
+    try {
+      await this.deliverResumeClaimed(child, info, record, reply, failed, cancelled, token);
+    } finally {
+      this.deliveringResume.delete(claim);
+    }
+  }
+
+  private async deliverResumeClaimed(
+    child: SummonRoomAccess,
+    info: SummonChild,
+    record: SummonDelivery,
+    reply: string,
+    failed: boolean,
+    cancelled: boolean,
+    token: ResumeEpoch,
+  ): Promise<void> {
+    const parent = await this.serviceForRoom(info.parentRoomId);
+    await parent.deliverAgentResult(info.agentId, reply, {
+      childRoomId: info.roomId,
+      failed,
+      ...(record.deliver === "turn" && record.callerAgentId && !cancelled ? { triggerTarget: record.callerAgentId } : {}),
+    });
+    await child.markSummonResumeDelivered(token);
+  }
+
+  /** Boot-recovery counterpart to `resume`'s live path — an interrupted
+   * resume found by recoverUndelivered. init() resumes the room's own WAL
+   * turn/queue; from there it's the identical runResume path a live resume
+   * uses. */
+  private async recoverResumeOne(info: SummonChild, epoch?: ResumeEpoch): Promise<void> {
+    // A pre-RC6 record can be "running" with NO stamp. An unstamped close would
+    // have to be unguarded (closing whatever epoch is live), so mint an
+    // identity for the interrupted resume and persist it BEFORE running — same
+    // "stamp before it can settle" ordering the live path uses.
+    const token = epoch ?? (await this.mintRecoveryEpoch(info.roomId));
+    const child = await this.serviceForRoom(info.roomId);
+    await this.runResume(child, info, token);
+  }
+
+  /** Stamp an epoch onto a stamp-less interrupted resume (see
+   * recoverResumeOne). If a live resume stamped one in the meantime, that
+   * newer token owns the record and this recovery adopts it — never overwrites
+   * it, which would strand the live resume. */
+  private async mintRecoveryEpoch(roomId: string): Promise<ResumeEpoch> {
+    const minted = this.resumeEpochs.mint(roomId);
+    const handle = await RoomHandle.open(this.workspace.rootDir, roomId);
+    let adopted = minted;
+    await handle.updateState((s) => {
+      if (!s.summon) return;
+      if (s.summon.resumeStartedAt) {
+        adopted = s.summon.resumeStartedAt;
+        return;
+      }
+      s.summon.resumeStartedAt = minted;
+    });
+    return adopted;
+  }
+
+  // --- Fix #2: `gaia summon --status` census ------------------------------
+
+  /** Read-only census of every summon lane whose parent is `parentRoomId`
+   * (every summon lane in the workspace when omitted) — see
+   * SummonCensusEntry for field/state semantics. Pure disk + in-memory
+   * reads: never mutates state, never awaits a live turn, never blocks on
+   * anything but a bounded git-status probe (CENSUS_GIT_STATUS_TIMEOUT_MS).
+   * A dead daemon fails the whole HTTP/CLI call loudly (connection refused)
+   * rather than returning a stale or silently-wrong census. */
+  async census(parentRoomId?: string): Promise<SummonCensusEntry[]> {
+    let roomIds: string[];
+    try {
+      roomIds = await readdir(this.workspace.roomsDir);
+    } catch {
+      return [];
+    }
+    const entries: SummonCensusEntry[] = [];
+    for (const roomId of roomIds) {
+      let record: SummonDelivery | undefined;
+      let parent: string | undefined;
+      let workDir: string | undefined;
+      try {
+        const state = await RoomHandle.open(this.workspace.rootDir, roomId).then((room) => room.state());
+        record = state.summon;
+        parent = state.parentRoomId;
+        workDir = state.workDir;
+      } catch {
+        continue; // unreadable/corrupt — same skip discipline as recoverUndelivered
+      }
+      if (!record || !parent) continue; // not a summon child
+      if (parentRoomId !== undefined && parent !== parentRoomId) continue;
+      entries.push(await this.censusEntry(roomId, record, parent, workDir));
+    }
+    return entries;
+  }
+
+  private async censusEntry(roomId: string, record: SummonDelivery, parentRoomId: string, workDir: string | undefined): Promise<SummonCensusEntry> {
+    let state: SummonCensusEntry["state"];
+    if (this.running.has(roomId)) {
+      state = "running";
+    } else if (record.status === "running" || record.resumeStatus === "running") {
+      // Exactly recoverUndelivered's own re-arm predicate — the lampas class.
+      state = "completed-undelivered";
+    } else {
+      const worker = await inspectWorker(this.workspace.rootDir, roomId, record.agentId);
+      state = worker.failure ? "dead" : "idle";
+    }
+    const lastEventAt = await transcriptMtime(this.workspace.rootDir, roomId);
+    const dirtyWorktree = workDir ? cheapDirtyWorktreeHint(workDir) : undefined;
+    return {
+      roomId,
+      agentId: record.agentId,
+      parentRoomId,
+      state,
+      delivered: record.status === "delivered",
+      ...(record.resumeStatus ? { resumeStatus: record.resumeStatus } : {}),
+      ...(lastEventAt ? { lastEventAt } : {}),
+      launchedAt: record.launchedAt,
+      ...(dirtyWorktree === undefined ? {} : { dirtyWorktree }),
+    };
+  }
+}
+
+/** ISO mtime of a room's transcript.jsonl — cheap (fs.stat, no parse), the
+ * closest available proxy for "last event time" a census can afford across
+ * many rooms. */
+async function transcriptMtime(rootDir: string, roomId: string): Promise<string | undefined> {
+  try {
+    const info = await stat(workspacePaths.transcript(rootDir, roomId));
+    return info.mtime.toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Best-effort `git status --porcelain` in `workDir`, bounded by
+ * CENSUS_GIT_STATUS_TIMEOUT_MS (execFileSync's own `timeout` option kills a
+ * wedged/locked repo rather than hanging the census call). undefined — not a
+ * git repo, `git` missing, or timed out — is a distinct "no hint" result,
+ * never coerced into "clean". */
+function cheapDirtyWorktreeHint(workDir: string): boolean | undefined {
+  try {
+    const out = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
+      cwd: workDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: CENSUS_GIT_STATUS_TIMEOUT_MS,
+    });
+    return out.trim().length > 0;
+  } catch {
+    return undefined;
   }
 }

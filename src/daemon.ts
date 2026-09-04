@@ -6,65 +6,55 @@
 // route table over this class.
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { readdir, readFile, realpath } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { Bus } from "./core/bus.js";
-import { newId } from "./core/ids.js";
-import { DEFAULTS } from "./core/config.js";
 import { globalPaths, workspacePaths } from "./core/paths.js";
 import { readJson, writeJsonAtomic } from "./core/store.js";
-import type { AgentDef, ChatSearchHit, ChatSearchResult, KeepAwakeCapability, PetBinding, RoomBookmark, RoomState, Snapshot, UiEvent, UsageLimits, VoiceCallInfo, Workspace, WorkspaceRecord } from "./core/types.js";
-import { capabilitiesFor, type GaiaTool, harnessIdFor, harnessSpecFor } from "./harness/spec.js";
-import { findAccount } from "./domain/accounts.js";
-import { findModelWithAlias } from "./harness/model-aliases.js";
+import type { AgentDef, ChatSearchHit, ChatSearchResult, KeepAwakeCapability, PetBinding, RoomState, Snapshot, UiEvent, UsageLimits, VoiceCallInfo, Workspace, WorkspaceRecord } from "./core/types.js";
+import { capabilitiesFor, type ContextDietView, type GaiaTool, harnessIdFor } from "./harness/spec.js";
+import type { ContextDietOverrides } from "./domain/context-diet.js";
 import { reapOrphans } from "./harness/reaper.js";
 import type { MemoryAction, MemoryMutationResult } from "./domain/memory.js";
 import { MemoryStore } from "./domain/memory.js";
-import { deriveRoomTitle, normalizeRoomState, resolveWorkspaceRoomRef, RoomHandle } from "./domain/rooms.js";
+import { RoomHandle } from "./domain/rooms.js";
 import { listWorkspacePetBindings } from "./domain/pets.js";
-import { DEFAULT_ROOM, ensureWorkspaceRoom, initWorkspace, isValidRoomId, liveMaxSummonsPerRoom, loadWorkspace, setWorkspaceDefaultAgent, setWorkspaceRoom, trashWorkspaceRoom, workspacePath } from "./domain/workspace.js";
-import { setAgentDefaultRole, trashGlobalAgent } from "./domain/agents.js";
-import { listAgentRoles } from "./domain/roles.js";
+import { loadWorkspace, workspacePath } from "./domain/workspace.js";
 import { ensureAccountsFile } from "./domain/accounts.js";
-import { RoomService, scanRoomActivity, type HomeWorkspaceRedirectRequest, type HomeWorkspaceRedirectResult } from "./services/room-service.js";
-import { playTurnCompletionSound } from "./services/turn-completion-sound.js";
-import { resolveTitleLlmAccount } from "./services/title-auth.js";
+import { RoomService, scanRoomActivity } from "./services/room-service.js";
 import { MemoryService } from "./services/memory-service.js";
 import { UsageService } from "./services/usage-service.js";
 import { EmbedSidecar } from "./services/embed-sidecar.js";
 import { SchedulerService } from "./services/scheduler.js";
-import { AccountLoginService } from "./services/account-login.js";
 import { formatDreamProposal } from "./services/consolidate.js";
-import type { ConsolidateLlm, ConsolidateResult } from "./services/consolidate.js";
-import { formatMemoryHits, scrollTranscriptWindow, workspaceRoomRefs, type MemoryHealthRow, type MemorySearchHit, type RoomRef } from "./domain/workspace-index.js";
+import type { ConsolidateResult } from "./services/consolidate.js";
+import { formatMemoryHits, scrollTranscriptWindow, type MemoryHealthRow, type MemorySearchHit } from "./domain/workspace-index.js";
 import { SummonCoordinator } from "./services/summons.js";
 import { HarnessBridge, type HarnessTokenClaims } from "./services/bridge.js";
 import { resolveUpstreamCredential, type UpstreamCredential } from "./services/proxy.js";
 import { EditableFileRegistry, buildFileHints, readModelCatalog, sdkThinkingLevels, sdkToolNames, skillHintOptions, type EditableFileContent, type EditableFileDescriptor, type FileHints, type HintSources, type ModelChoice } from "./services/hints.js";
-import {
-  VoiceStackManager,
-  classifyVoiceTurn,
-  clearCallOverride,
-  ensureVoiceSettingsFile,
-  persistCallOverride,
-  readCurrentVoiceRoom,
-  readVoiceSettings,
-  sweepOrphanOverrides,
-  writeCurrentVoiceRoom,
-  type VoiceSettings,
-} from "./services/voice.js";
-import { readAloud, readAloudStream, resolveTtsChoice, ttsStackSettings, type ReadAloudDelivery, type ReadAloudResult } from "./services/read-aloud.js";
-import { transcribe, type SttAudioInput } from "./services/transcribe.js";
-import { cancelSpeechQueue, speak as speakApple } from "./services/tts-apple.js";
-import "./services/stt-apple.js"; // registers the apple (on-device Siri) STT engine
-import { TtsCallBridge } from "./services/voice-tts-bridge.js";
-import { SttCallBridge } from "./services/voice-stt-bridge.js";
+import { ensureVoiceSettingsFile, sweepOrphanOverrides } from "./services/voice.js";
 import { KeepAwakeManager, keepAwakeCapability, migrateLegacyLaunchdAgent, readKeepAwakeSetting, writeKeepAwakeSetting } from "./services/keep-awake.js";
+import { readThemeSetting, writeThemeSetting } from "./services/theme.js";
 import { readUserNameSetting, writeUserNameSetting } from "./services/user-name.js";
-import { StudioNotFoundError, StudioService } from "./services/studio-service.js";
-import { listArtifacts, readArtifact, type ArtifactLocation } from "./services/artifacts.js";
-import type { ArtifactManifest, StoredArtifact } from "./domain/artifacts.js";
+import { createToolProviders } from "./services/tool-providers.js";
+import type { ToolProviders } from "./harness/protocol.js";
+import {
+coordinatorFor as wireCoordinatorFor,
+memoryServiceFor as wireMemoryServiceFor,
+recoverPendingTurns as wireRecoverPendingTurns,
+recoverSummons as wireRecoverSummons,
+serviceFor as wireServiceFor,
+} from "./daemon/wiring.js";
+import {
+  applySettingsChange as reloadApplySettingsChange,
+  reloadService as doReloadService,
+  workspaceServiceKeys as wireWorkspaceServiceKeys,
+} from "./daemon/reload.js";
+import type { HarnessApiPort, ReloadHost, WiringHost, RoomInteractionHost } from "./daemon/ports.js";
+import { RoomInteractionLifecycle } from "./daemon/interactions.js";
+import { harnessContextDietGet, harnessContextDietSet, harnessDogCommand, harnessDreamApply, harnessDreamPropose, harnessEndConversation, harnessGaiaTools, harnessGhoulLedgerSearch, harnessGhoulRoomRead, harnessMemoryBatch, harnessMemoryWrite, harnessRecall, harnessRecallScroll, harnessToolProviders, harnessToolResultFetch } from "./daemon/harness-api.js";
 
 // --- workspace registry (recent workspaces in ~/.gaia/app.json) ----------------
 // Registry entries are the WorkspaceRecord wire shape from core/types.ts.
@@ -73,15 +63,20 @@ function pathId(path: string, length: number): string {
   return createHash("sha256").update(resolve(path)).digest("hex").slice(0, length);
 }
 
-function normalizeRecord(path: string, lastOpenedAt = new Date().toISOString()): WorkspaceRecord {
+function normalizeRecord(path: string, lastOpenedAt = new Date().toISOString(), humanId?: string, favorite?: boolean, order?: number): WorkspaceRecord {
   const resolved = resolve(path);
   const parts = resolved.split(/[\\/]/).filter(Boolean);
   return {
-    id: pathId(resolved, 16),
+    // Preserve every legacy/shared id; an owned record includes its owner so
+    // two scopes can never alias the same live-service/cache key.
+    id: pathId(humanId ? `${humanId}\0${resolved}` : resolved, 16),
     path: resolved,
     name: parts[parts.length - 1] ?? resolved,
     lastOpenedAt,
     isInitialized: existsSync(workspacePath(resolved)),
+    ...(humanId ? { humanId } : {}),
+    ...(favorite ? { favorite: true } : {}),
+    ...(order !== undefined ? { order } : {}),
   };
 }
 
@@ -91,14 +86,32 @@ export class WorkspaceRegistry {
   async list(): Promise<WorkspaceRecord[]> {
     const config = ((await readJson(this.configPath)) ?? {}) as { recentWorkspaces?: WorkspaceRecord[] };
     return (config.recentWorkspaces ?? [])
-      .map((record) => normalizeRecord(record.path, record.lastOpenedAt))
-      .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
+      .map((record) => normalizeRecord(record.path, record.lastOpenedAt, record.humanId, record.favorite, record.order))
+      .sort((a, b) => {
+        // Favorites always lead (sidebar "favorites on top"), then explicit
+        // drag order (see reorder()), then most-recently-opened for anything
+        // never dragged.
+        if (!!a.favorite !== !!b.favorite) return a.favorite ? -1 : 1;
+        if (a.order !== undefined && b.order !== undefined) return a.order - b.order;
+        if (a.order !== undefined) return -1;
+        if (b.order !== undefined) return 1;
+        return b.lastOpenedAt.localeCompare(a.lastOpenedAt);
+      });
   }
 
-  async add(path: string): Promise<WorkspaceRecord> {
-    const record = normalizeRecord(path);
+  /** Human-visible registry slice. `undefined` is the legacy shared scope. */
+  async listForHuman(humanId?: string): Promise<WorkspaceRecord[]> {
+    return (await this.list()).filter((record) => record.humanId === humanId);
+  }
+
+  async add(path: string, humanId?: string): Promise<WorkspaceRecord> {
+    const resolved = resolve(path);
     const config = ((await readJson(this.configPath)) ?? {}) as { recentWorkspaces?: WorkspaceRecord[] };
-    const next = [record, ...(config.recentWorkspaces ?? []).filter((item) => item.id !== record.id)].slice(0, 30);
+    // Re-adding an already-registered path (re-picking the same folder) must not
+    // wipe its favorite/manual order -- carry them over onto the bumped record.
+    const existing = (config.recentWorkspaces ?? []).find((item) => resolve(item.path) === resolved && item.humanId === humanId);
+    const record = normalizeRecord(path, undefined, humanId, existing?.favorite, existing?.order);
+    const next = [record, ...(config.recentWorkspaces ?? []).filter((item) => item.id !== record.id || item.humanId !== humanId)].slice(0, 30);
     await writeJsonAtomic(this.configPath, { ...config, recentWorkspaces: next });
     return record;
   }
@@ -107,105 +120,107 @@ export class WorkspaceRegistry {
     return (await this.list()).find((record) => record.id === id);
   }
 
+  async findForHuman(id: string, humanId?: string): Promise<WorkspaceRecord | undefined> {
+    return (await this.listForHuman(humanId)).find((record) => record.id === id);
+  }
+
   /** Drop a workspace from the recent-workspaces list. De-registration only —
    * the folder on disk (project files + .gaia data) is never touched, so
    * re-adding the path restores it. Returns false if the id wasn't listed. */
-  async remove(id: string): Promise<boolean> {
+  async remove(id: string, humanId?: string): Promise<boolean> {
     const config = ((await readJson(this.configPath)) ?? {}) as { recentWorkspaces?: WorkspaceRecord[] };
     const list = config.recentWorkspaces ?? [];
-    const next = list.filter((item) => item.id !== id);
+    const next = list.filter((item) => item.id !== id || item.humanId !== humanId);
     if (next.length === list.length) return false;
     await writeJsonAtomic(this.configPath, { ...config, recentWorkspaces: next });
     return true;
   }
+
+  /** Mark/unmark a workspace favorite (sidebar right-click "Add/Remove
+   * favorite", same UX as room favorites) — display metadata only; sort order
+   * (favorites first) is applied in list(). Returns false if the id isn't
+   * registered for this human scope. */
+  async setFavorite(id: string, favorite: boolean, humanId?: string): Promise<boolean> {
+    const config = ((await readJson(this.configPath)) ?? {}) as { recentWorkspaces?: WorkspaceRecord[] };
+    const list = config.recentWorkspaces ?? [];
+    const index = list.findIndex((item) => item.id === id && item.humanId === humanId);
+    if (index === -1) return false;
+    const next = [...list];
+    const { favorite: _drop, ...rest } = next[index];
+    next[index] = favorite ? { ...rest, favorite: true } : rest;
+    await writeJsonAtomic(this.configPath, { ...config, recentWorkspaces: next });
+    return true;
+  }
+
+  /** Persist a sidebar drag-drop reorder: `ids` is the full desired order for
+   * this human scope (favorites-and-non alike — favorite-on-top is a separate
+   * sort pass in list(), so a drag can freely reorder within/across both).
+   * Ids outside this scope are left untouched; ids never passed here keep
+   * their prior order/lastOpenedAt-only ordering. */
+  async reorder(ids: string[], humanId?: string): Promise<void> {
+    const config = ((await readJson(this.configPath)) ?? {}) as { recentWorkspaces?: WorkspaceRecord[] };
+    const list = config.recentWorkspaces ?? [];
+    const position = new Map(ids.map((id, index) => [id, index]));
+    const next = list.map((item) => {
+      if (item.humanId !== humanId) return item;
+      const order = position.get(item.id);
+      if (order === undefined) return item;
+      return { ...item, order };
+    });
+    await writeJsonAtomic(this.configPath, { ...config, recentWorkspaces: next });
+  }
 }
 
 // --- the daemon -----------------------------------------------------------------
-
-/** Soft cap on simultaneously-resident room services. Idle rooms past this are
- * evicted (transcripts persist on disk); busy ones are always kept. */
-const MAX_LIVE_SERVICES = 32;
-
-/** Grace window protecting a just-handed-out service from eviction. `serviceFor`
- * returns an idle service to a caller that then `await`s several times (init +
- * routing) before `sendMessage` sets `activeTask` — until then `isBusy` is
- * false, so a concurrent `serviceFor` (constant under heavy summon fan-out) can
- * `evictIdleServices()` and dispose the runtimes out from under the in-flight
- * turn: the message persists but no turn ever runs, and it takes a SECOND
- * message (which re-creates the room) to get a reply. Any service handed out
- * within this window is treated as busy so the hand-off can complete. */
-const HANDOFF_GRACE_MS = 30_000;
-
-function serviceKey(workspaceId: string, roomId: string): string {
-  return `${workspaceId}::${roomId}`;
-}
 
 export interface DaemonOptions {
   cwd: string;
   log?: (message: string) => void;
 }
 
-export interface SelectionPayload {
-  snapshot: Snapshot;
-  workspaceFiles: EditableFileDescriptor[];
-  voice: VoiceCallInfo | null;
-}
 
 export class Daemon {
   readonly registry = new WorkspaceRegistry();
   readonly files = new EditableFileRegistry((id) => this.workspaceForId(id));
-  readonly voiceStack = new VoiceStackManager(globalPaths.voiceLogsDir());
   /** "Keep laptop awake" (Global Settings ▸ General) — see services/keep-awake.ts. */
   private readonly keepAwakeManager = new KeepAwakeManager({ log: (message) => this.log(message) });
-  private readonly services = new Map<string, RoomService>();
+  // Non-private: daemon/wiring.ts + daemon/reload.ts read/mutate this directly
+  // through the WiringHost/ReloadHost structural interfaces (A7 split);
+  // callers outside Daemon never see it (not part of the public surface).
+  readonly services = new Map<string, RoomService>();
   /** serviceKey -> epoch ms of the most recent `serviceFor` hand-out. Guards the
    * eviction race: a service is protected while a caller's in-flight operation
    * (e.g. sendMessage's init+routing, before activeTask is set) completes. */
-  private readonly handedOutAt = new Map<string, number>();
+  readonly handedOutAt = new Map<string, number>();
   /** serviceKey -> in-flight creation. Two concurrent cache misses for the same
    * room (SSE reconnect burst right after a restart) must share ONE creation:
    * independent RoomService instances each run initOnce — double pendingTurn
    * resume, two runner subprocesses, racing writes to the same state.json. */
-  private readonly servicePending = new Map<string, Promise<RoomService>>();
-  private readonly currentRoom = new Map<string, string>();
-  private readonly memoryStores = new Map<string, MemoryStore>();
-  private readonly memoryServices = new Map<string, { service: MemoryService; live: { workspace: Workspace } }>();
+  readonly servicePending = new Map<string, Promise<RoomService>>();
+  readonly currentRoom = new Map<string, string>();
+  readonly memoryStores = new Map<string, MemoryStore>();
+  /** Service-side tool implementations injected into subprocess harnesses. */
+  private readonly toolProviders = createToolProviders();
+  readonly memoryServices = new Map<string, { service: MemoryService; live: { workspace: Workspace } }>();
   /** One local embedding sidecar per daemon (model server shared across
    * workspaces); MemoryService reaches it through EmbedderDeps. Download and
    * startup progress fans out to every workspace's health table — a 300MB
    * model pull must be visible, not a buried log line (§10). */
-  private readonly embedSidecar = new EmbedSidecar({
+  readonly embedSidecar = new EmbedSidecar({
     log: (message) => this.log(message),
     onProgress: (state, detail, role) => {
       for (const { service } of this.memoryServices.values()) service.noteSidecarProgress(role === "rerank" ? "reranker" : "embedder", state, detail);
     },
   });
-  private readonly summonCoordinators = new Map<string, SummonCoordinator>();
+  readonly summonCoordinators = new Map<string, SummonCoordinator>();
   private readonly bus = new Bus<UiEvent>();
-  private readonly pendingReloads = new Set<string>();
+  readonly pendingReloads = new Set<string>();
   /** Subscription-usage meter (account-keyed, disk-cached, self-polling) —
    * see services/usage-service.ts. The daemon only wires broadcast + lifecycle. */
   private readonly usageService = new UsageService({ broadcast: (event) => this.broadcast(event) });
-  readonly studio = new StudioService({
-    registry: this.registry,
-    serviceFor: (workspaceId, roomId) => this.serviceFor(workspaceId, roomId),
-    broadcast: (event) => this.broadcast(event),
-    baseUrl: () => this.baseUrl,
-  });
-  readonly accountLogins = new AccountLoginService();
-  private hintSourcesCache: { toolNames: string[]; models: ModelChoice[] } | undefined;
-  private bridge: HarnessBridge | undefined;
-  private scheduler: SchedulerService | undefined;
-  /** Periodic stale-WAL backstop; room recovery itself stays in RoomService. */
-  private stuckTurnTimer: ReturnType<typeof setInterval> | undefined;
-  /** One voice call at a time; unmute's chat-completions requests bind to it. */
-  activeCall: { workspaceId: string; info: VoiceCallInfo; settings: VoiceSettings } | undefined;
-  voiceStarting = false;
-  // Live only while a call routes its TTS through a read-aloud engine
-  // (claude-voice); torn down on hang-up.
-  private ttsBridge: TtsCallBridge | undefined;
-  // Live only while a call routes STT through Replicate; torn down on hang-up.
-  private sttBridge: SttCallBridge | undefined;
+  hintSourcesCache: { toolNames: string[]; models: ModelChoice[] } | undefined;
+  bridge: HarnessBridge | undefined;
+  scheduler: SchedulerService | undefined;
   // Resolves once boot()'s orphan sweep has finished. serviceFor() awaits this
   // so an HTTP request landing in the window between "server listening" and
   // "orphan sweep done" (the server accepts connections before boot() settles
@@ -213,8 +228,7 @@ export class Daemon {
   // runner from the previous daemon generation for that same room might still
   // be alive: the two would race the same transcript/runner slot. Defaults to
   // an already-resolved promise so tests/callers that skip boot() aren't stuck.
-  private orphanSweepDone: Promise<void> = Promise.resolve();
-  private baseUrl = "";
+  orphanSweepDone: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: DaemonOptions) {
     ensureAccountsFile(); // seed ~/.gaia/accounts.json so it lists as an editable settings file
@@ -224,7 +238,7 @@ export class Daemon {
     return this.options.cwd;
   }
 
-  private log(message: string): void {
+  log(message: string): void {
     (this.options.log ?? console.log)(`[gaia] ${message}`);
   }
 
@@ -234,7 +248,6 @@ export class Daemon {
     // turn (scheduler tick, summon recovery, serviceFor from HTTP). Otherwise a
     // surviving runner from the previous daemon and the freshly resumed runner
     // can execute the same turn in parallel.
-    this.baseUrl = baseUrl;
     this.orphanSweepDone = reapOrphans({ log: (message) => this.log(message) }).then(() => {});
     await this.orphanSweepDone;
     this.bridge = new HarnessBridge(baseUrl);
@@ -260,8 +273,6 @@ export class Daemon {
     // happens to look at; see room-service.ts's own "/reload ... in-flight
     // turns resume after restart" promise, which this keeps.
     void this.recoverPendingTurns();
-    this.stuckTurnTimer = setInterval(() => void this.watchStuckTurns(), 60_000);
-    this.stuckTurnTimer.unref?.();
     await ensureVoiceSettingsFile();
     // A crash mid-call must never leave a "temporary" thinking override applied
     // forever: restore any persisted override from a dead call.
@@ -319,69 +330,6 @@ export class Daemon {
     return this.usageService.currentUsage();
   }
 
-  async listRoomArtifacts(roomId: string): Promise<ArtifactManifest[]> {
-    return listArtifacts(await this.artifactLocation(roomId));
-  }
-
-  async readRoomArtifact(roomId: string, artifactId: string): Promise<StoredArtifact> {
-    return readArtifact(await this.artifactLocation(roomId), artifactId);
-  }
-
-  async readRoomArtifactPayload(roomId: string, artifactId: string, versionId?: string, instrument = false): Promise<{ bytes: Uint8Array; mediaType: string; etag: string }> {
-    const workspace = await this.artifactWorkspace(roomId);
-    if (instrument) return this.studio.instrumentArtifactPayload(roomId, artifactId, versionId);
-    if (versionId) return this.studio.artifactVersionPayload(roomId, artifactId, versionId);
-    const artifact = await readArtifact({ rootDir: workspace.path, roomId }, artifactId);
-    return { bytes: artifact.payload, mediaType: artifact.manifest.mediaType, etag: artifact.manifest.sha256 };
-  }
-
-  async patchRoomArtifact(roomId: string, artifactId: string, body: { eid?: string; css?: Record<string, string>; text?: string; attrs?: Record<string, string | null>; baseVersion?: string | null }): Promise<unknown> {
-    try {
-      return await this.studio.patchArtifact(roomId, artifactId, body);
-    } catch (error) {
-      if (!(error instanceof StudioNotFoundError)) throw error;
-      // First patch on an artifact never opened in Studio: bind it, then retry once
-      // against the freshly created head (client could not have known it yet).
-      const opened = await this.openArtifactInStudio(roomId, artifactId) as { project?: { headVersionId?: string | null } };
-      return this.studio.patchArtifact(roomId, artifactId, { ...body, baseVersion: opened.project?.headVersionId ?? null });
-    }
-  }
-
-  saveRoomArtifactScreenshot(roomId: string, artifactId: string, body: { dataUrl?: string }): Promise<unknown> {
-    return this.studio.saveArtifactScreenshot(roomId, artifactId, body);
-  }
-
-  latestRoomArtifactScreenshot(roomId: string, artifactId: string): Promise<unknown> {
-    return this.studio.latestArtifactScreenshot(roomId, artifactId);
-  }
-
-  async openArtifactInStudio(roomId: string, artifactId: string): Promise<{ project: unknown }> {
-    const workspace = await this.artifactWorkspace(roomId);
-    const artifact = await readArtifact({ rootDir: workspace.path, roomId }, artifactId);
-    const payload = await realpath(workspacePaths.roomArtifactPayload(workspace.path, roomId, artifact.manifest.artifactId));
-    const opened = await this.studio.open({
-      workspaceId: workspace.id,
-      path: payload,
-      roomId,
-      artifact: { roomId, artifactId: artifact.manifest.artifactId },
-      entryView: { id: "payload", path: "payload", title: artifact.manifest.name },
-    });
-    return { project: opened.project };
-  }
-
-  private async artifactLocation(roomId: string): Promise<ArtifactLocation> {
-    const workspace = await this.artifactWorkspace(roomId);
-    return { rootDir: workspace.path, roomId };
-  }
-
-  private async artifactWorkspace(roomId: string): Promise<WorkspaceRecord> {
-    if (!isValidRoomId(roomId)) throw new Error("Invalid room id");
-    for (const workspace of await this.registry.list()) {
-      if (workspace.isInitialized && existsSync(workspacePaths.roomDir(workspace.path, roomId))) return workspace;
-    }
-    throw new Error(`Room not found: ${roomId}`);
-  }
-
   /** Current cached usage keyed by account — the manual-refresh endpoint's
    * direct response. */
   usageSnapshot(): Record<string, UsageLimits> {
@@ -394,17 +342,14 @@ export class Daemon {
     await this.usageService.refresh({ force: true, manual: true });
   }
 
-  private scheduleUsageRefresh(): void {
+  scheduleUsageRefresh(): void {
     this.usageService.scheduleRefresh();
   }
 
   async dispose(): Promise<void> {
     this.usageService.dispose();
     this.scheduler?.dispose();
-    clearInterval(this.stuckTurnTimer);
-    this.stuckTurnTimer = undefined;
-    this.ttsBridge?.stop();
-    this.voiceStack.stop();
+    this.interactions.dispose();
     this.keepAwakeManager.dispose();
     this.embedSidecar.dispose();
     const serviceDisposals = [...this.services.values()].map((service) => service.dispose());
@@ -415,634 +360,77 @@ export class Daemon {
     this.memoryServices.clear();
   }
 
+  /** Typed boundary: extracted wiring receives only its declared state/actions. */
+  private wiringHost(): WiringHost {
+    return {
+      registry: this.registry,
+      orphanSweepDone: this.orphanSweepDone,
+      services: this.services,
+      handedOutAt: this.handedOutAt,
+      servicePending: this.servicePending,
+      currentRoom: this.currentRoom,
+      memoryStores: this.memoryStores,
+      memoryServices: this.memoryServices,
+      summonCoordinators: this.summonCoordinators,
+      embedSidecar: this.embedSidecar,
+      bridge: this.bridge,
+      scheduler: this.scheduler,
+      log: (message) => this.log(message),
+      broadcast: (event) => this.broadcast(event),
+      scheduleUsageRefresh: () => this.scheduleUsageRefresh(),
+      applyThinking: (workspaceId, roomId, agentId, level) => this.applyThinking(workspaceId, roomId, agentId, level),
+      applySettingsChange: (scope, workspaceId) => this.applySettingsChange(scope, workspaceId),
+    };
+  }
+  /** Typed boundary: reload owns no daemon state beyond this contract. */
+  private reloadHost(): ReloadHost {
+    const daemon = this;
+    return {
+      services: daemon.services,
+      pendingReloads: daemon.pendingReloads,
+      get hintSourcesCache() { return daemon.hintSourcesCache; },
+      set hintSourcesCache(value) { daemon.hintSourcesCache = value; },
+      serviceFor: (workspaceId, roomId) => daemon.serviceFor(workspaceId, roomId),
+      broadcast: (event) => daemon.broadcast(event),
+    };
+  }
   // --- room services ------------------------------------------------------------
 
   /** Get-or-create the long-lived service for a (workspace, room). Omitted room
    * = the workspace's current room. LRU-bumped; creating past the soft cap
    * evicts the least-recently-used idle room. */
+  /** Get-or-create the long-lived service for a (workspace, room). Omitted room
+   * = the workspace's current room. LRU-bumped; creating past the soft cap
+   * evicts the least-recently-used idle room. Logic lives in daemon/wiring.ts
+   * (A7 split) — this stays the public entry point so every existing call
+   * site (`this.serviceFor(...)`, dozens across this class) is untouched. */
   async serviceFor(workspaceId: string, roomId?: string): Promise<RoomService> {
-    // Enforce the invariant boot() documents at its reapOrphans() call: nothing
-    // resumes/starts a turn until the stale-runner sweep has settled. Without
-    // this, a message landing right after a restart (the HTTP server accepts
-    // connections before boot() finishes — see http.ts) could start a fresh
-    // turn/runner for a room while a surviving orphan runner for that same
-    // room+agent is still being identified/killed.
-    await this.orphanSweepDone;
-    const resolvedRoom = roomId ?? (await this.resolveCurrentRoom(workspaceId));
-    const key = serviceKey(workspaceId, resolvedRoom);
-
-    const existing = this.services.get(key);
-    if (existing) {
-      this.services.delete(key);
-      this.services.set(key, existing);
-      this.handedOutAt.set(key, Date.now());
-      return existing;
-    }
-
-    // A creation already in flight IS this room's service — join it.
-    const pending = this.servicePending.get(key);
-    if (pending) {
-      this.handedOutAt.set(key, Date.now());
-      return pending;
-    }
-    const creation = this.createService(workspaceId, resolvedRoom, key);
-    this.servicePending.set(key, creation);
-    try {
-      return await creation;
-    } finally {
-      this.servicePending.delete(key);
-    }
+    return wireServiceFor(this.wiringHost(), workspaceId, roomId);
   }
 
-  async resolveRoomRef(workspaceId: string, ref: string): Promise<{ roomId: string } | undefined> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    const roomId = await resolveWorkspaceRoomRef(record.path, ref);
-    return roomId ? { roomId } : undefined;
-  }
-
-  async ensureCurrentVoiceRoom(workspaceId: string): Promise<{ workspaceId: string; roomId: string }> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    const existing = await readCurrentVoiceRoom(workspaceId);
-    if (existing && this.roomIdsOnDisk(record.path).includes(existing)) {
-      const state = normalizeRoomState(await readJson(workspacePaths.roomState(record.path, existing)).catch(() => ({})));
-      if (state.voiceSession) return { workspaceId, roomId: existing };
-    }
-    const roomId = await this.createVoiceRoom(workspaceId);
-    return { workspaceId, roomId };
-  }
-
-  async voiceDispatchService(workspaceId: string, _requestedRoomId: string, text: string): Promise<RoomService> {
-    const current = await this.ensureCurrentVoiceRoom(workspaceId);
-    let service = await this.serviceFor(workspaceId, current.roomId);
-    const estimate = await service.estimateVoiceDispatchContext(text);
-    if (estimate.usedTokens <= estimate.maxTokens * 0.2) return service;
-    const nextRoomId = await this.createVoiceRoom(workspaceId, current.roomId);
-    await service.markVoiceRotatedTo(nextRoomId);
-    service = await this.serviceFor(workspaceId, nextRoomId);
-    this.broadcast({ type: "rooms", workspaceId, rooms: await service.listRooms() });
-    return service;
-  }
-
-  private async createVoiceRoom(workspaceId: string, predecessorRoomId?: string): Promise<string> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    let roomId = newId("voice");
-    while (this.roomIdsOnDisk(record.path).includes(roomId)) roomId = newId("voice");
-    await ensureWorkspaceRoom(record.path, roomId, { voiceSession: true, ...(predecessorRoomId ? { predecessorRoomId } : {}) });
-    const room = await RoomHandle.open(record.path, roomId);
-    await room.updateState((state) => {
-      state.title = "GaiaVoice dispatch";
-      state.titleSource = "auto";
-    });
-    await writeCurrentVoiceRoom(workspaceId, roomId);
-    return roomId;
-  }
-
-  private async createService(workspaceId: string, resolvedRoom: string, key: string): Promise<RoomService> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    await ensureWorkspaceRoom(record.path, resolvedRoom);
-    const workspace = await loadWorkspace(record.path);
-    const service = await RoomService.open({
-      workspaceId,
-      workspace,
-      roomId: resolvedRoom,
-      memoryStore: this.memoryStoreFor(workspaceId),
-      memory: this.memoryServiceFor(workspaceId, workspace, record.path),
-      // Same LLM caller consolidation uses — backs the context-gate compact.
-      llm: consolidateLlm(),
-      titleLlmAccount: (provider) => resolveTitleLlmAccount(provider),
-      summonHost: this.summonCoordinatorFor(workspaceId, workspace, record.path),
-      setThinking: async (agentId, level) => (await this.applyThinking(workspaceId, resolvedRoom, agentId, level)).message,
-      // /berserk's root-room write rides the ROOT room's resident service
-      // (single-writer rule) — same serviceFor the summon coordinator uses.
-      roomPeer: (roomId) => this.serviceFor(workspaceId, roomId),
-      homeWorkspaceRedirect: (request) => this.redirectHomeWorkspace(request),
-      // Every room uses this shared post-WAL callback: root, subroom, summon,
-      // scheduler, and future room kinds all notify without harness branches.
-      turnSettled: playTurnCompletionSound,
-      // Same reload the settings-file save route uses: /model + /thinking
-      // rewrite agent.json, and only a service rebuild reaches the runner
-      // subprocesses (they snapshot the config at spawn).
-      settingsChanged: (scope) => this.applySettingsChange(scope, workspaceId),
-      harnessHost: this.bridge ? (opts) => this.bridge!.hostFor(workspaceId, opts) : undefined,
-      // Closures resolve this.scheduler per call: services built before boot()
-      // (or after dispose) answer gracefully instead of binding a stale ref.
-      scheduler: {
-        list: () => this.scheduler?.describeWorkspace(workspaceId, record.path) ?? Promise.resolve("The scheduler is not running."),
-        runNow: (jobId) => this.scheduler?.runNow(workspaceId, record.path, jobId) ?? Promise.resolve("The scheduler is not running."),
-      },
-    });
-    service.subscribe((event) => {
-      this.broadcast(event);
-      // A finished turn just spent tokens — refresh the account usage chip so it
-      // tracks live instead of waiting for the slow poll.
-      if (event.type === "task-end" || event.type === "task-error") this.scheduleUsageRefresh();
-    });
-    await service.init();
-    this.services.set(key, service);
-    this.handedOutAt.set(key, Date.now());
-    this.evictIdleServices();
-    return service;
-  }
-
-  private async resolveHomeWorkspace(homeWorkspace: string | undefined): Promise<WorkspaceRecord | undefined> {
-    const key = homeWorkspace?.trim();
-    if (!key) return undefined;
-    const records = (await this.registry.list()).filter((record) => record.isInitialized);
-    const lowered = key.toLowerCase();
-    return records.find((record) => record.name.toLowerCase() === lowered) ?? records.find((record) => record.id === key);
-  }
-
-  /** Cross-workspace home pin: RoomService asks; daemon owns registry lookup,
-   * room creation, and target-service forwarding, preserving single writers. */
-  private async redirectHomeWorkspace(request: HomeWorkspaceRedirectRequest): Promise<HomeWorkspaceRedirectResult | undefined> {
-    const home = await this.resolveHomeWorkspace(request.agent.homeWorkspace);
-    if (!home || home.id === request.fromWorkspaceId) return undefined;
-
-    let roomId = (await scanRoomActivity(home.path)).find((room) => room.agent === request.agent.id)?.id;
-    if (!roomId) {
-      roomId = `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-      await ensureWorkspaceRoom(home.path, roomId);
-      const room = await RoomHandle.open(home.path, roomId);
-      const title = deriveRoomTitle(request.text ?? "") || `${home.name} conversation`;
-      await room.updateState((state) => {
-        state.activeAgent = request.agent.id;
-        state.title = title;
-        state.titleSource = "auto";
-      });
-    }
-
-    const service = await this.serviceFor(home.id, roomId);
-    if (request.forwardMessage && request.text !== undefined) await service.sendMessage(request.text, { origin: "human" });
-    const snapshot = await service.getSnapshot();
-    this.broadcast({ type: "rooms", workspaceId: home.id, rooms: await service.listRooms() });
-    return { workspaceId: home.id, roomId: service.roomId, workspaceName: home.name, ...(snapshot.room.refCode ? { roomRef: snapshot.room.refCode } : {}) };
-  }
-
-  private async resolveCurrentRoom(workspaceId: string): Promise<string> {
-    const cached = this.currentRoom.get(workspaceId);
-    if (cached) return cached;
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    const workspace = await loadWorkspace(record.path);
-    this.currentRoom.set(workspaceId, workspace.config.room);
-    return workspace.config.room;
-  }
-
-  private evictIdleServices(): void {
-    const now = Date.now();
-    for (const [key, service] of this.services) {
-      if (this.services.size <= MAX_LIVE_SERVICES) break;
-      if (service.isBusy) continue;
-      // A just-handed-out service is idle only because its caller hasn't reached
-      // startTask yet; disposing it here loses the in-flight turn (see
-      // HANDOFF_GRACE_MS). Treat the hand-off window as busy.
-      if (now - (this.handedOutAt.get(key) ?? 0) < HANDOFF_GRACE_MS) continue;
-      // signals are sent synchronously inside dispose(); waiting is only needed at shutdown
-      void service.dispose();
-      this.services.delete(key);
-      this.handedOutAt.delete(key);
-      this.log(`evicted idle room service ${key} (soft cap ${MAX_LIVE_SERVICES})`);
-    }
-  }
-
-  private memoryStoreFor(workspaceId: string): MemoryStore {
-    let store = this.memoryStores.get(workspaceId);
-    if (!store) {
-      store = new MemoryStore();
-      this.memoryStores.set(workspaceId, store);
-    }
-    return store;
-  }
-
-  /** One MemoryService per workspace. Holds live workspace accessors so a
-   * settings reload changes behavior without a rebuild; the consolidation LLM
-   * runs daemon-side through the same credential store as the proxy. */
+  /** One MemoryService per workspace — see daemon/wiring.ts (A7 split). Kept as
+   * a private wrapper: called from several room-operation methods below
+   * (`this.memoryServiceFor(...)`), which stay in this class untouched. */
   private memoryServiceFor(workspaceId: string, workspace: Workspace, path: string): MemoryService {
-    const existing = this.memoryServices.get(workspaceId);
-    if (existing) {
-      // Workspace objects are rebuilt on settings reload; the accessors close
-      // over `live`, so refreshing it here keeps the memory service current.
-      existing.live.workspace = workspace;
-      return existing.service;
-    }
-    const live = { workspace };
-    const service = new MemoryService({
-      workspaceRoot: path,
-      workspaceMemory: () => live.workspace.config.memory,
-      agents: () => live.workspace.agents,
-      memoryStore: this.memoryStoreFor(workspaceId),
-      roomsFor: () => this.recentRoomRefs(path),
-      llm: consolidateLlm(),
-      log: (message) => this.log(message),
-      embedderDeps: {
-        ensureLocalSidecar: (modelId) => this.embedSidecar.ensure(modelId),
-        ensureLocalReranker: (modelId) => this.embedSidecar.ensureRerank(modelId),
-      },
-    });
-    this.memoryServices.set(workspaceId, { service, live });
-    // Restart resilience: consolidation timers are ephemeral — re-arm them for
-    // every agent so a /rebuild never freezes the episode→facts pipeline.
-    service.resumeConsolidation();
-    return service;
+    return wireMemoryServiceFor(this.wiringHost(), workspaceId, workspace, path);
   }
 
-  /** Every room transcript in the workspace, most-recently-active first, for
-   * the workspace memory index (one shared definition: workspaceRoomRefs). */
-  private recentRoomRefs(workspaceRoot: string): RoomRef[] {
-    return workspaceRoomRefs(workspaceRoot);
-  }
-
-  private summonCoordinatorFor(workspaceId: string, workspace: Workspace, path: string): SummonCoordinator {
-    let coordinator = this.summonCoordinators.get(workspaceId);
-    if (!coordinator) {
-      coordinator = new SummonCoordinator(
-        workspace,
-        path,
-        (roomId) => this.serviceFor(workspaceId, roomId),
-        () => liveMaxSummonsPerRoom(path),
-        (message) => this.log(message),
-      );
-      this.summonCoordinators.set(workspaceId, coordinator);
-    }
-    return coordinator;
-  }
-
-  /** Boot sweep: re-arm undelivered summons in every initialized workspace
-   * (see SummonCoordinator.recoverUndelivered). Failures are logged, never
-   * thrown — recovery must not take the daemon down. */
+  /** Boot sweep: re-arm undelivered summons — see daemon/wiring.ts. */
   private async recoverSummons(): Promise<void> {
-    for (const record of await this.registry.list()) {
-      if (!record.isInitialized) continue;
-      try {
-        await (await this.coordinatorFor(record.id)).recoverUndelivered();
-      } catch (error) {
-        this.log(`summon recovery skipped for workspace ${record.name}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    return wireRecoverSummons(this.wiringHost());
   }
 
-  /** Boot sweep: wake every room whose persisted state carries unfinished work
-   * (a pendingTurn or a non-empty queue) — the counterpart to recoverSummons
-   * for plain agent turns, which otherwise only resume/drain lazily inside
-   * RoomService.initOnce(), on-demand, the next time something calls
-   * serviceFor() for that specific room. Scan is cheap (one JSON read per
-   * room, no service/workspace load); only rooms that actually need it get a
-   * real serviceFor(), which does the rest via initOnce(). Sequential, not
-   * fanned out — a restart can strand many rooms at once, and each wake may
-   * spawn a runner subprocess; waking them one at a time avoids a subprocess
-   * thundering herd (servicePending already makes this race-safe against a
-   * concurrent client reconnect for the same room). Failures are logged,
-   * never thrown — recovery must not take the daemon down. */
+  /** Boot sweep: wake rooms with unfinished work — see daemon/wiring.ts. */
   private async recoverPendingTurns(): Promise<void> {
-    for (const record of await this.registry.list()) {
-      if (!record.isInitialized) continue;
-      for (const roomId of this.roomIdsOnDisk(record.path)) {
-        let state: RoomState;
-        try {
-          state = normalizeRoomState(await readJson(workspacePaths.roomState(record.path, roomId)));
-        } catch {
-          continue; // Unreadable/corrupt state — leave it for the room's own on-open recovery.
-        }
-        if (!state.pendingTurn && !state.queue?.length) continue;
-        this.log(
-          `turn recovery: waking ${record.id}::${roomId} (pending=${Boolean(state.pendingTurn)}, queued=${state.queue?.length ?? 0})`,
-        );
-        try {
-          await this.serviceFor(record.id, roomId);
-        } catch (error) {
-          this.log(`turn recovery failed for ${record.id}::${roomId}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-    }
-  }
-
-  /** Resident rooms with a stale pending marker but no live runner are put back
-   * on their durable queue. Boot recovery makes every persisted pending room
-   * resident; the periodic pass catches later process/channel loss. */
-  private async watchStuckTurns(): Promise<void> {
-    for (const [key, service] of this.services) {
-      try {
-        if (await service.recoverStuckTurn()) this.log(`stuck-turn watchdog recovered ${key}`);
-      } catch (error) {
-        this.log(`stuck-turn watchdog failed for ${key}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    return wireRecoverPendingTurns(this.wiringHost());
   }
 
   async coordinatorFor(workspaceId: string): Promise<SummonCoordinator> {
-    const existing = this.summonCoordinators.get(workspaceId);
-    if (existing) return existing;
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    const workspace = await loadWorkspace(record.path);
-    return this.summonCoordinatorFor(workspaceId, workspace, record.path);
+    return wireCoordinatorFor(this, workspaceId);
   }
 
   // --- workspace/room operations ---------------------------------------------------
 
-  async addWorkspace(path: string): Promise<WorkspaceRecord> {
-    let record = await this.registry.add(path);
-    if (!record.isInitialized) {
-      // Adding through the UI is an explicit "make this a GAIA workspace".
-      await initWorkspace(record.path);
-      record = await this.registry.add(record.path);
-    }
-    await this.serviceFor(record.id);
-    return record;
-  }
-
-  async selectRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean; voiceNavigation?: boolean }): Promise<SelectionPayload> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-
-    // Each room keeps its own long-lived service, so switching is always safe;
-    // only a live voice call (bound to one room) blocks it.
-    if (this.activeCall?.workspaceId === workspaceId && this.activeCall.info.roomId !== roomId) {
-      throw new Error("Stop the active voice call before switching rooms.");
-    }
-
-    const fromRoomId = this.currentRoom.get(workspaceId) ?? roomId;
-
-    // `incognito` only takes effect when this call CREATES the room (immutable
-    // seed in ensureWorkspaceRoom); selecting an existing room ignores it.
-    await ensureWorkspaceRoom(record.path, roomId, opts);
-    await setWorkspaceRoom(record.path, roomId);
-    this.currentRoom.set(workspaceId, roomId);
-
-    const service = await this.serviceFor(workspaceId, roomId);
-    const snapshot = await service.getSnapshot();
-    this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
-    if (opts?.voiceNavigation) service.emitVoiceNavigationRedirect(service.roomId, fromRoomId);
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
-  }
-
-  async createRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean }): Promise<{ rooms: Snapshot["rooms"] }> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    await ensureWorkspaceRoom(record.path, roomId, opts);
-    await this.serviceFor(workspaceId, roomId);
-    return this.refreshRoomList(workspaceId);
-  }
-
-  private roomIdsOnDisk(workspaceRoot: string): string[] {
-    const dir = workspacePaths.roomsDir(workspaceRoot);
-    if (!existsSync(dir)) return [];
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  }
-
-  /** Rename a room's display title without changing its durable id/path. */
-  async renameRoom(workspaceId: string, roomId: string, title: string, source: "auto" | "model" | "manual" = "manual"): Promise<{ rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    await service.setTitle(title, source);
-    return this.refreshRoomList(workspaceId);
-  }
-
-  /** Mark/unmark a room as a favorite. This is display metadata only: no
-   * transcript, memory, sandbox, or harness behaviour changes. */
-  async setRoomFavorite(workspaceId: string, roomId: string, favorite: boolean): Promise<{ rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    await service.setFavorite(favorite);
-    return this.refreshRoomList(workspaceId);
-  }
-
-  /** Set/clear a room's project label (sidebar's day → project grouping).
-   * Display metadata only, like title/favorite. */
-  async setRoomProject(workspaceId: string, roomId: string, project: string): Promise<{ rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    await service.setProject(project);
-    return this.refreshRoomList(workspaceId);
-  }
-
-  /** Toggle this room's /teleport gaiaport flag. Room-local only: no tree walk,
-   * no harness/runtime involvement. */
-  async setRoomTeleport(workspaceId: string, roomId: string, on: boolean): Promise<SelectionPayload> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    await service.setTeleport(on, { recordSystemNote: true });
-    const snapshot = await service.getSnapshot();
-    this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
-  }
-
-  async setRoomBookmark(workspaceId: string, roomId: string, eventId: string, name: string): Promise<{ bookmark: RoomBookmark; rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    const bookmark = await service.setBookmark(eventId, name);
-    return { bookmark, ...(await this.refreshRoomList(workspaceId)) };
-  }
-
-  async deleteRoomBookmark(workspaceId: string, roomId: string, bookmarkId: string): Promise<{ rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    await service.removeBookmark(bookmarkId);
-    return this.refreshRoomList(workspaceId);
-  }
-
-  private async serviceForExistingRoom(workspaceId: string, roomId: string): Promise<RoomService> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    if (!isValidRoomId(roomId)) throw new Error("Invalid room id.");
-    if (!this.roomIdsOnDisk(record.path).includes(roomId)) throw new Error(`Room not found: ${roomId}`);
-    return this.serviceFor(workspaceId, roomId);
-  }
-
-  /** Return/broadcast the room list relative to the currently viewed room, so
-   * changing background room chrome never switches the user's active chat. */
-  private async refreshRoomList(workspaceId: string): Promise<{ rooms: Snapshot["rooms"] }> {
-    const current = await this.serviceFor(workspaceId);
-    const rooms = await current.listRooms();
-    this.broadcast({ type: "rooms", workspaceId, rooms });
-    return { rooms };
-  }
-
-  /** Delete a room: dispose its live service, move its directory to the
-   * workspace trash (reversible — never rm -rf), purge it from memory (index
-   * rows + every agent's episodes), and reselect a neighbour so a room is always
-   * in view. Refuses to delete a voice-call room or the last room. */
-  async deleteRoom(workspaceId: string, roomId: string): Promise<SelectionPayload> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    if (!isValidRoomId(roomId)) throw new Error("Invalid room id.");
-    if (this.activeCall?.workspaceId === workspaceId && this.activeCall.info.roomId === roomId) {
-      throw new Error("Stop the active voice call before deleting this room.");
-    }
-
-    const roomIds = this.roomIdsOnDisk(record.path);
-    if (!roomIds.includes(roomId)) throw new Error(`Room not found: ${roomId}`);
-    if (roomIds.length <= 1) throw new Error("Can't delete the only room in the workspace.");
-
-    // Stop any in-flight turn before pulling the room out from under the WAL
-    // writer, then drop the live service so nothing writes the doomed dir.
-    const key = serviceKey(workspaceId, roomId);
-    const service = this.services.get(key);
-    if (service) {
-      if (service.isBusy) await service.cancelActiveTask();
-      await service.dispose();
-      this.services.delete(key);
-    }
-
-    // Pick and persist the replacement BEFORE any post-trash workspace load.
-    // loadWorkspace() always ensures config.room exists; if config.room still
-    // points at the just-trashed room, it recreates an empty zombie directory
-    // and the sidebar appears to ignore the delete.
-    const current = this.currentRoom.get(workspaceId);
-    const next = current && current !== roomId && roomIds.includes(current) ? current : (roomIds.find((id) => id !== roomId) ?? DEFAULT_ROOM);
-
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const trash = await trashWorkspaceRoom(record.path, roomId, stamp);
-    await setWorkspaceRoom(record.path, next);
-    this.currentRoom.set(workspaceId, next);
-
-    const workspace = await loadWorkspace(record.path);
-    const episodesPurged = await this.memoryServiceFor(workspaceId, workspace, record.path).purgeRoom(roomId, trash || undefined);
-    this.log(`deleted room ${roomId} (ws ${workspaceId}) → trash ${trash || "(already gone)"}; purged ${episodesPurged} episode(s) from memory`);
-
-    const nextService = await this.serviceFor(workspaceId, next);
-    const snapshot = await nextService.getSnapshot();
-    this.broadcast({ type: "rooms", workspaceId, rooms: await nextService.listRooms() });
-    this.broadcast({ type: "pet-bindings", workspaceId, bindings: await this.petBindings(workspaceId) });
-    this.broadcast({ type: "snapshot", workspaceId, roomId: nextService.roomId, snapshot });
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
-  }
-
-  /** Remove a workspace from GAIA's registry (the recent-workspaces list). This
-   * de-registers it and tears down its resident room services / memory service /
-   * summon coordinator — it does NOT delete anything on disk: the workspace's
-   * .gaia data and project files stay put, so re-adding the folder restores
-   * everything. Refuses while a voice call is active in that workspace. Returns
-   * the fresh app payload with a remaining workspace selected (or none, if this
-   * was the last one). */
-  async deleteWorkspace(workspaceId: string): Promise<Awaited<ReturnType<Daemon["appPayload"]>>> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-    if (this.activeCall?.workspaceId === workspaceId) {
-      throw new Error("Stop the active voice call before deleting this workspace.");
-    }
-
-    // Cancel any in-flight turn, then drop every resident room service for this
-    // workspace so nothing keeps writing under a workspace we're forgetting.
-    for (const key of this.workspaceServiceKeys(workspaceId)) {
-      const service = this.services.get(key);
-      if (!service) continue;
-      if (service.isBusy) await service.cancelActiveTask();
-      await service.dispose();
-      this.services.delete(key);
-    }
-    const memory = this.memoryServices.get(workspaceId);
-    if (memory) {
-      memory.service.dispose();
-      this.memoryServices.delete(workspaceId);
-    }
-    this.memoryStores.delete(workspaceId);
-    this.summonCoordinators.delete(workspaceId);
-    this.currentRoom.delete(workspaceId);
-
-    await this.registry.remove(workspaceId);
-    // The workspace's files remain on disk, but it no longer belongs to this
-    // shell process: close its native pet windows immediately.
-    this.broadcast({ type: "pet-bindings", workspaceId, bindings: [] });
-    this.log(`removed workspace ${record.name} (${workspaceId}) from the registry; files left on disk`);
-
-    // Select a remaining initialized workspace (if any) for the returned payload.
-    const remaining = await this.registry.list();
-    const nextCurrent = remaining.find((workspace) => workspace.isInitialized)?.id;
-    return this.appPayload(nextCurrent);
-  }
-
-  async setAgentRole(workspaceId: string, roomId: string, agentId: string, role: string): Promise<SelectionPayload & { message: string }> {
-    const service = await this.serviceFor(workspaceId, roomId);
-    const message = await service.setRole(agentId, role);
-    const snapshot = await service.getSnapshot();
-    this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), message };
-  }
-
-  async setActiveAgent(workspaceId: string, roomId: string, agentId: string): Promise<SelectionPayload & { redirect?: HomeWorkspaceRedirectResult }> {
-    const service = await this.serviceFor(workspaceId, roomId);
-    const redirect = await service.setActiveAgent(agentId, { origin: "human" });
-    const snapshot = await service.getSnapshot();
-    if (!redirect) this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), ...(redirect ? { redirect } : {}) };
-  }
-
-  /** Set an agent's GLOBAL default role (agent.json "role"), applied in every
-   * room that has no per-room override. Empty/"none"/"default" clears it. */
-  async setAgentDefaultRole(workspaceId: string, agentId: string, role: string): Promise<SelectionPayload> {
-    const service = await this.serviceFor(workspaceId);
-    const agent = service.workspace.agents[agentId];
-    if (!agent) throw new Error(`Unknown agent: @${agentId}`);
-
-    const normalized = role === "" || role === "none" || role === "default" ? undefined : role;
-    if (normalized) {
-      const roles = await listAgentRoles(agent);
-      if (!roles.includes(normalized)) throw new Error(`Unknown role: ${normalized}`);
-    }
-    await setAgentDefaultRole(agent, normalized);
-
-    const snapshot = await service.getSnapshot();
-    this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
-  }
-
-  /** Run a declarative local-plugin panel action through its normal slash-command
-   * state path, then return/broadcast the authoritative room snapshot. */
-  async runPluginAction(workspaceId: string, roomId: string, command: string, args: string[]): Promise<SelectionPayload & { message: string }> {
-    const service = await this.serviceFor(workspaceId, roomId);
-    const message = await service.runPluginAction(command, args);
-    const snapshot = await service.getSnapshot();
-    this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), message };
-  }
-
-  /** Toggle room agent-dialogue (agents replying to each other's @mentions). */
-  async setRoomAgentDialogue(workspaceId: string, roomId: string, on: boolean): Promise<SelectionPayload> {
-    const service = await this.serviceFor(workspaceId, roomId);
-    await service.setAgentDialogue(on);
-    const snapshot = await service.getSnapshot();
-    this.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
-  }
-
-  async setDefaultAgent(workspaceId: string, agentId: string): Promise<SelectionPayload> {
-    const record = await this.registry.find(workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
-
-    const service = await this.serviceFor(workspaceId);
-    if (!service.workspace.agents[agentId]) throw new Error(`Unknown agent: @${agentId}`);
-    await setWorkspaceDefaultAgent(record.path, agentId);
-
-    // The default is workspace-wide: rebuild every resident room service.
-    await Promise.all(this.workspaceServiceKeys(workspaceId).map((key) => this.reloadService(key)));
-    const rebuilt = await this.serviceFor(workspaceId);
-    const snapshot = await rebuilt.getSnapshot();
-    this.broadcast({ type: "snapshot", workspaceId, roomId: rebuilt.roomId, snapshot });
-    return { snapshot, workspaceFiles: await this.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
-  }
-
-  /** Delete a global agent: move its directory to the global trash (reversible —
-   * never rm -rf). Refuses if the agent doesn't exist (checked against the disk,
-   * not just in-memory loaded workspaces — trashGlobalAgent's own existsSync
-   * catches an agent no workspace has loaded yet this session), or is any
-   * currently-loaded workspace's default agent. */
-  async deleteAgent(agentId: string): Promise<void> {
-    for (const service of this.services.values()) {
-      if (service.workspace.config.defaultAgent === agentId) {
-        throw new Error(`Cannot delete @${agentId}: it's the default agent for workspace "${service.workspace.rootDir}"`);
-      }
-    }
-
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const trash = await trashGlobalAgent(agentId, stamp);
-    if (!trash) throw new Error(`Unknown agent: @${agentId}`);
-    this.log(`deleted agent ${agentId} → trash ${trash}`);
-  }
-
-  // --- keep-awake (Global Settings ▸ General) ---------------------------------------
-
-  /** Current keep-awake capability/state — served in /api/app. */
   async keepAwake(): Promise<KeepAwakeCapability> {
     return keepAwakeCapability();
   }
@@ -1072,76 +460,38 @@ export class Daemon {
     return this.userName();
   }
 
-  // --- canvas prompt room (dedicated room for design canvas injections) --------
+  // --- theme (Global Settings ▸ General) -------------------------------------------
 
-  /** Get or create the dedicated canvas-prompt room for a design. One FRESH
-   * room per design name, persisted in app.json (canvasPromptRooms map) —
-   * never the user's current room (prompts must not leak into other chats). */
-  async getOrCreateCanvasPromptRoom(design?: string): Promise<{ workspaceId: string; roomId: string }> {
-    const key = (design?.trim() || "untitled").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 64);
-    const config = ((await readJson(globalPaths.appSettings())) ?? {}) as {
-      canvasPromptRooms?: Record<string, { workspaceId: string; roomId: string }>;
-    };
+  /** Persisted UI palette id ("" = unset → the client's own default).
+   * Daemon-side so every client window opens on the same palette. */
+  async theme(): Promise<string> {
+    return readThemeSetting();
+  }
 
-    const stored = config.canvasPromptRooms?.[key];
-    if (stored) {
-      const record = await this.registry.find(stored.workspaceId);
-      if (record?.isInitialized) return stored;
-    }
-
-    const workspaces = await this.registry.list();
-    const workspace = workspaces.find((w) => w.isInitialized);
-    if (!workspace) throw new Error("No initialized workspace found");
-
-    // Fresh auto room: `chat-` prefix keeps daemon auto-titling from first message
-    const roomId = `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const entry = { workspaceId: workspace.id, roomId };
-    await writeJsonAtomic(globalPaths.appSettings(), {
-      ...config,
-      canvasPromptRooms: { ...config.canvasPromptRooms, [key]: entry }
-    });
-    return entry;
+  /** @param theme palette id; "" clears it back to unset. */
+  async setTheme(theme: string): Promise<string> {
+    await writeThemeSetting(theme);
+    return this.theme();
   }
 
   // --- settings hot-reload ----------------------------------------------------------
 
   /** Settings files feed workspace/agent definitions cached at service
-   * creation. Rebuild affected services so saves apply without a restart. */
+   * creation. Rebuild affected services so saves apply without a restart.
+   * Logic lives in daemon/reload.ts (A7 split); Daemon keeps the state
+   * (services/pendingReloads/hintSourcesCache) these delegate against, and
+   * every call site below (`this.applySettingsChange`/`this.reloadService`/
+   * `this.workspaceServiceKeys`) is untouched. */
   async applySettingsChange(scope: "global" | "workspace", workspaceId?: string): Promise<void> {
-    this.hintSourcesCache = undefined;
-    const keys = scope === "global" ? [...this.services.keys()] : workspaceId ? this.workspaceServiceKeys(workspaceId) : [];
-    await Promise.all(keys.map((key) => this.reloadService(key)));
+    return reloadApplySettingsChange(this.reloadHost(), scope, workspaceId);
   }
 
   private workspaceServiceKeys(workspaceId: string): string[] {
-    const prefix = serviceKey(workspaceId, "");
-    return [...this.services.keys()].filter((key) => key.startsWith(prefix));
+    return wireWorkspaceServiceKeys(this.reloadHost(), workspaceId);
   }
 
   private async reloadService(key: string): Promise<void> {
-    const service = this.services.get(key);
-    if (!service) return;
-
-    if (service.hasActiveTask) {
-      // Deferred while a turn runs; re-attempted when it settles.
-      if (this.pendingReloads.has(key)) return;
-      this.pendingReloads.add(key);
-      void service
-        .waitForIdle()
-        .then(() => {
-          this.pendingReloads.delete(key);
-          return this.reloadService(key);
-        })
-        .catch(() => this.pendingReloads.delete(key));
-      return;
-    }
-
-    const { workspaceId, roomId } = service;
-    // signals are sent synchronously inside dispose(); waiting is only needed at shutdown
-    void service.dispose();
-    this.services.delete(key);
-    const fresh = await this.serviceFor(workspaceId, roomId);
-    this.broadcast({ type: "snapshot", workspaceId, roomId: fresh.roomId, snapshot: await fresh.getSnapshot() });
+    return doReloadService(this.reloadHost(), key);
   }
 
   // --- harness bridge (memory writes + summon for subprocesses) ----------------------
@@ -1150,31 +500,19 @@ export class Daemon {
     return this.bridge?.verify(token) ?? null;
   }
 
-  /** The gaia tools an agent's EFFECTIVE harness declares — read uniformly from
-   * the registry, never branched on the harness id. Gates /api/harness/*. */
-  harnessGaiaTools(workspace: Workspace, agentId: string): readonly GaiaTool[] {
-    return capabilitiesFor(harnessIdFor(workspace.agents[agentId], workspace)).gaiaTools;
+  private harnessApiPort(): HarnessApiPort {
+    return {
+      registry: this.registry,
+      toolProviders: this.toolProviders,
+      serviceFor: (workspaceId, roomId) => this.serviceFor(workspaceId, roomId),
+      memoryServiceFor: (workspaceId, workspace, path) => this.memoryServiceFor(workspaceId, workspace, path),
+    };
   }
 
-  async harnessMemoryBatch(
-    claims: HarnessTokenClaims,
-    file: string,
-    operations: Array<{ action: MemoryAction; content?: string; oldText?: string }>,
-  ): Promise<MemoryMutationResult> {
-    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
-    return service.mutateAgentMemoryBatch(claims.agentId, file, operations);
-  }
-
-  async harnessMemoryWrite(
-    claims: HarnessTokenClaims,
-    file: string,
-    action: MemoryAction,
-    options: { content?: string; oldText?: string },
-  ): Promise<MemoryMutationResult> {
-    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
-    return service.mutateAgentMemory(claims.agentId, file, action, options);
-  }
-
+  harnessGaiaTools(workspace: Workspace, agentId: string): readonly GaiaTool[] { return harnessGaiaTools(workspace, agentId); }
+  harnessToolProviders(): ToolProviders { return harnessToolProviders(this.harnessApiPort()); }
+  async harnessMemoryBatch(claims: HarnessTokenClaims, file: string, operations: Array<{ action: MemoryAction; content?: string; oldText?: string }>): Promise<MemoryMutationResult> { return harnessMemoryBatch(this.harnessApiPort(), claims, file, operations); }
+  async harnessMemoryWrite(claims: HarnessTokenClaims, file: string, action: MemoryAction, options: { content?: string; oldText?: string }): Promise<MemoryMutationResult> { return harnessMemoryWrite(this.harnessApiPort(), claims, file, action, options); }
   /** Chat-wide transcript search for the web client. Transcript-only and
    * navigable to the matched message. No `workspaceId` scans every initialized
    * workspace; `roomId` narrows to a single chat (in-chat search). Bm25 order
@@ -1222,151 +560,17 @@ export class Daemon {
     return { hits: hits.slice(0, limit), degraded };
   }
 
-  /** Hybrid DEEP recall for a harness turn (capability-gated by the caller;
-   * §8: explicit invocation tolerates seconds, so it earns the reranker +
-   * chunk-window expansion). Runs entirely daemon-side: index, embedder,
-   * reranker, and room refs stay here. The asking room's active context
-   * window is excluded (self-match, CALMem) and any degradation is stated in
-   * the result — never silent. */
-  async harnessRecall(
-    claims: HarnessTokenClaims,
-    query: string,
-    limit?: number,
-    options: { summarize?: boolean } = {},
-  ): Promise<{ result: string; hits: MemorySearchHit[] }> {
-    const record = await this.registry.find(claims.workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${claims.workspaceId}`);
-    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
-    const memory = this.memoryServiceFor(claims.workspaceId, service.workspace, record.path);
-    const context = await service.recallContext(claims.agentId);
-    const request = { limit: limit && limit > 0 ? Math.min(limit, 25) : undefined, context };
-    if (options.summarize) {
-      const { text, degraded } = await memory.summarizeSearch(claims.agentId, query, request);
-      const header = degraded.length ? `(recall degraded: ${degraded.join("; ")})\n` : "";
-      return { result: text ? `${header}${text}` : `${header}no matches in memory or room history`, hits: [] };
-    }
-    const { hits, degraded } = await memory.deepSearch(claims.agentId, query, request);
-    const header = degraded.length ? `(recall degraded: ${degraded.join("; ")})\n` : "";
-    return { result: hits.length ? `${header}${formatMemoryHits(hits, { full: true })}` : `${header}no matches in memory or room history`, hits };
-  }
-
-  /** The scroll pager (§8): raw transcript window around a previous recall
-   * hit. No LLM, no ranking — just the surrounding conversation. */
-  async harnessRecallScroll(claims: HarnessTokenClaims, hitId: number, options: { span?: number; offset?: number } = {}): Promise<string> {
-    const record = await this.registry.find(claims.workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${claims.workspaceId}`);
-    const window = await scrollTranscriptWindow(record.path, hitId, options);
-    return window ?? `no transcript hit with id ${hitId} — ids come from recall results ("hit N")`;
-  }
-
-  /** INSIGHT "full" tier, decree 2026-07-28 part 3: direct, pull-based read of
-   * ANY currently-incognito room's raw transcript, on demand — never indexed,
-   * never pushed anywhere, reachable only when the CALLING agent's own
-   * `insight` is "full" (Solas reading a brother's room, not a general
-   * capability — the target room's own owner/agentId is irrelevant to the
-   * gate). Windowed by event count (offset/limit) because a ghoul's
-   * transcript can run to megabytes of tool-call noise; unwindowed dumping
-   * would defeat the point of a considered, on-demand read. */
-  async harnessGhoulRoomRead(claims: HarnessTokenClaims, targetRoomId: string, options: { offset?: number; limit?: number } = {}): Promise<string> {
-    const record = await this.registry.find(claims.workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${claims.workspaceId}`);
-    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
-    const caller = service.workspace.agents[claims.agentId];
-    if (caller?.insight !== "full") {
-      throw new Error(`insight "full" required to read another room's raw transcript (caller '${claims.agentId}' has insight "${caller?.insight ?? "none"}")`);
-    }
-    // RoomHandle.open has create-on-open semantics (seeds a default state.json
-    // for any id that doesn't exist) — wrong for a read-only "look into the
-    // labyrinth" operation, so check existence first; never let a typo'd room
-    // id silently create a phantom room on disk.
-    if (!existsSync(workspacePaths.roomState(record.path, targetRoomId))) throw new Error(`no such room: ${targetRoomId}`);
-    const handle = await RoomHandle.open(record.path, targetRoomId);
-    const state = await handle.state();
-    if (state.incognito !== true) {
-      throw new Error(`'${targetRoomId}' is not an incognito room — read it through normal recall instead`);
-    }
-    const { events } = await handle.eventsFrom(0);
-    const offset = Math.max(0, options.offset ?? 0);
-    const limit = Math.min(Math.max(1, options.limit ?? 40), 200);
-    const window = events.slice(offset, offset + limit);
-    if (window.length === 0) return `'${targetRoomId}': no events at offset ${offset} (${events.length} total)`;
-    const lines = window.map((event, index) => {
-      const shown = event.text.length > 800 ? `${event.text.slice(0, 800)}…` : event.text;
-      return `[${offset + index}] ${event.author}: ${shown || "(no text)"}`;
-    });
-    const consumed = offset + window.length;
-    const more = consumed < events.length ? `\n\n… ${events.length - consumed} more events; pass offset=${consumed} to continue` : "";
-    return `${targetRoomId} (${events.length} events total, showing ${offset}–${consumed - 1}):\n\n${lines.join("\n")}${more}`;
-  }
-
-  /** INSIGHT "full" tier: search every agent's distilled summon ledgers (never
-   * the raw transcripts) by substring — "index the ledgers, not the
-   * transcripts" (decree 2026-07-28 part 2): real search power, zero
-   * widening of the shared recall index (ledgers never enter that index; this
-   * reads the plain .md files directly, filesystem-scoped). Omitted query =
-   * list every entry. */
-  async harnessGhoulLedgerSearch(claims: HarnessTokenClaims, query?: string): Promise<string> {
-    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
-    const caller = service.workspace.agents[claims.agentId];
-    if (caller?.insight !== "full") {
-      throw new Error(`insight "full" required to search other agents' ledgers (caller '${claims.agentId}' has insight "${caller?.insight ?? "none"}")`);
-    }
-    const needle = query?.trim().toLowerCase();
-    const hits: string[] = [];
-    for (const agent of Object.values(service.workspace.agents)) {
-      const dir = join(agent.memoryDir, "ledgers");
-      let files: string[];
-      try {
-        files = (await readdir(dir)).filter((name) => name.endsWith(".md"));
-      } catch {
-        continue;
-      }
-      for (const file of files) {
-        let content: string;
-        try {
-          content = await readFile(join(dir, file), "utf8");
-        } catch {
-          continue;
-        }
-        const entries = content.split(/\n(?=§ )/).filter((entry) => entry.trim());
-        for (const entry of entries) {
-          if (!needle || entry.toLowerCase().includes(needle)) hits.push(`--- ${agent.id} / ${file} ---\n${entry.trim()}`);
-        }
-      }
-    }
-    if (hits.length === 0) return needle ? `no ledger entries matching "${query}"` : "no ledger entries recorded yet";
-    return hits.slice(0, 40).join("\n\n");
-  }
-
-  /** Dream v2 propose: a user-triggered consolidation preview for `agentId`
-   * (the CLI's `[agent]` argument — may differ from the caller, same as
-   * summon's target). Never gated by a GaiaTool grant (see cli-tools.ts's
-   * runDream comment): it is a human-operated CLI utility, not an in-turn
-   * agent capability. Force semantics bypass the daily cap and the
-   * "nothing new" skip; applies nothing — writes dream-proposal.json. Returns
-   * preformatted text the CLI prints verbatim. */
-  async harnessDreamPropose(claims: HarnessTokenClaims, agentId: string): Promise<string> {
-    const record = await this.registry.find(claims.workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${claims.workspaceId}`);
-    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
-    const memory = this.memoryServiceFor(claims.workspaceId, service.workspace, record.path);
-    const result = await memory.consolidate(agentId, { propose: true, force: true });
-    return formatDreamProposal(result, "run: gaia dream [agent] --apply to accept, or dream again to regenerate.");
-  }
-
-  /** Dream v2 apply: commits the proposal `harnessDreamPropose` wrote, through
-   * the guarded writers, then deletes it. Throws when there is no pending
-   * proposal — caught by handleHarness same as every other harness route, so
-   * the CLI sees ok:false and exits nonzero. */
-  async harnessDreamApply(claims: HarnessTokenClaims, agentId: string): Promise<string> {
-    const record = await this.registry.find(claims.workspaceId);
-    if (!record) throw new Error(`Unknown workspace: ${claims.workspaceId}`);
-    const service = await this.serviceFor(claims.workspaceId, claims.roomId);
-    const memory = this.memoryServiceFor(claims.workspaceId, service.workspace, record.path);
-    const result = await memory.applyDreamProposal(agentId);
-    if (!result) throw new Error(`no pending dream proposal for @${agentId} — run \`gaia dream\` first`);
-    return `applied ${result.applied} ops (${result.skipped} skipped)`;
-  }
+  async harnessRecall(claims: HarnessTokenClaims, query: string, limit?: number, options: { summarize?: boolean } = {}): Promise<{ result: string; hits: MemorySearchHit[] }> { return harnessRecall(this.harnessApiPort(), claims, query, limit, options); }
+  async harnessRecallScroll(claims: HarnessTokenClaims, hitId: number, options: { span?: number; offset?: number } = {}): Promise<string> { return harnessRecallScroll(this.harnessApiPort(), claims, hitId, options); }
+  async harnessToolResultFetch(claims: HarnessTokenClaims, sessionId: string, entryId: string, offset: number, limit: number): Promise<{ text: string; totalLength: number; hasMore: boolean }> { return harnessToolResultFetch(this.harnessApiPort(), claims, sessionId, entryId, offset, limit); }
+  async harnessContextDietGet(claims: HarnessTokenClaims): Promise<ContextDietView> { return harnessContextDietGet(this.harnessApiPort(), claims); }
+  async harnessContextDietSet(claims: HarnessTokenClaims, scope: "room" | "workspace", patch: ContextDietOverrides): Promise<ContextDietView> { return harnessContextDietSet(this.harnessApiPort(), claims, scope, patch); }
+  async harnessEndConversation(claims: HarnessTokenClaims, farewell: string): Promise<string> { return harnessEndConversation(this.harnessApiPort(), claims, farewell); }
+  async harnessDogCommand(claims: HarnessTokenClaims, sub: "on" | "off" | "status"): Promise<string> { return harnessDogCommand(this.harnessApiPort(), claims, sub); }
+  async harnessGhoulRoomRead(claims: HarnessTokenClaims, targetRoomId: string, options: { offset?: number; limit?: number } = {}): Promise<string> { return harnessGhoulRoomRead(this.harnessApiPort(), claims, targetRoomId, options); }
+  async harnessGhoulLedgerSearch(claims: HarnessTokenClaims, query?: string): Promise<string> { return harnessGhoulLedgerSearch(this.harnessApiPort(), claims, query); }
+  async harnessDreamPropose(claims: HarnessTokenClaims, agentId: string): Promise<string> { return harnessDreamPropose(this.harnessApiPort(), claims, agentId); }
+  async harnessDreamApply(claims: HarnessTokenClaims, agentId: string): Promise<string> { return harnessDreamApply(this.harnessApiPort(), claims, agentId); }
 
   /** Memory health rows for `gaia memory status` and the web status surface. */
   async memoryHealth(workspaceId: string): Promise<MemoryHealthRow[]> {
@@ -1388,220 +592,6 @@ export class Daemon {
   }
 
   // --- thinking (call-scoped vs persistent) --------------------------------------------
-
-  async applyThinking(
-    workspaceId: string,
-    roomId: string | undefined,
-    agentId: string,
-    level: string,
-  ): Promise<{ scope: "call" | "room"; message: string }> {
-    const levels = sdkThinkingLevels();
-    if (level !== "" && !levels.includes(level)) {
-      throw new Error(`Invalid thinking level: ${level}. Use one of: ${levels.join(", ")}`);
-    }
-
-    const call = this.activeCall;
-    if (call && call.workspaceId === workspaceId && call.info.agentId === agentId) {
-      if (level === "") delete call.info.thinking;
-      else call.info.thinking = level;
-      this.broadcast({ type: "voice-status", workspaceId, roomId: call.info.roomId, voice: call.info });
-      return { scope: "call", message: `Set @${agentId} thinking to ${level || "agent default"} for this call. It reverts on hang-up.` };
-    }
-
-    const service = await this.serviceFor(workspaceId, roomId);
-    return { scope: "room", message: await service.setRoomThinking(agentId, level) };
-  }
-
-  // --- voice call session -----------------------------------------------------------
-
-  voiceFor(workspaceId: string | undefined): VoiceCallInfo | null {
-    if (!workspaceId || !this.activeCall || this.activeCall.workspaceId !== workspaceId) return null;
-    return this.activeCall.info;
-  }
-
-  async startVoiceCall(workspaceId: string, agentId: string, gaiaUrl: string): Promise<VoiceCallInfo> {
-    const service = await this.serviceFor(workspaceId);
-    const agent = service.workspace.agents[agentId];
-    if (!agent) throw new Error(`Unknown agent: ${agentId}`);
-    if (this.activeCall) throw new Error(`Voice call already active with @${this.activeCall.info.agentId}`);
-    if (this.voiceStarting) throw new Error("A voice call is already starting");
-
-    const settings = await readVoiceSettings();
-
-    // The call TTS resolves EXACTLY like read-aloud (agent.tts.engine over the
-    // voice.json default): an engine that declares `callBridge` (claude-voice)
-    // gets a gaia protocol bridge unmute talks to instead of the bundled moshi
-    // TTS. Default (kyutai) → the native service, unchanged.
-    const ttsChoice = resolveTtsChoice(agent, settings);
-    let ttsEndpoint: string | undefined;
-    if (ttsChoice.engine.callBridge) {
-      const bridge = new TtsCallBridge({
-        ensureTts: (onStatus) => this.voiceStack.ensureTts(ttsStackSettings(settings), onStatus),
-        log: (message) => this.log(message),
-      });
-      const { wsUrl } = await bridge.start(ttsChoice.engine, ttsChoice.voice, settings);
-      this.ttsBridge?.stop();
-      this.ttsBridge = bridge;
-      ttsEndpoint = wsUrl;
-      this.log(`voice: routing @${agent.id}'s call TTS through the ${ttsChoice.engine.id} bridge (voice: ${ttsChoice.voice ?? "default"})`);
-    }
-
-    // Replicate is one-shot transcription, so the bridge presents it as the
-    // native unmute streaming STT protocol. kyutai remains the untouched native
-    // default; unknown settings deliberately retain that safe default.
-    let sttEndpoint: string | undefined;
-    if (settings.callSttEngine === "replicate") {
-      const bridge = new SttCallBridge({ log: (message) => this.log(message) });
-      const { wsUrl } = await bridge.start(settings);
-      this.sttBridge?.stop();
-      this.sttBridge = bridge;
-      sttEndpoint = wsUrl;
-      this.log("voice: routing call STT through the Replicate bridge");
-    }
-
-    this.voiceStarting = true;
-    let unmuteUrl: string;
-    try {
-      ({ unmuteUrl } = await this.voiceStack.ensureRunning(
-        {
-          unmuteUrl: settings.unmuteUrl,
-          unmuteDir: settings.unmuteDir,
-          autoStart: settings.autoStart,
-          startTimeoutMs: settings.startTimeoutSec * 1000,
-          silenceTimeoutSec: settings.speakOnSilence ? settings.silenceDelaySec : null,
-          ttsEndpoint,
-          sttEndpoint,
-        },
-        gaiaUrl,
-        (message) => {
-          this.broadcast({ type: "voice-status", workspaceId, roomId: service.roomId, voice: null, pending: { agentId: agent.id, message } });
-        },
-      ));
-    } catch (error) {
-      // A failed stack start must not leak the bridge listener.
-      this.ttsBridge?.stop();
-      this.ttsBridge = undefined;
-      this.sttBridge?.stop();
-      this.sttBridge = undefined;
-      throw error;
-    } finally {
-      this.voiceStarting = false;
-    }
-
-    const info: VoiceCallInfo = {
-      agentId: agent.id,
-      roomId: service.roomId,
-      unmuteUrl,
-      // The bridge owns the voice (baked into its engine); leave the unmute
-      // session voice unset so it never validates a claude voice name.
-      ...(agent.voice && !ttsEndpoint ? { voice: agent.voice } : {}),
-      // Voice latency: thinking defaults off during the call; the agent's own
-      // level returns on hang-up (durably — survives a crash mid-call).
-      ...(settings.disableThinking ? { thinking: "off" } : {}),
-      startedAt: new Date().toISOString(),
-    };
-    if (settings.disableThinking) {
-      await persistCallOverride({ agentId: agent.id, previousThinking: agent.thinking ?? "" }).catch(() => {});
-    }
-    this.activeCall = { workspaceId, info, settings };
-    this.broadcast({ type: "voice-status", workspaceId, roomId: service.roomId, voice: info });
-    return info;
-  }
-
-  async stopVoiceCall(workspaceId: string): Promise<void> {
-    if (this.activeCall && this.activeCall.workspaceId === workspaceId) {
-      const ended = this.activeCall;
-      this.activeCall = undefined;
-      await clearCallOverride().catch(() => {});
-      this.broadcast({ type: "voice-status", workspaceId, roomId: ended.info.roomId, voice: null });
-    }
-    // Tear down call bridges, then stop exactly the services GAIA spawned;
-    // externally started services are left alone.
-    this.ttsBridge?.stop();
-    this.ttsBridge = undefined;
-    this.sttBridge?.stop();
-    this.sttBridge = undefined;
-    this.voiceStack.stop();
-  }
-
-  /** One voice turn from the unmute backend (OpenAI-compat chat completions).
-   * Returns the routing decision; the HTTP layer owns the response transport. */
-  classifyTurn(body: unknown): ReturnType<typeof classifyVoiceTurn> {
-    return classifyVoiceTurn(body);
-  }
-
-  /** Resolve a held context-gate: replay the new agent's first turn with the
-   * chosen amount of context (full / last-N / compacted). */
-  async resolveContextGate(workspaceId: string, roomId: string, choice: "full" | "last" | "compact", n?: number): Promise<void> {
-    const service = await this.serviceFor(workspaceId, roomId);
-    await service.resolveContextGate(choice, n);
-  }
-
-  /** Read one committed agent message aloud: resolve the author's TTS engine +
-   * voice, format the text for speech, and return one chunk of the audio
-   * (cached on disk; the result carries the chunk count for the client). */
-  async readAloud(workspaceId: string, roomId: string, eventId: string, chunk = 0, regenerate = false): Promise<ReadAloudResult> {
-    const service = await this.serviceFor(workspaceId, roomId);
-    const event = await service.eventById(eventId);
-    if (!event) throw new Error(`Unknown event: ${eventId}`);
-    const settings = await readVoiceSettings();
-    return readAloud({
-      event,
-      agent: service.workspace.agents[event.author],
-      settings,
-      chunk,
-      regenerate,
-      ensureTts: (onStatus) => this.voiceStack.ensureTts(ttsStackSettings(settings), onStatus),
-      log: (message) => this.log(message),
-    });
-  }
-
-  /** Read a message aloud as the desktop app does: for engines that stream, one
-   * continuous PCM pass played frame-by-frame (mode "stream"); for batch-only
-   * engines (local TTS), mode "chunks" so the client keeps the per-chunk path.
-   * The author's engine decides — this method never branches on the engine. */
-  async readAloudStream(workspaceId: string, roomId: string, eventId: string, regenerate = false): Promise<ReadAloudDelivery> {
-    const service = await this.serviceFor(workspaceId, roomId);
-    const event = await service.eventById(eventId);
-    if (!event) throw new Error(`Unknown event: ${eventId}`);
-    const settings = await readVoiceSettings();
-    return readAloudStream({
-      event,
-      agent: service.workspace.agents[event.author],
-      settings,
-      regenerate,
-      ensureTts: (onStatus) => this.voiceStack.ensureTts(ttsStackSettings(settings), onStatus),
-      log: (message) => this.log(message),
-    });
-  }
-
-  /** Transcribe one recorded clip → text (composer dictation / voice input).
-   * Resolves the STT engine from voice.json (elevenlabs by default; swappable
-   * like read-aloud's TTS engine, never branched on here) and returns the text.
-   * Workspace-independent: it reads only global voice settings. */
-  async transcribe(audio: SttAudioInput, opts: { engineId?: string; language?: string; signal?: AbortSignal } = {}): Promise<{ text: string; engine: string }> {
-    const settings = await readVoiceSettings();
-    return transcribe({
-      audio,
-      settings,
-      engineId: opts.engineId,
-      language: opts.language,
-      signal: opts.signal,
-      log: (message) => this.log(message),
-    });
-  }
-
-  /** Speak a short voice-control prompt/ack on the local Mac speaker. */
-  async speakVoiceControl(text: string, opts: { signal?: AbortSignal } = {}): Promise<void> {
-    const settings = await readVoiceSettings();
-    await speakApple(text, settings.ttsVoice, opts.signal, settings.ttsRate || 260);
-  }
-
-  cancelVoiceControlSpeech(): void {
-    cancelSpeechQueue();
-  }
-
-  // --- files + hints -------------------------------------------------------------------
 
   async fileHints(file: EditableFileContent, workspaceId?: string): Promise<FileHints | undefined> {
     if (file.kind !== "json") return undefined;
@@ -1629,7 +619,7 @@ export class Daemon {
       models: this.hintSourcesCache.models,
       skills: skillHintOptions(skillWorkspace),
     };
-    return buildFileHints({ label: file.label, kind: file.kind, content: file.content, workspaceId }, sources);
+    return buildFileHints({ label: file.label, kind: file.kind, content: file.content }, sources);
   }
 
   async workspaceForId(workspaceId: string): Promise<Workspace | undefined> {
@@ -1643,7 +633,7 @@ export class Daemon {
 
   // --- app payload -----------------------------------------------------------------------
 
-  async appPayload(currentWorkspaceId?: string): Promise<{
+  async appPayload(currentWorkspaceId?: string, humanId?: string): Promise<{
     workspaces: WorkspaceRecord[];
     currentWorkspaceId: string | undefined;
     globalFiles: EditableFileDescriptor[];
@@ -1653,8 +643,9 @@ export class Daemon {
     workspaceRooms: Record<string, Snapshot["rooms"]>;
     keepAwake: KeepAwakeCapability;
     userName: string;
+    theme: string;
   }> {
-    const workspaces = await this.registry.list();
+    const workspaces = await this.registry.listForHuman(humanId);
     const current = currentWorkspaceId ?? workspaces.find((workspace) => workspace.isInitialized)?.id;
     // Seed the sidebar's workspace-level running/unread dots: a disk-only room
     // scan per initialized workspace (no live services spun up), kept fresh
@@ -1682,101 +673,45 @@ export class Daemon {
       workspaceRooms,
       keepAwake: await this.keepAwake(),
       userName: await this.userName(),
+      theme: await this.theme(),
     };
   }
-}
-
-// --- consolidation LLM (daemon-side, same credential store as the proxy) ---------
-
-/** Builds the completion function consolidation uses. Resolved lazily per call
- * so key/model changes apply without a daemon restart; no key → the call
- * throws and consolidation skips with the error as its reason. */
-// Loaded once: the ambient pi extensions' `before_provider_request` handlers
-// (chiefly pi-claude-code-identity, which relocates the system preamble so a
-// Claude Pro/Max OAuth request bills to the PLAN instead of tripping the
-// third-party-usage classifier). Consolidation runs the SAME handlers a real
-// agent turn runs, so an oauth subscription authenticates AND bills correctly.
-// Provider-agnostic (RULE #0): each handler no-ops for non-oauth/non-anthropic
-// payloads, so this is one uniform mechanism, never a harness/provider branch.
-let beforeRequestHandlers: Promise<Array<(payload: unknown) => Promise<unknown>>> | undefined;
-async function providerRequestRewriters(): Promise<Array<(payload: unknown) => Promise<unknown>>> {
-  beforeRequestHandlers ??= (async () => {
-    const { discoverAndLoadExtensions, getAgentDir } = await import("@earendil-works/pi-coding-agent");
-    const { extensions } = await discoverAndLoadExtensions([], process.cwd(), getAgentDir());
-    const raw = extensions.flatMap((ext) => ext.handlers.get("before_provider_request") ?? []);
-    // The identity handler is a pure `(event) => rewritten | undefined` payload
-    // transform that never touches ctx; pass a bare event and no ctx.
-    return raw.map((h) => (payload: unknown) => Promise.resolve(h({ type: "before_provider_request", payload }, undefined)));
-  })();
-  return beforeRequestHandlers;
-}
-
-/** The live, rotating auth.json a bound account materializes — the SAME store
- * the agent's turns authenticate against. Consolidation points its ModelRuntime
- * here instead of the ambient ~/.pi/agent login, which expires independently
- * and silently kills consolidation for every agent (observed 2026-08-06: ambient
- * anthropic OAuth dead since 08-05 11:00 while per-account logins stayed live).
- * Harness-agnostic (RULE #0): reads whatever cred-store dir the owning spec's
- * accounts.env descriptor materializes; undefined → fall back to ambient. */
-function accountAuthPath(accountId: string | undefined): string | undefined {
-  if (!accountId) return undefined;
-  const record = findAccount(accountId);
-  if (!record) return undefined;
-  const accounts = harnessSpecFor(record.harness).accounts;
-  const explicit = accounts?.authStoragePath?.(record.credentials);
-  if (explicit) return explicit;
-  const env = accounts?.env(record.credentials);
-  const dir = env?.PI_CODING_AGENT_DIR;
-  return dir ? join(dir, "auth.json") : undefined;
-}
-
-function consolidateLlm(): ConsolidateLlm {
-  return async ({ system, user, model, account }) => {
-    const provider = model?.provider ?? DEFAULTS.model.provider;
-    const name = model?.name ?? DEFAULTS.model.name;
-    const { ModelRegistry, ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-    // Authenticate against the consolidating agent's OWN account credential
-    // store (live/rotating) rather than the ambient login (which can expire
-    // independently and take every agent's consolidation down with it).
-    const authPath = accountAuthPath(account);
-    const runtime = await ModelRuntime.create(authPath ? { authPath } : undefined);
-    // Alias fallback (RULE #0): short tier names (fable/opus/sonnet/haiku) in an
-    // agent's config resolve here too — this path bypasses the harness CLI, so
-    // an un-aliased `find` was silently killing consolidation for any agent
-    // configured with a short name (e.g. anthropic/fable).
-    const resolved = findModelWithAlias(new ModelRegistry(runtime), provider, name);
-    if (!resolved) throw new Error(`consolidation model not found: ${provider}/${name}`);
-    // Complete THROUGH the runtime so it authenticates with the agent's stored
-    // pi subscription login exactly like a normal turn — the runtime resolves
-    // oauth (bearer) or api-key internally. The old path pulled getAuth().apiKey
-    // and hand-fed it to a standalone completeSimple; an oauth subscription has
-    // NO apiKey, so that key was always undefined and consolidation died with
-    // "no api key for anthropic". Consolidation is an agent/subscription thing,
-    // never a raw-API-key thing. onPayload runs the ambient identity extension
-    // so the OAuth plan-billing rewrite applies here too (else a large system
-    // prompt 400s as third-party usage).
-    const rewriters = await providerRequestRewriters();
-    const message = await runtime.complete(
-      resolved,
-      { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
-      {
-        maxTokens: 4_000,
-        onPayload: async (payload) => {
-          let current = payload;
-          for (const rewrite of rewriters) {
-            const next = await rewrite(current);
-            if (next !== undefined) current = next;
-          }
-          return current;
-        },
-      },
-    );
-    if (message.stopReason === "error" || message.stopReason === "aborted") {
-      throw new Error(message.errorMessage ?? "consolidation model call failed");
-    }
-    return message.content
-      .filter((part): part is { type: "text"; text: string } => part.type === "text")
-      .map((part) => part.text)
-      .join("");
-  };
+  private readonly interactions = new RoomInteractionLifecycle(this.interactionHost());
+  get activeCall() { return this.interactions.activeCall; }
+  private interactionHost(): RoomInteractionHost {
+    return {
+      registry: this.registry, files: this.files, currentRoom: this.currentRoom, services: this.services,
+      memoryServices: this.memoryServices, memoryStores: this.memoryStores, summonCoordinators: this.summonCoordinators,
+      log: (message) => this.log(message), broadcast: (event) => this.broadcast(event),
+      serviceFor: (workspaceId, roomId) => this.serviceFor(workspaceId, roomId),
+      memoryServiceFor: (workspaceId, workspace, path) => this.memoryServiceFor(workspaceId, workspace, path),
+      petBindings: (workspaceId) => this.petBindings(workspaceId),
+      workspaceServiceKeys: (workspaceId) => this.workspaceServiceKeys(workspaceId),
+      reloadService: (key) => this.reloadService(key),
+      appPayload: (workspaceId, humanId) => this.appPayload(workspaceId, humanId),
+    };
+  }
+  async addWorkspace(...args: Parameters<RoomInteractionLifecycle["addWorkspace"]>) { return this.interactions.addWorkspace(...args); }
+  async setWorkspaceFavorite(...args: Parameters<RoomInteractionLifecycle["setWorkspaceFavorite"]>) { return this.interactions.setWorkspaceFavorite(...args); }
+  async reorderWorkspaces(...args: Parameters<RoomInteractionLifecycle["reorderWorkspaces"]>) { return this.interactions.reorderWorkspaces(...args); }
+  async selectRoom(...args: Parameters<RoomInteractionLifecycle["selectRoom"]>) { return this.interactions.selectRoom(...args); }
+  async renameRoom(...args: Parameters<RoomInteractionLifecycle["renameRoom"]>) { return this.interactions.renameRoom(...args); }
+  async setRoomFavorite(...args: Parameters<RoomInteractionLifecycle["setRoomFavorite"]>) { return this.interactions.setRoomFavorite(...args); }
+  async deleteRoom(...args: Parameters<RoomInteractionLifecycle["deleteRoom"]>) { return this.interactions.deleteRoom(...args); }
+  async deleteWorkspace(...args: Parameters<RoomInteractionLifecycle["deleteWorkspace"]>) { return this.interactions.deleteWorkspace(...args); }
+  async setAgentRole(...args: Parameters<RoomInteractionLifecycle["setAgentRole"]>) { return this.interactions.setAgentRole(...args); }
+  async setAgentDefaultRole(...args: Parameters<RoomInteractionLifecycle["setAgentDefaultRole"]>) { return this.interactions.setAgentDefaultRole(...args); }
+  async runPluginAction(...args: Parameters<RoomInteractionLifecycle["runPluginAction"]>) { return this.interactions.runPluginAction(...args); }
+  async setRoomAgentDialogue(...args: Parameters<RoomInteractionLifecycle["setRoomAgentDialogue"]>) { return this.interactions.setRoomAgentDialogue(...args); }
+  async setDefaultAgent(...args: Parameters<RoomInteractionLifecycle["setDefaultAgent"]>) { return this.interactions.setDefaultAgent(...args); }
+  async deleteAgent(...args: Parameters<RoomInteractionLifecycle["deleteAgent"]>) { return this.interactions.deleteAgent(...args); }
+  async applyThinking(...args: Parameters<RoomInteractionLifecycle["applyThinking"]>) { return this.interactions.applyThinking(...args); }
+  voiceFor(...args: Parameters<RoomInteractionLifecycle["voiceFor"]>) { return this.interactions.voiceFor(...args); }
+  async startVoiceCall(...args: Parameters<RoomInteractionLifecycle["startVoiceCall"]>) { return this.interactions.startVoiceCall(...args); }
+  async stopVoiceCall(...args: Parameters<RoomInteractionLifecycle["stopVoiceCall"]>) { return this.interactions.stopVoiceCall(...args); }
+  classifyTurn(...args: Parameters<RoomInteractionLifecycle["classifyTurn"]>) { return this.interactions.classifyTurn(...args); }
+  async resolveContextGate(...args: Parameters<RoomInteractionLifecycle["resolveContextGate"]>) { return this.interactions.resolveContextGate(...args); }
+  async readAloud(...args: Parameters<RoomInteractionLifecycle["readAloud"]>) { return this.interactions.readAloud(...args); }
+  async readAloudStream(...args: Parameters<RoomInteractionLifecycle["readAloudStream"]>) { return this.interactions.readAloudStream(...args); }
+  async transcribe(...args: Parameters<RoomInteractionLifecycle["transcribe"]>) { return this.interactions.transcribe(...args); }
 }
