@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { GaiaWebServer } from "../src/server/http.js";
 import { artifactRoutePrefix } from "../src/server/routes/artifacts.js";
@@ -289,6 +289,7 @@ test("memory domain: GET workspace memory/status shape, POST harness memory writ
   let live: Awaited<ReturnType<GaiaWebServer["listen"]>> | undefined;
   try {
     await initWorkspace(workspace);
+    await writeFile(join(workspace, ".gaia", "config.json"), JSON.stringify({ memory: { embeddings: "off", reranker: "off" } }));
     live = await web.listen();
     const internals = web as unknown as {
       daemon: {

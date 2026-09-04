@@ -37,7 +37,7 @@ function withGaiaHome(fn: (home: string) => void): void {
 // median ~30ms vs nonexistent-user path median ~1.6ms (~18x, well outside
 // noise). Threshold below is generous (3x) precisely so it still fails hard
 // against the current code without being timing-flaky in CI.
-test("L1 SECURITY: authenticate() must not leak username existence via timing", () => {
+test("L1 SECURITY: authenticate() must not leak username existence via timing", { timeout: 30_000 }, () => {
   withGaiaHome(() => {
     createUser("timing-victim", "correcthorsebatterystaple123");
     const N = 25;

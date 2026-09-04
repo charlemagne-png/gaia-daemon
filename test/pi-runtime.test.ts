@@ -527,7 +527,7 @@ test("PiRuntime.compactDraft captures a summary without evicting, then compactAp
     const factory: PiRuntimeSessionFactory = async ({ loader }) => {
       await loader.reload();
       const session = new FakeSession("s1");
-      const hook = loader.getExtensions().extensions[0]!.handlers.get("session_before_compact")![0]!;
+      const hook = loader.getExtensions().extensions.find((extension) => extension.handlers.has("session_before_compact"))!.handlers.get("session_before_compact")![0]!;
       const preparation = {
         firstKeptEntryId: "fresh-cut",
         tokensBefore: 900,

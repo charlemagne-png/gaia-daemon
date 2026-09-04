@@ -90,7 +90,7 @@ async function roomHumansPost(ctx: RouteContext): Promise<boolean> {
   const requester = requestingHuman(ctx.request);
   if (!requester) { json(ctx.response, 401, { error: "Log in before managing room membership." }); return true; }
   const existing = await service.roomHumans();
-  if (existing.length > 0 && !existing.includes(requester.id)) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
+  if (await service.roomMembershipRestricted() && !existing.includes(requester.id)) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
   const body = await parseBody(ctx.request);
   const userId = stringField(body, "userId");
   if (!userId?.trim()) { json(ctx.response, 400, { error: "Missing userId" }); return true; }
@@ -104,7 +104,7 @@ async function roomHumansDelete(ctx: RouteContext): Promise<boolean> {
   const requester = requestingHuman(ctx.request);
   if (!requester) { json(ctx.response, 401, { error: "Log in before managing room membership." }); return true; }
   const existing = await service.roomHumans();
-  if (existing.length > 0 && !existing.includes(requester.id)) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
+  if (await service.roomMembershipRestricted() && !existing.includes(requester.id)) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
   await respond(ctx.response, async () => ({ humans: await service.removeHuman(params[2]) }));
   return true;
 }
@@ -183,7 +183,7 @@ async function roomMessages(ctx: RouteContext): Promise<boolean> {
   const queue = (body as { queue?: unknown }).queue === true;
   const human = requestingHuman(ctx.request);
   const membership = await service.roomHumans();
-  if (membership.length > 0 && !membership.includes(human?.id ?? "")) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
+  if (await service.roomMembershipRestricted() && !membership.includes(human?.id ?? "")) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
   const task = await service.sendMessage(textValue, {
     ...(attachments ? { attachments } : {}),
     ...(queue ? { queue } : {}),
@@ -199,7 +199,7 @@ async function roomEvents(ctx: RouteContext): Promise<boolean> {
   if (ctx.request.method !== "GET" || !params) return false;
   const service = await ctx.daemon.serviceFor(params[0], params[1]);
   const membership = await service.roomHumans();
-  if (membership.length > 0 && !membership.includes(requestingHuman(ctx.request)?.id ?? "")) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
+  if (await service.roomMembershipRestricted() && !membership.includes(requestingHuman(ctx.request)?.id ?? "")) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
   const before = ctx.url.searchParams.get("before")?.trim() || undefined;
   const limit = Math.min(200, Math.max(1, Number(ctx.url.searchParams.get("limit")) || 50));
   await respond(ctx.response, async () => service.eventsBefore(before, limit));

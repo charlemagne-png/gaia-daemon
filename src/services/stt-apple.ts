@@ -196,15 +196,17 @@ function run(command: string[], input: Buffer | undefined, signal: AbortSignal):
 
 /** ISO code / BCP-47 tag → the locale id handed to SFSpeechRecognizer.
  * Empty / "auto" = system locale (SFSpeech has no true auto-detect). */
-function appleLocale(language?: string): string {
+export function appleLocale(language?: string): string {
   const code = (language ?? "").trim();
   if (!code || code.toLowerCase() === "auto") return "";
-  return code;
+  const mapped: Record<string, string> = { en: "en-US", es: "es-ES", fr: "fr-FR", de: "de-DE", it: "it-IT", pt: "pt-BR", ja: "ja-JP", ko: "ko-KR", zh: "zh-CN" };
+  return mapped[code.toLowerCase()] ?? code;
 }
 
 const APPLE_STT_TIMEOUT_MS = 120_000;
 
-async function appleTranscribe(context: SttContext): Promise<SttResult> {
+export async function appleTranscribe(context: SttContext): Promise<SttResult> {
+  if (process.platform !== "darwin") throw new Error("Apple speech recognition requires macOS.");
   const signal = context.signal ?? AbortSignal.timeout(APPLE_STT_TIMEOUT_MS);
   const helper = helperPath(context.log);
   const work = await mkdtemp(join(tmpdir(), "gaia-stt-"));

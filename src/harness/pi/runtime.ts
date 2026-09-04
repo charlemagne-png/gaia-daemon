@@ -358,7 +358,7 @@ export class PiRuntime implements AgentRuntime {
       cwd: this.workDir,
       agentDir: getAgentDir(),
       additionalSkillPaths: skillPaths,
-      noExtensions: true,
+      noExtensions: false,
       extensionFactories: [
         this.compaction.extension(roomId, model?.provider, model?.name),
       ],

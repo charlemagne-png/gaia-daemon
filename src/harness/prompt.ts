@@ -319,7 +319,6 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     buildProtocolsSection(input.protocolsText, input.thinkingLevel, protocolEnabled(input.agent.protocols, `${THINKING_PROTOCOL}.md`)),
     input.intentText?.trim() ? `# Project Agent Intent\n\n${input.intentText.trim()}` : "",
     `# Project Context (AGENTS.md)\n\n${renderProjectContext(input.contextFiles)}`,
-    HARNESS_LAW,
     STYLE_LAW,
     roleSection,
     roleDiagnostics,
@@ -395,7 +394,7 @@ export async function buildInlineSystemPrompt(params: {
   const nativeNames = new Set(nativeCommandsFor(harnessIdFor(params.agent, params.workspace)).map((command) => command.name.toLowerCase()));
   const skills = await loadSkillText(params.workspace, agentSkillNames(params.agent, params.role), undefined, nativeNames);
   for (const diagnostic of skills.diagnostics) console.warn(diagnostic);
-  return [base, skills.text, params.toolPointer].filter(Boolean).join("\n\n---\n\n");
+  return [base, params.toolPointer ? HARNESS_LAW : "", skills.text, params.toolPointer].filter(Boolean).join("\n\n---\n\n");
 }
 
 // Self-contained `gaia` CLI documentation for whichever tools the agent has

@@ -207,7 +207,7 @@ test("search surfaces degradation honestly: 'auto' without a sidecar reports lex
   service.dispose();
 });
 
-test("recall degraded is debounced: one slow search doesn't latch the chip; a streak does; a fast search clears it", async () => {
+test("recall degraded is debounced: one slow search doesn't latch the chip; a streak does; a fast search clears it", { timeout: 10_000 }, async () => {
   // A slow EMBED pushes each search past the 1.5s recall budget deterministically
   // (setTimeout guarantees ≥1600ms > SLOW_RECALL_MS). The point: a lone spike
   // must not raise the loud chip — only sustained slowness — and recovery clears.

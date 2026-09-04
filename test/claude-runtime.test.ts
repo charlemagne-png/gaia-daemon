@@ -375,6 +375,7 @@ test("ClaudeRuntime maps model_refusal_fallback (safety reroute) and builds a re
       fromModel: "claude-fable-5",
       toModel: "claude-opus-4-8",
       reason: "switched to claude-opus-4-8 (refusal)",
+      refusal: true,
     });
     runtime.dispose();
   } finally {

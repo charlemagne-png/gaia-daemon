@@ -36,13 +36,13 @@ test("ensureAccountsFile seeds once", () => {
   });
 });
 
-test("legacy harness account loads as a Pi account", () => {
+test("retired harness account loads as a Pi account", () => {
   withGaiaHome(() => {
     writeFileSync(
       accountsPath(),
       JSON.stringify({
         accounts: [
-          { id: "a1", harness: "claude", label: "Second", credentials: { oauthToken: "sk-ant-oat01-x" } },
+          { id: "a1", harness: "antigravity", label: "Second", credentials: { oauthToken: "sk-ant-oat01-x" } },
           { foo: 1 },
         ],
       }),
@@ -69,12 +69,12 @@ test("display metadata can be updated without exposing credentials", () => {
     writeFileSync(accountsPath(), JSON.stringify({ accounts: [{ id: "a1", harness: "claude", credentials: { oauthToken: "secret" } }] }));
     assert.deepEqual(updateAccount("a1", { label: "Personal", email: "me@example.com" }), {
       id: "a1",
-      harness: "pi",
+      harness: "claude",
       label: "Personal",
       email: "me@example.com",
       credentials: { oauthToken: "secret" },
     });
-    assert.deepEqual(redactedAccounts(), [{ id: "a1", harness: "pi", label: "Personal", email: "me@example.com" }]);
+    assert.deepEqual(redactedAccounts(), [{ id: "a1", harness: "claude", label: "Personal", email: "me@example.com" }]);
     assert.equal(updateAccount("missing", { label: "Nope" }), undefined);
   });
 });

@@ -95,7 +95,7 @@ export function cookieValue(request: IncomingMessage, name: string): string | un
 /** `Set-Cookie` value: HttpOnly + SameSite=Lax always; `maxAgeSeconds` undefined
  * clears it (session-scoped cookie, browser drops on close) — pass 0 to delete. */
 export function cookieHeader(name: string, value: string, maxAgeSeconds?: number): string {
-  const parts = [`${name}=${encodeURIComponent(value)}`, "Path=/", "HttpOnly", "SameSite=Lax"];
+  const parts = [`${name}=${encodeURIComponent(value)}`, "Path=/", "HttpOnly", "Secure", "SameSite=Lax"];
   if (maxAgeSeconds !== undefined) parts.push(`Max-Age=${maxAgeSeconds}`);
   return parts.join("; ");
 }

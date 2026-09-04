@@ -6,7 +6,7 @@
 // logged-in human's id/label ride alongside as optional metadata (see
 // UserRoomEvent.humanId/humanLabel in core/types.ts).
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHmac } from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHmac, createHash } from "node:crypto";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { globalPaths } from "../core/paths.js";
 
@@ -106,9 +106,12 @@ function toPublic(user: HumanUser): PublicUser {
   };
 }
 
+const SCRYPT_OPTIONS = { N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 };
+const DUMMY_PASSWORD_HASH = `scrypt$${"0".repeat(32)}$${"0".repeat(128)}`;
+
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString("hex");
-  const hash = scryptSync(password, salt, 64).toString("hex");
+  const hash = scryptSync(password, salt, 64, SCRYPT_OPTIONS).toString("hex");
   return `scrypt$${salt}$${hash}`;
 }
 
@@ -117,7 +120,10 @@ function verifyPassword(password: string, stored: string): boolean {
   if (parts.length !== 3 || parts[0] !== "scrypt") return false;
   const [, salt, hashHex] = parts;
   const expected = Buffer.from(hashHex, "hex");
-  const actual = scryptSync(password, salt, expected.length);
+  let actual = scryptSync(password, salt, expected.length, SCRYPT_OPTIONS);
+  if (!(actual.length === expected.length && timingSafeEqual(actual, expected)) && stored !== DUMMY_PASSWORD_HASH) {
+    actual = scryptSync(password, salt, expected.length);
+  }
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
@@ -171,8 +177,8 @@ export function removeUser(id: string): boolean {
 /** Null on wrong username OR wrong password — never distinguish which, to a caller. */
 export function authenticate(username: string, password: string): PublicUser | null {
   const user = findUserByUsername(username);
-  if (!user) return null;
-  return verifyPassword(password, user.passwordHash) ? toPublic(user) : null;
+  const ok = verifyPassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+  return user && ok ? toPublic(user) : null;
 }
 
 // --- sessions ----------------------------------------------------------------
@@ -196,6 +202,35 @@ function sign(payload: string): string {
   return createHmac("sha256", sessionSecret()).update(payload).digest("hex");
 }
 
+function revokedSessionsPath(): string {
+  return resolve(dirname(globalPaths.sessionSecret()), "revoked-sessions.json");
+}
+
+function sessionTokenId(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function readRevokedSessions(): Set<string> {
+  try {
+    const parsed = JSON.parse(readFileSync(revokedSessionsPath(), "utf8")) as { tokens?: unknown };
+    return new Set(Array.isArray(parsed.tokens) ? parsed.tokens.filter((value): value is string => typeof value === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function revokeSessionToken(token: string | undefined): void {
+  if (!token) return;
+  const revoked = readRevokedSessions();
+  revoked.add(sessionTokenId(token));
+  mkdirSync(dirname(revokedSessionsPath()), { recursive: true });
+  writeFileSync(revokedSessionsPath(), JSON.stringify({ tokens: [...revoked].sort() }, null, 2) + "\n", { mode: 0o600 });
+}
+
+function isSessionRevoked(token: string): boolean {
+  return readRevokedSessions().has(sessionTokenId(token));
+}
+
 /** `<userId>.<expiryEpochMs>.<hmacHex>`, base64url-wrapped for safe cookie transport. */
 export function issueSessionToken(userId: string): string {
   const payload = `${userId}.${Date.now() + SESSION_TTL_MS}`;
@@ -206,6 +241,7 @@ export function issueSessionToken(userId: string): string {
 /** Verifies signature + expiry, returns the user (re-reads from disk — cheap,
  * tiny file, and a removed/renamed user must stop authenticating immediately). */
 export function verifySessionToken(token: string): PublicUser | null {
+  if (isSessionRevoked(token)) return null;
   let raw: string;
   try {
     raw = Buffer.from(token, "base64url").toString("utf8");

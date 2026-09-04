@@ -285,13 +285,22 @@ export class RoomCommandsMixin {
     this.compactingAgents.add(target);
     const startedAt = Date.now();
     const usedTokens = this.contextUsage[target]?.usedTokens;
+    const maxTokensBeforeCompact = this.contextUsage[target]?.maxTokens;
     this.compactProgress.set(target, { startedAt, ...(usedTokens ? { contextTokens: usedTokens } : {}) });
+    delete this.contextUsage[target];
+    await this.room.updateState((current) => { if (current.contextUsage) delete current.contextUsage[target]; }).catch(() => {});
     this.lastCompactEmit = startedAt;
     await this.emitSnapshot();
     const progress = (update: CompactProgressUpdate) => {
       const prev = this.compactProgress.get(target);
       if (!prev) return;
       this.compactProgress.set(target, { ...prev, ...update });
+      if (update.outputTokens) {
+        const maxTokens = this.contextUsage[target]?.maxTokens ?? maxTokensBeforeCompact;
+        const usage = { usedTokens: update.outputTokens, ...(maxTokens ? { maxTokens } : {}) };
+        this.contextUsage[target] = usage;
+        void this.room.updateState((current) => { current.contextUsage = { ...(current.contextUsage ?? {}), [target]: usage }; }).catch(() => {});
+      }
       const now = Date.now();
       if (now - this.lastCompactEmit < 500) return;
       this.lastCompactEmit = now;
@@ -304,9 +313,12 @@ export class RoomCommandsMixin {
 
 ${draft.summary}` : ""}`;
       }
-      const result = typeof edit === "string"
+      const rawResult = typeof edit === "string"
         ? await runtime.compactApply!(this.roomId, edit, progress)
         : await runtime.compact!(this.roomId, progress);
+      const result: CompactResult = typeof rawResult === "string"
+        ? { compacted: /compact/i.test(rawResult), message: rawResult }
+        : rawResult;
       // finishCompactCommand's port signature widens `kind` to plain string for
       // callers outside this file; this file's own CommandReply keeps the exact
       // RoomEventKind literal the implementation actually returns below.

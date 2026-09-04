@@ -114,7 +114,7 @@ export function isMissingBinary(error: unknown): boolean {
 }
 
 export function missingBinaryError(binary: string, label: string, error: unknown, stderr?: string): Error {
-  if (isMissingBinary(error)) return new Error(`${label} binary not found: ${binary}`);
+  if (isMissingBinary(error)) return new Error(`${label} is unavailable: the \`${binary}\` CLI was not found in PATH.`);
   const message = error instanceof Error ? error.message : String(error);
   return new Error(stderr?.trim() ? `${label} failed: ${message}\n${stderr.trim()}` : `${label} failed: ${message}`);
 }

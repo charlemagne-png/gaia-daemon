@@ -12,9 +12,9 @@ test("estimateTokens: ~4 chars/token, zero for empty", () => {
   assert.equal(estimateTokens(undefined as unknown as string), 0);
 });
 
-test("parseWorkspaceConfig normalizes legacy harness ids to Pi", () => {
+test("parseWorkspaceConfig normalizes retired harness ids to Pi", () => {
   assert.equal(DEFAULT_CONTEXT_WARN_TOKENS, 100_000);
-  const config = parseWorkspaceConfig({ harness: "claude", contextGate: { warnAboveTokens: 250_000 } }, (id) => id === "pi");
+  const config = parseWorkspaceConfig({ harness: "antigravity", contextGate: { warnAboveTokens: 250_000 } }, (id) => id === "pi");
   assert.equal(config.harness, "pi");
   assert.deepEqual(config.contextGate, { warnAboveTokens: 250_000 });
   assert.equal(contextWindowFor("pi", "anything"), undefined);

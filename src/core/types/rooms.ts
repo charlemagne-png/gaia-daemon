@@ -304,12 +304,12 @@ export interface RoomState {
   incognito?: boolean;
   /** GaiaVoice-created session room. */
   voiceSession?: boolean;
-  /** Human-membership allowlist (domain/users.ts ids). Absent/empty = today's
-   * default: unrestricted, any request may read/post here regardless of
-   * login — unchanged behavior for every room that predates this field or
-   * never opts in. Non-empty = only these humans (by id) may read/post;
-   * enforced in server/http.ts, this is just the durable allowlist. */
+  /** Human-membership allowlist (domain/users.ts ids). Absent = unrestricted
+   * unless humansLocked is true. Non-empty = only these humans may read/post. */
   humans?: string[];
+  /** Private-empty sentinel: preserves "this room was gated" after the last
+   * member leaves; avoids silently reopening prior confidential content. */
+  humansLocked?: true;
   /** DogMode (09-DOG-MODE, and every other multi-command persona-register
    * style plugin) durable state now lives generically in `pluginState` above,
    * keyed by the plugin's id (services/plugins.ts pluginStateKey) — e.g.

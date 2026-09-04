@@ -22,13 +22,14 @@ function hint(hints: FileHints | undefined, key: string): FieldHint {
   return value as FieldHint;
 }
 
-test("config and agent harness pickers expose Pi only", () => {
+test("config and agent harness pickers expose active harnesses", () => {
   const config = buildFileHints({ label: ".gaia/config.json", kind: "json" }, sources);
-  assert.deepEqual(hint(config, "harness").options?.map((option) => option.value), ["pi"]);
+  assert.deepEqual(hint(config, "harness").options?.map((option) => option.value), ["pi", "claude", "codex"]);
   const agent = buildFileHints({ label: "agents/gaia/agent.json", kind: "json" }, sources);
-  assert.deepEqual(hint(agent, "harness").options?.map((option) => option.value), ["pi"]);
+  assert.deepEqual(hint(agent, "harness").options?.map((option) => option.value), ["pi", "claude", "codex"]);
   assert.deepEqual(agent?._harness.configs.pi?.hiddenFields.sort(), ["mcpServers", "permissionMode"]);
-  assert.equal(Object.keys(agent?._harness.configs ?? {}).length, 1);
+  assert.deepEqual(agent?._harness.configs.codex?.hiddenFields.sort(), ["permissionMode"]);
+  assert.equal(Object.keys(agent?._harness.configs ?? {}).length, 3);
 });
 
 test("Pi hints retain model, tool, and account configuration", () => {
@@ -37,7 +38,7 @@ test("Pi hints retain model, tool, and account configuration", () => {
   assert.equal(hint(hints, "model.provider").hidden, false);
   assert.ok(hint(hints, "model.name").options?.some((option) => option.value === "claude-sonnet-4-6"));
   const accounts = buildFileHints({ label: "accounts.json", kind: "json" }, sources);
-  assert.deepEqual(hint(accounts, "accounts.[].harness").options?.map((option) => option.value), ["pi"]);
+  assert.deepEqual(hint(accounts, "accounts.[].harness").options?.map((option) => option.value), ["pi", "claude", "codex"]);
   assert.ok(accounts?.["accounts.[].credentials.oauthToken"]);
 });
 

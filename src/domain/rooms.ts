@@ -537,6 +537,7 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(value.incognito === true ? { incognito: true } : {}),
     ...(value.voiceSession === true ? { voiceSession: true } : {}),
     ...(stringArray(value.humans).length > 0 ? { humans: stringArray(value.humans) } : {}),
+    ...(value.humansLocked === true ? { humansLocked: true } : {}),
   };
 }
 

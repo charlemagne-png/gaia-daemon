@@ -24,6 +24,15 @@ async function probePiUsage(provider: "anthropic" | "openai-codex"): Promise<Usa
   return token ? provider === "anthropic" ? fetchAnthropicUsage(token) : fetchChatGptUsage(token, typeof cred.accountId === "string" ? cred.accountId : undefined) : { status: "error" };
 }
 async function probePiAccountUsage(credentials: Record<string, string>): Promise<UsageProbeResult> { return credentials.oauthToken ? fetchAnthropicUsage(credentials.oauthToken) : credentials.accessToken ? fetchChatGptUsage(credentials.accessToken, credentials.accountId) : { status: "none" }; }
+function readPiLoginCredentials(configDir: string): Record<string, string> | undefined {
+  let parsed: Record<string, { access?: string; refresh?: string; accountId?: string }>;
+  try { parsed = JSON.parse(readFileSync(join(configDir, "auth.json"), "utf8")) as typeof parsed; } catch { return undefined; }
+  const anthropic = parsed.anthropic;
+  if (anthropic?.access) return { oauthToken: anthropic.access, refreshToken: anthropic.refresh ?? "" };
+  const codex = parsed["openai-codex"];
+  if (codex?.access) return { accessToken: codex.access, refreshToken: codex.refresh ?? "", accountId: codex.accountId ?? "" };
+  return undefined;
+}
 function materializePiAgentDir(credentials: Record<string, string>): string {
   const source = credentials.accountId?.trim() || credentials.refreshToken || credentials.oauthToken || credentials.accessToken || ""; const dir = join(gaiaHome(), "pi-accounts", createHash("sha256").update(source).digest("hex").slice(0, 16)); mkdirSync(dir, { recursive: true });
   const modelsSrc = join(homedir(), ".pi", "agent", "models.json"); const modelsDst = join(dir, "models.json"); if (existsSync(modelsSrc) && !existsSync(modelsDst)) copyFileSync(modelsSrc, modelsDst);
@@ -54,6 +63,16 @@ registerHarness({
     ],
     env: (credentials) => ({ PI_CODING_AGENT_DIR: materializePiAgentDir(credentials) }),
     email: (credentials) => emailFromJwt(credentials.oauthToken ?? credentials.accessToken),
+    login: {
+      variants: [
+        { key: "openai-codex", label: "ChatGPT / Codex", providers: ["openai-codex"] },
+        { key: "anthropic", label: "Anthropic", providers: ["anthropic"] },
+      ],
+      command: ({ configDir }) => ({ argv: ["pi", "auth", "login"], env: { PI_CODING_AGENT_DIR: configDir } }),
+      signInUrl: (output) => /https?:\/\/\S+/.exec(output)?.[0],
+      awaitingInput: () => false,
+      credentials: ({ configDir }) => readPiLoginCredentials(configDir),
+    },
   },
   // Pi's proxy wiring (the in-process fetch redirect lives in applyCredentialProxy):
   // relocate its agent dir to an empty store so AuthStorage resolves no real key

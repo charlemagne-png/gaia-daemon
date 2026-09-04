@@ -49,6 +49,7 @@ interface SseClient {
   id: string;
   workspaceId?: string;
   roomId?: string;
+  humanId?: string;
   response: ServerResponse;
 }
 const MIME: Record<string, string> = {
@@ -461,7 +462,8 @@ export class GaiaWebServer {
     const url = new URL(request.url ?? "/", "http://gaia.local");
     if (url.pathname.startsWith("/api/")) {
       if (url.pathname === LLM_PROXY_MOUNT || url.pathname.startsWith(`${LLM_PROXY_MOUNT}/`)) return this.handleLlmProxy(request, response, url);
-      return handleApi({ request, response, url, daemon: this.daemon, human: requestingHuman(request), humanScope: requestingHuman(request)?.workspace ? requestingHuman(request)?.id : undefined, boundUrl: this.boundUrl, cwd: this.options.cwd, bootId, broadcast: (event) => this.broadcast(event), registerSse: (workspaceId, roomId) => this.registerSse(response, workspaceId, roomId) });
+      const human = requestingHuman(request);
+      return handleApi({ request, response, url, daemon: this.daemon, human, humanScope: human?.workspace ? human.id : undefined, boundUrl: this.boundUrl, cwd: this.options.cwd, bootId, broadcast: (event) => this.broadcast(event), registerSse: (workspaceId, roomId) => this.registerSse(response, workspaceId, roomId, human?.id) });
     }
     if (url.pathname.startsWith("/v1/")) return this.handleOpenAi(request, response, url);
     await this.serveStatic(response, url.pathname);
@@ -613,8 +615,8 @@ export class GaiaWebServer {
     }
     return path;
   }
-  private registerSse(response: ServerResponse, workspaceId?: string, roomId?: string): void {
-    const client: SseClient = { id: newId("client"), workspaceId, roomId, response };
+  private registerSse(response: ServerResponse, workspaceId?: string, roomId?: string, humanId?: string): void {
+    const client: SseClient = { id: newId("client"), workspaceId, roomId, ...(humanId ? { humanId } : {}), response };
     this.clients.add(client);
     const keepalive = setInterval(() => response.write("event: ping\ndata: {}\n\n"), 15_000);
     response.on("close", () => { clearInterval(keepalive); this.clients.delete(client); });
@@ -622,19 +624,25 @@ export class GaiaWebServer {
   // --- SSE fan-out -------------------------------------------------------------------
   private broadcast(event: UiEvent): void {
     const payload = encodeSse(event.type, event);
-    // `rooms` and native-pet control events are workspace-TAGGED but globally
-    // DELIVERED. Room chrome keeps every sidebar live; pets must keep tracking a
-    // bound agent even when that room is not selected. Every other workspace
-    // event stays scoped by workspace+room (room ids are only locally unique).
     const ambient = event.type === "rooms" || event.type === "pet-bindings" || event.type === "pet-progress";
-    for (const client of this.clients) {
-      const scoped = event as { workspaceId?: string; roomId?: string };
-      if (!ambient) {
-        if (client.workspaceId && scoped.workspaceId && client.workspaceId !== scoped.workspaceId) continue;
-        if (client.roomId && scoped.roomId && client.roomId !== scoped.roomId) continue;
+    for (const client of this.clients) void this.deliverSse(client, event, payload, ambient);
+  }
+  private async deliverSse(client: SseClient, event: UiEvent, payload: string, ambient: boolean): Promise<void> {
+    const scoped = event as { workspaceId?: string; roomId?: string };
+    if (!ambient) {
+      if (client.workspaceId && scoped.workspaceId && client.workspaceId !== scoped.workspaceId) return;
+      if (client.roomId && scoped.roomId && client.roomId !== scoped.roomId) return;
+      if (scoped.workspaceId && scoped.roomId) {
+        try {
+          const service = await this.daemon.serviceFor(scoped.workspaceId, scoped.roomId);
+          const members = await service.roomHumans();
+          if (await service.roomMembershipRestricted() && !members.includes(client.humanId ?? "")) return;
+        } catch {
+          return;
+        }
       }
-      client.response.write(payload);
     }
+    client.response.write(payload);
   }
 }
 export async function startWebServer(options: WebServerOptions): Promise<{ url: string; close(): Promise<void> }> {

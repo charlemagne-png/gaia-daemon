@@ -222,29 +222,42 @@ export class RoomSnapshotMixin {
     return (await this.room.state()).humans ?? [];
   }
 
-  async inviteHuman(userId: string): Promise<string[]> {
+  async roomMembershipRestricted(): Promise<boolean> {
     await this.init();
-    const state = await this.room.updateState((state: any) => {
-      const set = new Set(state.humans ?? []);
-      set.add(userId);
-      state.humans = [...set];
-    });
-    await this.emitRoomsChanged();
-    return state.humans ?? [];
+    const state = await this.room.state();
+    return state.humansLocked === true || (state.humans?.length ?? 0) > 0;
   }
 
-  /** Removing the LAST member clears the allowlist back to unrestricted
-   * (empty array is never persisted — normalizeRoomState drops it), not a
-   * zero-human room nobody can post in. */
+  async priorHumanIds(): Promise<string[]> {
+    const { events } = await this.room.eventsFrom(0);
+    return [...new Set<string>(events.flatMap((event: any) => typeof event.humanId === "string" && event.humanId.trim() ? [event.humanId] : []))];
+  }
+
+  async inviteHuman(userId: string): Promise<string[]> {
+    await this.init();
+    const prior = await this.priorHumanIds();
+    const state = await this.room.updateState((state: any) => {
+      const seed = state.humans?.length || state.humansLocked ? state.humans ?? [] : prior;
+      const set = new Set<string>(seed.filter((id: unknown): id is string => typeof id === "string"));
+      set.add(userId);
+      state.humans = [...set];
+      state.humansLocked = true;
+    });
+    await this.emitRoomsChanged();
+    return (state.humans ?? []).filter((id: unknown): id is string => typeof id === "string");
+  }
+
+  /** Removing the last member leaves a private-empty room, not open access. */
   async removeHuman(userId: string): Promise<string[]> {
     await this.init();
     const state = await this.room.updateState((state: any) => {
-      const kept = (state.humans ?? []).filter((id: string) => id !== userId);
+      const kept = (state.humans ?? []).filter((id: unknown): id is string => typeof id === "string" && id !== userId);
       if (kept.length > 0) state.humans = kept;
       else delete state.humans;
+      state.humansLocked = true;
     });
     await this.emitRoomsChanged();
-    return state.humans ?? [];
+    return (state.humans ?? []).filter((id: unknown): id is string => typeof id === "string");
   }
 
   /** The most recent reply text from an agent in this room (summon results). */

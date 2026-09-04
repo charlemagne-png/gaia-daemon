@@ -91,7 +91,7 @@ export class RoomUiMixin {
   }
 
   maybeAutoCompact(task: Task): void {
-    const raw = Number.parseInt(process.env.GAIA_AUTO_COMPACT_PERCENT ?? "18", 10);
+    const raw = Number.parseInt(process.env.GAIA_AUTO_COMPACT_PERCENT ?? "0", 10);
     if (!Number.isFinite(raw) || raw <= 0) return;
     for (const agentId of task.targets) {
       const usage = this.contextUsage?.[agentId];
