@@ -42,8 +42,7 @@ export interface SummonResultDelivery {
   /** Stable identity for this result attempt. Parent receipt dedupe uses it
    * across retries/restarts; absent means the child's initial turn. */
   deliveryId?: string;
-  /** deliver:"turn" — the caller agent to re-invoke with the result. Unset for
-   * deliver:"note" (a human reads the result; no agent is nudged). */
+  /** Explicit deliver:"turn" caller. Unset → parent active-agent wake. */
   triggerTarget?: string;
 }
 
