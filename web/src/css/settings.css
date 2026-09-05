@@ -239,3 +239,11 @@
   .settings2-row { grid-template-columns: minmax(0, 1fr); }
   .settings2-sidebar { padding: 0 0 8px; border-right: 0; border-bottom: 1px solid var(--border); }
 }
+
+/* Account login + workspace grouping. */
+.workspace-group { margin-top: 1rem; }
+.workspace-group-title { margin-bottom: .5rem; font-size: .85rem; }
+.account-usage-row { display: flex; align-items: center; justify-content: space-between; }
+.account-login-controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
+.account-login-controls input { flex: 1 1 18ch; min-width: 0; }
+.account-login-session { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); background: var(--bg2); }

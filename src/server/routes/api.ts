@@ -276,8 +276,38 @@ async function handleApiWorkspaceRoutes(ctx: RouteContext): Promise<void> {
         accounts: redactedAccounts(),
         harnesses: harnessSpecs()
           .filter((s) => s.accounts)
-          .map((s) => ({ id: s.id, label: s.accounts?.label, login: Boolean(s.accounts?.login) })),
+          .map((s) => ({
+            id: s.id,
+            label: s.accounts?.label,
+            login: Boolean(s.accounts?.login),
+            loginVariants: s.accounts?.login?.variants,
+          })),
       }));
+    }
+    if (method === "POST" && path === "/api/accounts/login") {
+      const body = await parseBody(request);
+      const harness = stringField(body, "harness") ?? "";
+      const label = stringField(body, "label")?.trim() || undefined;
+      const variant = stringField(body, "variant")?.trim() || undefined;
+      const accountId = stringField(body, "accountId")?.trim() || undefined;
+      const workspace = stringField(body, "workspace")?.trim() || undefined;
+      return respond(response, async () => ({ session: daemon.accountLogins.start(harness.trim(), label, variant, accountId, workspace) }));
+    }
+    if (method === "GET" && (params = match(/^\/api\/accounts\/login\/([^/]+)$/))) {
+      return respond(response, async () => ({ session: daemon.accountLogins.status(params![0]) }));
+    }
+    if (method === "POST" && (params = match(/^\/api\/accounts\/login\/([^/]+)\/input$/))) {
+      const text = stringField(await parseBody(request), "text") ?? "";
+      return respond(response, async () => {
+        daemon.accountLogins.input(params![0], text);
+        return { session: daemon.accountLogins.status(params![0]) };
+      });
+    }
+    if (method === "DELETE" && (params = match(/^\/api\/accounts\/login\/([^/]+)$/))) {
+      return respond(response, async () => {
+        daemon.accountLogins.cancel(params![0]);
+        return { session: daemon.accountLogins.status(params![0]) };
+      });
     }
     if (method === "DELETE" && (params = match(/^\/api\/accounts\/([^/]+)$/))) {
       return respond(response, async () => ({ removed: removeAccount(params![0]) }));

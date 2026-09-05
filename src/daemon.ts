@@ -25,6 +25,7 @@ import { ensureAccountsFile } from "./domain/accounts.js";
 import { RoomService, scanRoomActivity } from "./services/room-service.js";
 import { MemoryService } from "./services/memory-service.js";
 import { UsageService } from "./services/usage-service.js";
+import { AccountLoginService } from "./services/account-login.js";
 import { EmbedSidecar } from "./services/embed-sidecar.js";
 import { SchedulerService } from "./services/scheduler.js";
 import { formatDreamProposal } from "./services/consolidate.js";
@@ -218,6 +219,7 @@ export class Daemon {
   /** Subscription-usage meter (account-keyed, disk-cached, self-polling) —
    * see services/usage-service.ts. The daemon only wires broadcast + lifecycle. */
   private readonly usageService = new UsageService({ broadcast: (event) => this.broadcast(event) });
+  readonly accountLogins = new AccountLoginService();
   hintSourcesCache: { toolNames: string[]; models: ModelChoice[] } | undefined;
   bridge: HarnessBridge | undefined;
   scheduler: SchedulerService | undefined;

@@ -296,6 +296,10 @@ export function accountsCatalog() {
   return accountsCatalogPromise;
 }
 
+export function refreshAccountsCatalog() {
+  accountsCatalogPromise = null;
+}
+
 /** Run a room-local plugin action (popup form submit, item action button, or
  * an equivalent slash-command args array) and persist its result.
  * @param {string} command @param {string[]} args */

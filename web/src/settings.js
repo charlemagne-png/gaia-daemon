@@ -4,7 +4,7 @@
 // field hints (state.settingsFileHints) — a raw textarea remains the escape
 // hatch (view toggle) and the only option for files with no hints or
 // unparseable JSON (persona/memory markdown included).
-import { deleteAgent, loadSettingsFile, saveSettingsFile, setKeepAwake, setUserName } from "./actions.js";
+import { deleteAgent, loadSettingsFile, refreshAccountsCatalog, saveSettingsFile, setKeepAwake, setUserName } from "./actions.js";
 import { api } from "./api.js";
 import { $, h } from "./dom.js";
 import { PathText } from "./links.js";
@@ -20,9 +20,11 @@ import { commitTheme, committedThemeId, previewTheme, revertTheme, THEMES } from
 /** @typedef {{ id: string, config: FileDescriptor[], persona: FileDescriptor[], memory: FileDescriptor[], files: FileDescriptor[] }} AgentGroup */
 /** @typedef {(string|number)[]} JsonPath */
 /** @typedef {{ key: string, hint: FieldHint, path: JsonPath }} FieldEntry */
-/** @typedef {{ id: string, harness: string, label?: string, email?: string }} Account */
-/** @typedef {{ id: string, label?: string }} AccountHarness */
+/** @typedef {{ id: string, harness: string, label?: string, email?: string, workspace?: string, providers?: string[] }} Account */
+/** @typedef {{ key: string, label: string }} AccountLoginVariant */
+/** @typedef {{ id: string, label?: string, login: boolean, loginVariants?: AccountLoginVariant[] }} AccountHarness */
 /** @typedef {{ accounts: Account[], harnesses: AccountHarness[] }} AccountsCatalog */
+/** @typedef {{ sessionId: string, harness: string, status: "starting"|"awaiting-signin"|"awaiting-code"|"done"|"error"|"cancelled", url?: string, code?: string, account?: Account, error?: string }} LoginSession */
 /**
  * @typedef {{
  *   draft: any,
@@ -412,15 +414,146 @@ function agentFileLabel(file) {
 }
 
 // ---------------------------------------------------------------------------
-// Accounts section: existing named provider accounts; local UI has no credential-entry controls.
+// Accounts section: harness-grouped credentials + at most one in-flight
+// in-app login session, both held as MODULE state (not on the shared `state`
+// object from state.js — nothing else in the app needs them) and rerendered
+// through the same markDirty("settings") trigger every other view in this
+// file uses. Section is always mounted below the General/Workspace/Agents
+// tabs (see AccountsSection() call in SettingsModal) rather than gated behind
+// its own tab, so it never touches state.settingsTab's typed union.
+
 /** @type {AccountsCatalog|null} */
 let accountsCatalog = null;
 /** @type {string} */
 let accountsError = "";
 /** @type {string} */
 let accountsNotice = "";
+/** @type {LoginSession|null} */
+let loginSession = null;
+/** @type {ReturnType<typeof setInterval>|undefined} */
+let loginPollTimer;
+/** @type {Record<string, string>} */
+let loginLabelDrafts = {};
+/** @type {Record<string, string>} */
+let loginWorkspaceDrafts = {};
+/** @type {string} */
+let loginCodeDraft = "";
 /** @type {Record<string, { label: string, email: string }>} */
 let accountDrafts = {};
+
+/** @param {LoginSession["status"]} status @returns {boolean} */
+function isActiveLoginStatus(status) {
+  return status === "starting" || status === "awaiting-signin" || status === "awaiting-code";
+}
+
+function stopLoginPolling() {
+  if (loginPollTimer === undefined) return;
+  clearInterval(loginPollTimer);
+  loginPollTimer = undefined;
+}
+
+/** Guards against duplicate intervals: any existing poll is cleared before a
+ * new one starts. @param {string} sessionId */
+function startLoginPolling(sessionId) {
+  stopLoginPolling();
+  loginPollTimer = setInterval(() => void pollLoginSession(sessionId), 1000);
+}
+
+/** @param {string} sessionId */
+async function pollLoginSession(sessionId) {
+  try {
+    const body = await api(`/api/accounts/login/${encodeURIComponent(sessionId)}`);
+    applyLoginSession(body.session);
+  } catch (error) {
+    stopLoginPolling();
+    loginSession = null;
+    accountsError = error instanceof Error ? error.message : String(error);
+    markDirty("settings");
+  }
+}
+
+/** Apply a fresh LoginSession from any of the login endpoints, handling the
+ * per-status side effects the spec calls for (stop polling + clear/reload on
+ * terminal statuses). @param {LoginSession} session */
+function applyLoginSession(session) {
+  loginSession = session;
+  if (session.status === "done") {
+    stopLoginPolling();
+    loginSession = null;
+    accountsNotice = `account ${session.account?.id ?? session.harness} added`;
+    markDirty("settings"); // reflect the cleared session/notice now — loadAccounts's own markDirty lands later, once the refetch resolves
+    void loadAccounts();
+    refreshAccountsCatalog();
+    return;
+  }
+  if (session.status === "cancelled") {
+    stopLoginPolling();
+    loginSession = null;
+  } else if (session.status === "error") {
+    stopLoginPolling(); // kept in state (with .error) until the user hits Dismiss
+  }
+  markDirty("settings");
+}
+
+/** @param {string} harnessId @param {string | undefined} [variant] */
+async function startLogin(harnessId, variant) {
+  if (loginSession) return; // only one active login session at a time
+  accountsError = "";
+  accountsNotice = "";
+  const label = (loginLabelDrafts[harnessId] ?? "").trim();
+  const workspace = (loginWorkspaceDrafts[harnessId] ?? "").trim();
+  try {
+    const body = await api("/api/accounts/login", {
+      method: "POST",
+      body: JSON.stringify({ harness: harnessId, ...(label ? { label } : {}), ...(workspace ? { workspace } : {}), ...(variant ? { variant } : {}) }),
+    });
+    applyLoginSession(body.session);
+    if (isActiveLoginStatus(body.session.status)) startLoginPolling(body.session.sessionId);
+  } catch (error) {
+    accountsError = error instanceof Error ? error.message : String(error);
+    markDirty("settings");
+  }
+}
+
+/** @param {string} text */
+async function submitLoginInput(text) {
+  if (!loginSession) return;
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  try {
+    const body = await api(`/api/accounts/login/${encodeURIComponent(loginSession.sessionId)}/input`, {
+      method: "POST",
+      body: JSON.stringify({ text: trimmed }),
+    });
+    loginCodeDraft = "";
+    applyLoginSession(body.session);
+  } catch (error) {
+    accountsError = error instanceof Error ? error.message : String(error);
+    markDirty("settings");
+  }
+}
+
+async function cancelLogin() {
+  if (!loginSession) return;
+  const sessionId = loginSession.sessionId;
+  try {
+    const body = await api(`/api/accounts/login/${encodeURIComponent(sessionId)}`, { method: "DELETE", body: "{}" });
+    applyLoginSession(body.session);
+  } catch (error) {
+    // Never get stuck on a dead session just because the cancel call itself failed.
+    stopLoginPolling();
+    loginSession = null;
+    accountsError = error instanceof Error ? error.message : String(error);
+    markDirty("settings");
+  }
+}
+
+function dismissLoginError() {
+  stopLoginPolling();
+  loginSession = null;
+  markDirty("settings");
+}
+
 /** @param {string} id */
 async function removeAccount(id) {
   if (!confirm(`Remove account "${id}"?`)) return;
@@ -429,6 +562,7 @@ async function removeAccount(id) {
   try {
     await api(`/api/accounts/${encodeURIComponent(id)}`, { method: "DELETE", body: "{}" });
     await loadAccounts();
+    refreshAccountsCatalog();
   } catch (error) {
     accountsError = error instanceof Error ? error.message : String(error);
     markDirty("settings");
@@ -452,6 +586,7 @@ async function saveAccount(account) {
     });
     accountsNotice = `account ${account.id} saved`;
     await loadAccounts();
+    refreshAccountsCatalog();
   } catch (error) {
     accountsError = error instanceof Error ? error.message : String(error);
     markDirty("settings");
@@ -473,10 +608,17 @@ async function loadAccounts() {
 /** @param {Account} account @returns {HTMLElement} */
 function AccountRow(account) {
   const draft = accountDraft(account);
+  const providers = account.providers?.join(", ") || account.harness || "unknown";
+  const emailText = account.email ? ` ${account.email}` : " email not recorded";
+  const title = account.label || account.id;
+  const idText = account.label ? `${account.id} · ` : "";
   return h(
     "div",
     { class: "account-row" },
-    h("div", { class: "account-row-head" }, h("strong", { text: account.id }), h("small", { class: "muted", text: account.email ? ` ${account.email}` : " email not recorded" })),
+    h("div", { class: "account-row-head" },
+      h("strong", { text: title }),
+      h("small", { class: "muted", text: `${idText}${emailText} · ${providers}` })
+    ),
     h(
       "div",
       { class: "settings2-field-control" },
@@ -503,25 +645,146 @@ function AccountRow(account) {
 }
 
 /** @param {AccountHarness} harness @returns {HTMLElement} */
+function LoginControls(harness) {
+  const disabled = loginSession !== null;
+  const input = h("input", {
+    type: "text",
+    placeholder: "label (optional)",
+    value: loginLabelDrafts[harness.id] ?? "",
+    disabled,
+    oninput: (/** @type {Event} */ event) => {
+      loginLabelDrafts[harness.id] = /** @type {HTMLInputElement} */ (event.target).value;
+    },
+  });
+  const workspaceInput = h("input", {
+    type: "text",
+    placeholder: "workspace (optional)",
+    value: loginWorkspaceDrafts[harness.id] ?? "",
+    disabled,
+    oninput: (/** @type {Event} */ event) => {
+      loginWorkspaceDrafts[harness.id] = /** @type {HTMLInputElement} */ (event.target).value;
+    },
+  });
+  const buttons = harness.loginVariants?.length
+    ? harness.loginVariants.map((variant) => h("button", { disabled, onclick: () => void startLogin(harness.id, variant.key), text: variant.label }))
+    : [h("button", { disabled, onclick: () => void startLogin(harness.id), text: "Add account" })];
+  return h(
+    "div",
+    { class: "settings2-field-control account-login-controls" },
+    input,
+    workspaceInput,
+    ...buttons,
+  );
+}
+
+/** @param {LoginSession} session @returns {HTMLElement} */
+function LoginSessionPanel(session) {
+  const cancelButton = h("button", { onclick: () => void cancelLogin(), text: "Cancel" });
+  if (session.status === "error") {
+    return h(
+      "div",
+      { class: "settings2-row account-login-session" },
+      h("span", { class: "settings2-error-line", text: session.error ?? "login failed" }),
+      h("button", { onclick: dismissLoginError, text: "Dismiss" }),
+    );
+  }
+  if (session.status === "starting") {
+    return h("div", { class: "settings2-row account-login-session" }, h("span", { class: "muted", text: "starting login…" }), cancelButton);
+  }
+  if (session.status === "awaiting-signin") {
+    return h(
+      "div",
+      {},
+      h(
+        "div",
+        { class: "settings2-row account-login-session" },
+        session.url ? h("a", { href: session.url, target: "_blank", rel: "noreferrer", text: "Open sign-in page" }) : h("span", { class: "muted", text: "waiting for a sign-in link…" }),
+        cancelButton,
+      ),
+      session.code ? h("div", { class: "settings2-row account-login-session" }, h("span", { text: "Enter this code on the page: " }), h("code", { text: session.code })) : null,
+      h("small", { class: "muted", text: "Pi is running the subscription login in a terminal session; use the shown link/code only if Pi asks for it." }),
+    );
+  }
+  // "awaiting-code"
+  const codeInput = /** @type {HTMLInputElement} */ (
+    h("input", {
+      type: "text",
+      placeholder: "paste code",
+      value: loginCodeDraft,
+      oninput: (/** @type {Event} */ event) => {
+        loginCodeDraft = /** @type {HTMLInputElement} */ (event.target).value;
+      },
+    })
+  );
+  return h(
+    "div",
+    {},
+    session.url ? h("div", { class: "settings2-row account-login-session" }, h("a", { href: session.url, target: "_blank", rel: "noreferrer", text: "Open sign-in page" })) : null,
+    h(
+      "div",
+      { class: "settings2-field-control account-login-controls" },
+      codeInput,
+      h("button", { onclick: () => void submitLoginInput(codeInput.value), text: "Submit" }),
+      cancelButton,
+    ),
+  );
+}
+
+/** @param {AccountHarness} harness @returns {HTMLElement} */
 function HarnessAccountsGroup(harness) {
   const accounts = (accountsCatalog?.accounts ?? []).filter((account) => account.harness === harness.id);
+  const isThisSession = loginSession?.harness === harness.id;
+
+  // Group accounts by workspace
+  const workspaceGroups = new Map();
+  const noWorkspace = [];
+
+  for (const account of accounts) {
+    if (account.workspace) {
+      if (!workspaceGroups.has(account.workspace)) {
+        workspaceGroups.set(account.workspace, []);
+      }
+      workspaceGroups.get(account.workspace).push(account);
+    } else {
+      noWorkspace.push(account);
+    }
+  }
+
+  const workspaceElements = [];
+
+  // Render workspace groups
+  for (const [workspace, wsAccounts] of Array.from(workspaceGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    workspaceElements.push(
+      h("div", { class: "workspace-group" },
+        h("div", { class: "muted workspace-group-title", text: `📁 ${workspace}` }),
+        ...wsAccounts.map((/** @type {Account} */ account) => AccountRow(account))
+      )
+    );
+  }
+
+  // Render accounts without workspace
+  if (noWorkspace.length > 0) {
+    workspaceElements.push(...noWorkspace.map((/** @type {Account} */ account) => AccountRow(account)));
+  }
+
   return h(
     "div",
     { class: "settings2-form" },
     h("div", { class: "nav-title", text: harness.label ?? harness.id }),
-    accounts.length === 0 ? h("div", { class: "empty", text: "no accounts" }) : accounts.map((account) => AccountRow(account)),
-
+    accounts.length === 0 ? h("div", { class: "empty", text: "no accounts" }) : workspaceElements,
+    isThisSession ? null : harness.login ? LoginControls(harness) : h("div", { class: "muted", text: "add credentials via accounts.json" }),
+    isThisSession && loginSession ? LoginSessionPanel(loginSession) : null,
   );
 }
 
 function AccountsSection() {
   const managed = new Set((accountsCatalog?.accounts ?? []).map((account) => account.id));
-  const usage = Object.values(state.usage).filter((limits) => managed.has(limits.account));
+  const usage = Object.values(state.usage);
   return h(
     "div",
     { class: "settings2-body" },
     h("h3", { text: "Accounts" }),
-    h("p", { class: "muted", text: "Manage the named accounts GAIA can bind to agents. Room usage is scoped to that room; this page is the only all-account overview." }),
+    h("p", { class: "muted", text: "Manage the named logins GAIA can bind to agents. Room usage is scoped to that room; this page is the only all-account overview." }),
     accountsError ? h("div", { class: "settings2-error-line", text: accountsError }) : null,
     accountsNotice ? h("div", { class: "settings2-notice", text: accountsNotice }) : null,
     accountsCatalog === null
@@ -529,18 +792,85 @@ function AccountsSection() {
       : accountsCatalog.harnesses.length === 0
         ? h("div", { class: "empty", text: "no harnesses support accounts" })
         : accountsCatalog.harnesses.map((harness) => HarnessAccountsGroup(harness)),
-    h("h3", { text: "Usage · all managed accounts" }),
+    h("h3", { text: "Usage · all accounts" }),
     usage.length === 0
-      ? h("div", { class: "empty", text: "no usage snapshots for managed accounts yet" })
-      : usage.map((limits) => {
-          const account = accountsCatalog?.accounts.find((item) => item.id === limits.account);
-          return h(
-            "div",
-            { class: "settings2-row account-usage-row" },
-            h("span", { text: account?.label || account?.email || limits.account }),
-            h("small", { class: "muted", text: limits.windows.map((window) => `${window.label}: ${window.percent}%`).join(" · ") }),
-          );
-        }),
+      ? h("div", { class: "empty", text: "no usage data yet" })
+      : (() => {
+          // Deduplicate: prefer named accounts over ambient, and merge duplicate ambients by email+provider
+          const seen = new Map(); // key: email+provider
+          /** @type {import("./types.js").UsageLimits[]} */
+          const filtered = [];
+
+          for (const limits of usage) {
+            const account = accountsCatalog?.accounts.find((item) => item.id === limits.account);
+            const isManaged = managed.has(limits.account);
+            const displayEmail = account?.email;
+            const providers = account?.providers?.join(",") || account?.harness || "unknown";
+            const dedupeKey = `${displayEmail}:${providers}`;
+
+            const existing = seen.get(dedupeKey);
+            if (existing) {
+              // Prefer managed over ambient
+              if (isManaged && existing.account.startsWith("ambient:")) {
+                seen.set(dedupeKey, limits);
+                const idx = filtered.findIndex(l => l.account === existing.account);
+                if (idx >= 0) filtered[idx] = limits;
+              }
+              continue;
+            }
+
+            seen.set(dedupeKey, limits);
+            filtered.push(limits);
+          }
+
+          return filtered.map((limits) => {
+            const account = accountsCatalog?.accounts.find((item) => item.id === limits.account);
+            const isManaged = managed.has(limits.account);
+            const displayEmail = account?.email;
+            const providers = account?.providers?.join(", ") || account?.harness || "";
+            const label = account?.label || displayEmail || limits.account;
+            const badge = isManaged ? "" : " (ambient)";
+            const providerBadge = providers ? ` · ${providers}` : "";
+
+            const harnessId = account?.harness ?? null;
+
+            return h(
+              "div",
+              { class: "settings2-row account-usage-row" },
+              h("div", { style: "flex: 1;" },
+                h("span", { text: label + badge + providerBadge }),
+                h("br"),
+                h("small", { class: "muted", text: limits.windows.map((window) => `${window.label}: ${window.percent}%`).join(" · ") })
+              ),
+              harnessId ? h("button", {
+                class: "settings2-button",
+                text: "Re-auth",
+                style: "margin-left: 1rem; padding: 0.25rem 0.75rem; font-size: 0.85rem;",
+                onclick: async () => {
+                  const harness = accountsCatalog?.harnesses.find(h => h.id === harnessId);
+                  if (!harness?.login) {
+                    accountsError = `${harnessId} doesn't support login`;
+                    markDirty("settings");
+                    return;
+                  }
+                  accountsError = "";
+                  accountsNotice = `Starting ${harness.label} login...`;
+                  markDirty("settings");
+                  try {
+                    const variant = account?.providers?.includes("anthropic") ? "anthropic" : account?.providers?.includes("openai-codex") ? "openai-codex" : undefined;
+                    const result = await api("/api/accounts/login", { method: "POST", body: JSON.stringify({ harness: harnessId, accountId: limits.account, ...(variant ? { variant } : {}) }) });
+                    applyLoginSession(result.session);
+                    if (isActiveLoginStatus(result.session.status)) startLoginPolling(result.session.sessionId);
+                  } catch (err) {
+                    accountsError = err instanceof Error ? err.message : String(err);
+                    accountsNotice = "";
+                    markDirty("settings");
+                  }
+                }
+              }) : null
+            );
+          });
+        })(),
   );
 }
 
