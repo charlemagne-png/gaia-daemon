@@ -438,6 +438,54 @@ test("resumed turn enters the settlement funnel once under a double-settle", asy
   assert.equal(child.markedDeliveryIds[0], state.summon?.deliveryId);
 });
 
+test("resume arriving after outcome seal gets a successor delivery", async () => {
+  const { workspace, path } = await makeWorkspace();
+  const childRoomId = "terry-seal-successor";
+  await mkdir(join(workspace.roomsDir, childRoomId), { recursive: true });
+  await writeJsonAtomic(workspacePaths.roomState(path, childRoomId), {
+    activeRoles: {}, agentCursors: {}, parentRoomId: "default",
+    summon: { agentId: "terry", deliver: "note", status: "running", deliveryId: "initial", launchedAt: new Date().toISOString() },
+  });
+  const handle = await RoomHandle.open(path, childRoomId);
+  const child = fakeRoom("settled output");
+  child.settle();
+  child.armSummonDelivery = async (deliveryId, expectedDeliveryId) => {
+    let armed = false;
+    await handle.updateState((state) => {
+      if (state.summon?.status !== "running" || state.summon.deliveryId !== expectedDeliveryId) return;
+      state.summon.deliveryId = deliveryId;
+      armed = true;
+    });
+    return armed;
+  };
+  child.markSummonDeliverySettled = async (deliveryId) => {
+    await handle.updateState((state) => {
+      if (state.summon?.deliveryId === deliveryId) state.summon.status = "delivered";
+    });
+  };
+  let entered!: () => void;
+  let release!: () => void;
+  const parentEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const parentRelease = new Promise<void>((resolve) => { release = resolve; });
+  const parent = fakeRoom("");
+  parent.deliverAgentResult = async (from, reply, delivery) => {
+    parent.delivered.push({ from, reply, delivery });
+    if (parent.delivered.length === 1) { entered(); await parentRelease; }
+  };
+  const coordinator = new SummonCoordinator(workspace, path, async (roomId) => roomId === "default" ? parent : child, async () => 8, () => {});
+
+  const settling = coordinator.settleChildTurn(childRoomId);
+  await parentEntered;
+  await coordinator.resume(childRoomId, child, "successor work");
+  release();
+  await settling;
+
+  assert.equal(parent.delivered.length, 2);
+  assert.equal(parent.delivered[0].delivery.deliveryId, "initial");
+  assert.notEqual(parent.delivered[1].delivery.deliveryId, "initial");
+  assert.equal((await handle.state()).summon?.status, "delivered");
+});
+
 test("resume pins execution to summon.agentId despite mutable activeAgent", async () => {
   const { workspace, path } = await makeWorkspace();
   const childRoomId = "terry-agent-pin";
