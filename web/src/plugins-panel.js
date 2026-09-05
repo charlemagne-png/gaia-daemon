@@ -1,22 +1,35 @@
-// Renders room-local plugin dialogs as a themed, transient overlay popup \u2014
-// never a persistent sidebar panel, never an iframe. A plugin's panel() is
-// present in the snapshot only while its own state says it's open (e.g.
-// rpg.mjs's `open` flag, cleared once an action completes or its `close`
-// action runs); like contextgate.js's modal, this is purely snapshot-driven
-// with no independent client-side open/close flag \u2014 resolving/closing always
-// round-trips through the plugin action so the two can't fall out of sync.
-// Every element here reuses the shared .modal-backdrop/.modal/.prompt-*
-// theme-variable classes: zero plugin-owned colors.
+// Renders room-local plugin panels. Default placement stays the existing
+// transient overlay popup; placement:"corner" uses the same declarative
+// forms/items data in a minimizable corner dock. No iframe/embed surface.
 import { runPluginAction } from "./actions.js";
 import { $, h } from "./dom.js";
 import { registerRegion } from "./render.js";
 import { state } from "./state.js";
 
+/** @typedef {import("./types.js").PluginPanel} PluginPanel */
 /** @typedef {import("./types.js").PluginPanelField} PluginPanelField */
+/** @typedef {[string, PluginPanel]} PanelEntry */
 
 /** @param {string} command @param {string[]} args */
 function submit(command, args) {
   void runPluginAction(command, args);
+}
+
+/** @param {PluginPanel} panel @returns {"overlay"|"corner"} */
+export function pluginPanelPlacement(panel) {
+  return panel.placement === "corner" ? "corner" : "overlay";
+}
+
+/** @param {PluginPanel} panel @returns {"br"|"bl"|"tr"|"tl"} */
+export function pluginPanelCorner(panel) {
+  switch (panel.corner) {
+    case "bl":
+    case "tr":
+    case "tl":
+      return panel.corner;
+    default:
+      return "br";
+  }
 }
 
 /**
@@ -72,7 +85,7 @@ function Item(command, item) {
   );
 }
 
-/** @param {string} command @param {import("./types.js").PluginPanel} panel */
+/** @param {string} command @param {PluginPanel} panel */
 function PluginModal(command, panel) {
   const close = () => submit(command, ["close"]);
   const backdrop = h(
@@ -94,18 +107,122 @@ function PluginModal(command, panel) {
   return backdrop;
 }
 
+/** @param {string} command @param {PluginPanel} panel @param {number} stack */
+function PluginCorner(command, panel, stack) {
+  const corner = pluginPanelCorner(panel);
+  const expanded = cornerExpanded(command);
+  const style = `--plugin-corner-offset:${stack * 12}px;`;
+  return h(
+    "aside",
+    {
+      class: `plugin-corner plugin-corner--${corner} ${expanded ? "plugin-corner--expanded" : "plugin-corner--collapsed"}`,
+      style,
+      "data-plugin-command": command,
+      "aria-label": `${panel.title} plugin panel`,
+    },
+    expanded ? CornerPanel(command, panel) : CornerFab(command, panel),
+  );
+}
+
+/** @param {string} command @param {PluginPanel} panel */
+function CornerFab(command, panel) {
+  return h(
+    "button",
+    {
+      class: "plugin-corner-fab",
+      type: "button",
+      title: `Open ${panel.title}`,
+      "aria-label": `Open ${panel.title}`,
+      "aria-expanded": "false",
+      onclick: () => setCornerExpanded(command, true),
+    },
+    h("span", { class: "plugin-corner-fab-mark", text: panel.title.trim().slice(0, 1).toUpperCase() || "•" }),
+  );
+}
+
+/** @param {string} command @param {PluginPanel} panel */
+function CornerPanel(command, panel) {
+  const close = () => submit(command, ["close"]);
+  return h(
+    "section",
+    { class: "plugin-corner-panel", "aria-label": panel.title, "aria-expanded": "true" },
+    h(
+      "header",
+      { class: "plugin-corner-head" },
+      h("div", { class: "plugin-corner-title" }, h("h2", { text: panel.title }), panel.description ? h("p", { text: panel.description }) : null),
+      h(
+        "div",
+        { class: "plugin-corner-controls" },
+        h("button", { class: "plugin-corner-minimize", type: "button", title: "Minimize", "aria-label": "Minimize", onclick: () => setCornerExpanded(command, false), text: "–" }),
+        h("button", { class: "plugin-corner-close", type: "button", title: "Close", "aria-label": "Close", onclick: close, text: "×" }),
+      ),
+    ),
+    h(
+      "div",
+      { class: "plugin-corner-body" },
+      (panel.forms ?? []).map((form) => Form(command, form)),
+      (panel.items ?? []).map((item) => Item(command, item)),
+    ),
+  );
+}
+
 /** @param {KeyboardEvent} event */
 function onEscape(event) {
   if (event.key !== "Escape") return;
   const panels = openPanels();
-  if (panels.length === 0) return;
+  const expandedCorner = [...panels].reverse().find(([command, panel]) => pluginPanelPlacement(panel) === "corner" && cornerExpanded(command));
+  if (expandedCorner) {
+    event.preventDefault();
+    setCornerExpanded(expandedCorner[0], false);
+    return;
+  }
+  const overlayPanels = panels.filter(([, panel]) => pluginPanelPlacement(panel) === "overlay");
+  if (overlayPanels.length === 0) return;
   event.preventDefault();
-  const [command] = panels[panels.length - 1];
+  const [command] = overlayPanels[overlayPanels.length - 1];
   submit(command, ["close"]);
 }
 
+/** @returns {PanelEntry[]} */
 function openPanels() {
-  return Object.entries(state.snapshot?.room.pluginPanels ?? {}).filter(([, panel]) => (panel.forms?.length ?? 0) > 0 || (panel.items?.length ?? 0) > 0);
+  return /** @type {PanelEntry[]} */ (Object.entries(state.snapshot?.room.pluginPanels ?? {})).filter(([, panel]) => (panel.forms?.length ?? 0) > 0 || (panel.items?.length ?? 0) > 0);
+}
+
+/** @param {string} command */
+function cornerExpanded(command) {
+  try {
+    const value = localStorage.getItem(cornerStorageKey(command));
+    return value === null ? true : value === "true";
+  } catch {
+    return true;
+  }
+}
+
+/** @param {string} command @param {boolean} expanded */
+function setCornerExpanded(command, expanded) {
+  try {
+    localStorage.setItem(cornerStorageKey(command), String(expanded));
+  } catch {
+    // Session-only when localStorage is unavailable.
+  }
+  renderPluginPanels();
+}
+
+/** @param {string} command */
+function cornerStorageKey(command) {
+  return `gaia.pluginPanel.${command}.expanded`;
+}
+
+/** @param {PanelEntry[]} panels */
+function cornerStackIndexes(panels) {
+  /** @type {Record<string, number>} */
+  const counts = {};
+  return panels.map(([command, panel]) => {
+    const corner = pluginPanelCorner(panel);
+    const index = counts[corner] ?? 0;
+    counts[corner] = index + 1;
+    return /** @type {[string, PluginPanel, number]} */ ([command, panel, index]);
+  });
 }
 
 let escBound = false;
@@ -120,7 +237,12 @@ function renderPluginPanels() {
     return;
   }
   if (!escBound) { window.addEventListener("keydown", onEscape, true); escBound = true; }
-  slot.replaceChildren(...panels.map(([command, panel]) => PluginModal(command, panel)));
+  const overlayPanels = panels.filter(([, panel]) => pluginPanelPlacement(panel) === "overlay");
+  const cornerPanels = panels.filter(([, panel]) => pluginPanelPlacement(panel) === "corner");
+  slot.replaceChildren(
+    ...overlayPanels.map(([command, panel]) => PluginModal(command, panel)),
+    ...cornerStackIndexes(cornerPanels).map(([command, panel, stack]) => PluginCorner(command, panel, stack)),
+  );
 }
 
 registerRegion("plugins", renderPluginPanels);

@@ -66,7 +66,7 @@ import { capabilitiesFor, contextWindowFor, findHarness, harnessIdFor, nativeCom
 import { readOptional, renderAttachmentLines, renderRoomTranscript } from "../harness/prompt.js";
 import { readUserNameSetting } from "./user-name.js";
 import { HELP_TEXT, SLASH_COMMANDS, hasExplicitMention, mentionedAgents, parseCommand, planMentionRoute, validateThinkingLevel, type SlashCommand } from "./commands.js";
-import { loadCommandPlugins, type CommandPlugin, type PluginContext, type PluginPanel } from "./plugins.js";
+import { loadCommandPlugins, sanitizePluginPanel, type CommandPlugin, type PluginContext, type PluginPanel } from "./plugins.js";
 import { SANITIZE_REVIEWER_ID, buildLoveSanitizePrompt, buildRebirthBriefPrompt, buildSanitizePrompt, parseRebirthBrief, parseSanitizeProposal, type SanitizeContext } from "./sanitize.js";
 import { applyEventToDetails, finalizeInterruptedTools, runAgentTurn } from "./turns.js";
 import type { EpisodeCapture } from "./memory-service.js";
@@ -2678,7 +2678,7 @@ export class RoomService {
     for (const plugin of (await this.pluginsPromise).values()) {
       if (!plugin.panel) continue;
       try {
-        const panel = await plugin.panel(this.pluginContext(plugin, state));
+        const panel = sanitizePluginPanel(await plugin.panel(this.pluginContext(plugin, state)));
         if (panel) panels[plugin.command] = panel;
       } catch (error) {
         console.warn(`[plugins] panel ${plugin.command}: ${error instanceof Error ? error.message : String(error)}`);

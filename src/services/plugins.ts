@@ -23,19 +23,101 @@ export interface PluginPanelField {
   options?: Array<{ value: string; label: string }>;
 }
 
+export type PluginPanelPlacement = "overlay" | "corner";
+export type PluginPanelCorner = "br" | "bl" | "tr" | "tl";
+
 /** Declarative, data-only plugin panel. The web client renders this generic
- * shape as a transient, themed overlay dialog (never a persistent panel and
- * never an iframe: no plugin may embed a separate browser-owned experience
- * inside the room UI — forms/items are the only surface). A panel should be
- * present only while the plugin's own state says it is open (e.g. an explicit
- * "open" flag set by its command, cleared again once an action completes or a
- * conventional "close" action runs); the client has no independent open/close
- * flag of its own, so an always-returned panel would never go away. */
+ * shape as a transient, themed overlay dialog by default, or as an optional
+ * corner dock when the plugin declares placement: "corner". No iframe/embed:
+ * forms/items are the only surface. */
 export interface PluginPanel {
   title: string;
   description?: string;
+  placement?: PluginPanelPlacement;
+  corner?: PluginPanelCorner;
   forms?: Array<{ action: string; label: string; fields: PluginPanelField[] }>;
   items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean }> }>;
+}
+
+const panelPlacements = new Set(["overlay", "corner"]);
+const panelCorners = new Set(["br", "bl", "tr", "tl"]);
+
+/** @param panel plugin-supplied panel; output is the snapshot-safe panel shape. */
+export function sanitizePluginPanel(panel: PluginPanel | undefined): PluginPanel | undefined {
+  if (!panel) return undefined;
+  const title = cleanString(panel.title, 160);
+  if (!title) return undefined;
+  const out: PluginPanel = { title };
+  const description = cleanString(panel.description, 800);
+  if (description) out.description = description;
+  if (panelPlacements.has(String(panel.placement))) out.placement = panel.placement;
+  if (panelCorners.has(String(panel.corner))) out.corner = panel.corner;
+  const forms = sanitizeForms(panel.forms);
+  if (forms.length) out.forms = forms;
+  const items = sanitizeItems(panel.items);
+  if (items.length) out.items = items;
+  return out.forms?.length || out.items?.length ? out : undefined;
+}
+
+function cleanString(value: unknown, max: number): string {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function sanitizeForms(forms: PluginPanel["forms"]): NonNullable<PluginPanel["forms"]> {
+  return (Array.isArray(forms) ? forms : []).slice(0, 12).flatMap((form) => {
+    const action = cleanString(form?.action, 120);
+    const label = cleanString(form?.label, 160);
+    const fields = sanitizeFields(form?.fields);
+    return action && label && fields.length ? [{ action, label, fields }] : [];
+  });
+}
+
+function sanitizeFields(fields: PluginPanelField[] | undefined): PluginPanelField[] {
+  return (Array.isArray(fields) ? fields : []).slice(0, 16).flatMap((field) => {
+    const name = cleanString(field?.name, 120);
+    const label = cleanString(field?.label, 160);
+    const type = field?.type === "select" ? "select" : field?.type === "text" ? "text" : undefined;
+    if (!name || !label || !type) return [];
+    const out: PluginPanelField = { name, label, type };
+    const value = cleanString(field?.value, 400);
+    if (value) out.value = value;
+    if (type === "select") {
+      const options = sanitizeOptions(field?.options);
+      if (options.length) out.options = options;
+    }
+    return [out];
+  });
+}
+
+function sanitizeOptions(options: PluginPanelField["options"]): NonNullable<PluginPanelField["options"]> {
+  return (Array.isArray(options) ? options : []).slice(0, 64).flatMap((option) => {
+    const value = cleanString(option?.value, 400);
+    const label = cleanString(option?.label, 400);
+    return value && label ? [{ value, label }] : [];
+  });
+}
+
+function sanitizeItems(items: PluginPanel["items"]): NonNullable<PluginPanel["items"]> {
+  return (Array.isArray(items) ? items : []).slice(0, 64).flatMap((item) => {
+    const title = cleanString(item?.title, 160);
+    if (!title) return [];
+    const out: NonNullable<PluginPanel["items"]>[number] = { title };
+    const detail = cleanString(item?.detail, 800);
+    if (detail) out.detail = detail;
+    const actions = sanitizeActions(item?.actions);
+    if (actions.length) out.actions = actions;
+    return [out];
+  });
+}
+
+function sanitizeActions(actions: NonNullable<NonNullable<PluginPanel["items"]>[number]["actions"]> | undefined): NonNullable<NonNullable<PluginPanel["items"]>[number]["actions"]> {
+  return (Array.isArray(actions) ? actions : []).slice(0, 16).flatMap((action) => {
+    const name = cleanString(action?.action, 120);
+    const label = cleanString(action?.label, 160);
+    if (!name || !label) return [];
+    const args = (Array.isArray(action?.args) ? action.args : []).slice(0, 16).map((arg) => cleanString(arg, 400)).filter(Boolean);
+    return [{ action: name, label, ...(args.length ? { args } : {}), ...(action?.danger === true ? { danger: true } : {}) }];
+  });
 }
 
 export interface PluginContext {

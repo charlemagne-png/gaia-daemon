@@ -1266,6 +1266,8 @@ export interface SnapshotPluginPanelField {
 export interface SnapshotPluginPanel {
   title: string;
   description?: string;
+  placement?: "overlay" | "corner";
+  corner?: "br" | "bl" | "tr" | "tl";
   forms?: Array<{ action: string; label: string; fields: SnapshotPluginPanelField[] }>;
   items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean }> }>;
 }
