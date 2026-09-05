@@ -48,3 +48,48 @@ Writing incrementally as frames are judged...
 **Before/After:** No radius changes (not in scope)
 **Verdict:** PASS — unchanged as expected
 
+---
+
+## Wave 3: Radius System
+
+**Token definitions:** --r-sm (4px), --r-md (6px), --r-lg (10px), --r-full (999px) ✓
+
+**Applications verified:**
+- Tabs: border-radius: var(--r-md) var(--r-md) 0 0 (rounded top only) ✓
+- Buttons: --r-sm throughout ✓  
+- Inputs/text fields: --r-md ✓
+- Panels/modals: --r-lg ✓
+- Dots/avatars: --r-full ✓
+- Focus ring: 3px box-shadow on :focus/:focus-within ✓
+
+**Scope discipline:** No bubbly creep, no wave 5+ features ✓
+
+**Regression check:** No clipping, no overflow, existing studio features preserved ✓
+
+**Verdict:** ACCEPT—systematic radius hierarchy applied per spec, clean execution, no scope creep
+
+---
+
+## Wave 4: Motion System
+
+**Token definitions:** --dur-instant/fast/base/slow, --ease-out/in/inout/spring ✓
+
+**Applications verified:**
+- All transitions use token durations (--dur-fast 150ms, --dur-base 250ms) ✓
+- All transitions use token easings (--ease-out primary) ✓  
+- Zero hardcoded transition durations found (grep confirmed) ✓
+- Animations (keyframes) retain specific durations for special effects (loading pulses, mode glows) — expected ✓
+
+**Reduced-motion compliance:**
+```css
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: var(--dur-instant) !important; 
+      transition-duration: var(--dur-instant) !important; }
+}
+```
+Enforced globally + per-mode overrides (teleport/berserk/love) ✓
+
+**Scope discipline:** Motion tokens in transitions only, no progressive disclosure, no de-crowd features ✓
+
+**Verdict:** ACCEPT—comprehensive motion tokenization, reduced-motion law enforced, clean scope
+
