@@ -1,6 +1,6 @@
 // The right-hand room panel: agents (role select, main-agent star, voice call
 // button) and recent tasks.
-import { accountsCatalog, cancelActiveTask, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, sendMessage, setQueuedPaused, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setRoomAgentDialogue } from "./actions.js";
+import { accountsCatalog, cancelActiveTask, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, runPluginAction, sendMessage, setQueuedPaused, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setRoomAgentDialogue } from "./actions.js";
 import { agentGlyph, STATE, UI } from "./glyphs.js";
 import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
 import { $, h } from "./dom.js";
@@ -312,7 +312,7 @@ window.addEventListener("click", (event) => {
  */
 function TodoSection(snapshot) {
   const tasks = snapshot?.tasks ?? [];
-  const notes = snapshot?.room.notes ?? [];
+  const notes = pluginNoteRows(snapshot) ?? (snapshot?.room.notes ?? []).map((note) => ({ kind: "legacy", id: note.id, text: note.text }));
   const waiting = tasks.filter((task) => task.status === "queued" || task.status === "paused");
   const history = tasks.filter((task) => task.status !== "queued" && task.status !== "paused").slice(-5);
   const rows = [...history, ...waiting];
@@ -331,13 +331,34 @@ function TodoSection(snapshot) {
   );
 }
 
-/** @param {import("./types.js").RoomNote} note */
+/**
+ * @typedef {{ kind: "legacy"; id: string; text: string } | { kind: "plugin"; text: string; action?: { action: string; label: string; args?: string[]; danger?: boolean } }} NotePanelRow
+ */
+
+/** @param {import("./types.js").Snapshot | null | undefined} snapshot @returns {NotePanelRow[] | undefined} */
+function pluginNoteRows(snapshot) {
+  const panel = snapshot?.room.pluginPanels?.note;
+  if (!panel) return undefined;
+  const items = panel.items ?? [];
+  return items.map((item) => {
+    const action = item.actions?.find((candidate) => candidate.action === "delete") ?? item.actions?.[0];
+    return { kind: "plugin", text: item.title, action };
+  });
+}
+
+/** @param {NotePanelRow} note */
 function NoteRow(note) {
   return h(
     "div",
     { class: "sticky-note" },
     h("small", { text: note.text, title: note.text }),
-    h("button", { type: "button", class: "todo-action danger", title: "dismiss this note", text: "✕", onclick: () => void deleteNote(note.id) }),
+    h("button", {
+      type: "button",
+      class: "todo-action danger",
+      title: "dismiss this note",
+      text: "✕",
+      onclick: () => note.kind === "plugin" ? void runPluginAction("note", note.action?.args ?? ["delete"]) : void deleteNote(note.id),
+    }),
   );
 }
 

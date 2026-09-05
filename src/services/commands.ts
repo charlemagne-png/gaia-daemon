@@ -27,7 +27,6 @@ export type SlashCommand =
   | { type: "schedule"; sub: "list" | "run"; id?: string }
   | { type: "steer"; text?: string }
   | { type: "queue"; text?: string }
-  | { type: "note"; text?: string }
   | { type: "scaffold"; task?: string }
   | { type: "cancel" }
   | { type: "goal"; sub: "set"; objective: string; tokens?: number }
@@ -91,7 +90,6 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "schedule", type: "schedule", description: "list scheduled jobs or run one now: /schedule [run <id>]" },
   { name: "steer", type: "steer", description: "inject guidance into the running turn: /steer <text>" },
   { name: "queue", type: "queue", description: "park an idea on the durable queue without steering the running turn: /queue <text> (pause/resume it in the tasks panel)" },
-  { name: "note", type: "note", description: "pin a sticky note of something to prompt later: /note <text> (shown above queued messages in the tasks panel)" },
   {
     name: "scaffold",
     type: "scaffold",
@@ -226,8 +224,6 @@ export function parseCommand(input: string): SlashCommand {
     }
     case "queue":
       return { type: "queue", text: args.join(" ") || undefined };
-    case "note":
-      return { type: "note", text: args.join(" ") || undefined };
     case "scaffold":
       // The whole tail is the steward TASK — forwarded verbatim as the
       // subroom's first message, so it is never mention-stripped or split.

@@ -378,7 +378,6 @@ const COMMANDS: Record<string, CommandHandler> = {
   teleport: (service, command) => (command.type === "teleport" ? service.runTeleportCommand(command.on) : Promise.resolve("")),
   scaffold: async () => "usage: /scaffold <task>",
   queue: async () => "usage: /queue <text> — park an idea on the durable queue without steering the running turn",
-  note: async () => "usage: /note <text> — pin a sticky note under tasks",
   "thanks-dario": (service, command) => (command.type === "thanks-dario" ? service.runThanksDarioCommand(command.sub) : Promise.resolve("")),
   // DogMode (/dog + its discipline verbs) is a bundled command-plugin, not a
   // registry entry — see plugins/defaults/dog-mode.mjs + sendMessage()'s
@@ -699,18 +698,6 @@ export class RoomService {
       command = { type: "message", text };
       options = { ...options, queue: true };
     }
-    if (command.type === "note" && command.text) {
-      const task = this.createTask(text, []);
-      this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
-      const note = await this.room.addNote(command.text);
-      const event: RoomEvent = { id: `system_${task.id}`, timestamp: new Date().toISOString(), author: "system", text: `📌 noted — pinned under tasks: “${note.text}”` };
-      this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
-      task.status = "complete";
-      task.endedAt = new Date().toISOString();
-      this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
-      void this.emitSnapshot();
-      return task;
-    }
     if (command.type === "berserk" && !command.off) {
       const proclamation = await this.runBerserkCommand(false);
       const event: RoomEvent = { id: newRoomEventId(), timestamp: new Date().toISOString(), author: "system", text: proclamation };
@@ -789,7 +776,7 @@ export class RoomService {
           options = { ...options, targets: [target], nativeCommand: true };
         } else if (text.trim().split(/\s+/).length > 1) {
           // Not a known command, and no agent can run it as a native command — but
-          // it carries content ("/note buy milk", "/deep-research quantum"), so it
+          // it carries content ("/deep-research quantum"), so it
           // is the user's MESSAGE, not a typo. Deliver it rather than discard it
           // with an "Unknown command" reply. A user message may never disappear.
           // (A lone contentless "/typo" still falls through to the corrective hint.)
