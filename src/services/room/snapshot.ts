@@ -71,14 +71,15 @@ export class RoomSnapshotMixin {
     const found = beforeId ? events.findIndex((event: RoomEvent) => event.id === beforeId) : -1;
     const end = found >= 0 ? found : events.length;
     const start = Math.max(0, end - Math.max(1, limit));
-    return { events: this.displayEvents(events.slice(start, end)), hasMore: start > 0 };
+    const state = await this.room.state();
+    return { events: await this.pluginEventActions(this.displayEvents(events.slice(start, end)), state), hasMore: start > 0 };
   }
 
   async getSnapshot(): Promise<Snapshot> {
     await this.init();
     const all = (await this.room.eventsFrom(0)).events;
-    const events = this.displayEvents(all.slice(-this.workspace.config.transcriptWindow));
     const state = await this.room.state();
+    const events = await this.pluginEventActions(this.displayEvents(all.slice(-this.workspace.config.transcriptWindow)), state);
     const pluginPanels = await this.pluginPanels(state);
     const pluginChromeTokens = await this.pluginChromeTokens(state);
     // The selected agent plus any agents actively executing this room's turn

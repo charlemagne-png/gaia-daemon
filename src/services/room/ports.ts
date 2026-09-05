@@ -11,6 +11,7 @@ import type {
   PendingTurn,
   PetProgressStatus,
   RoomGoal,
+  RoomEvent,
   RoomEventKind,
   SanitizeProposal,
   SanitizeStatus,
@@ -56,6 +57,8 @@ export interface RoomTurnLoopPort {
   pluginTurnStart(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<void>;
   pluginPrompt(state: Awaited<ReturnType<RoomHandle["state"]>>, agentId: string): Promise<string | undefined>;
   pluginChromeTokens(state?: Awaited<ReturnType<RoomHandle["state"]>>, roomId?: string): Promise<string[] | undefined>;
+  pluginEventActions(events: RoomEvent[], state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<RoomEvent[]>;
+  runPluginEventAction(pluginKey: string, eventId: string, action: string, args: string[]): Promise<string>;
   pluginRenderCap(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<RenderCap | undefined>;
   pluginRoomMetadataPolicy(text: string): Promise<void>;
   fireWatchdogSteer(target: string, runtime: AgentRuntime, message: string): Promise<void>;

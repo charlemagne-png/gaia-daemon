@@ -7,7 +7,7 @@
 // rebuilding the whole transcript. v1's author+text merge heuristic is gone:
 // when the final room-event commits under the same id, the stream entry is
 // dropped and the keyed node swaps to the committed version in place.
-import { deleteQueuedMessage, retryMessage, setRoomBookmark } from "./actions.js";
+import { deleteQueuedMessage, retryMessage, setRoomBookmark, runPluginEventAction } from "./actions.js";
 import { agentGlyph, KIND, STATE, UI } from "./glyphs.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
@@ -62,6 +62,7 @@ export { splitLeadingGaiaThink } from "../shared/gaia-think.js";
  * @property {string} [queuedTaskId] The durable queue task id behind a `queued`
  * @property {boolean} [queuedPaused] Whether this queued message is paused
  *   ghost — the ✕ delete action removes exactly this entry from the queue.
+ * @property {import("../../src/core/types.js").RoomEventPluginAction[]} [pluginActions]
  * @property {Map<string, MessageView>} [steers] Mid-turn steers this reply's
  *   blocks reference, resolved by messageViews (keyed by the steer's event id)
  *   for OrderedBlocks to render inline — their standalone bubbles are
@@ -101,6 +102,7 @@ function viewOfEvent(event) {
     details: agentEvent?.details,
     attachments: isUser ? /** @type {UserRoomEvent} */ (event).attachments : undefined,
     redacted: event.redacted,
+    pluginActions: event.pluginActions,
     streaming: false,
   };
 }
@@ -725,6 +727,18 @@ function Message(view) {
         })
       : null,
     isAgent && !view.streaming ? ReadAloudButton(view.id) : null,
+    ...(view.pluginActions ?? []).map((pluginAction) => h("button", {
+      type: "button", class: "msg-action", title: pluginAction.label, text: pluginAction.icon,
+      onclick: async () => {
+        /** @type {string[]} */
+        let args = [];
+        if (pluginAction.prompt) {
+          const value = await promptText(pluginAction.prompt.label, { value: pluginAction.prompt.value ?? "", placeholder: pluginAction.prompt.placeholder ?? "" });
+          if (value === null) return; args = [value];
+        }
+        void runPluginEventAction(pluginAction.plugin, view.id, pluginAction.action, args);
+      },
+    })),
     !view.streaming && !view.queued && view.author !== "system"
       ? h("button", {
           type: "button",

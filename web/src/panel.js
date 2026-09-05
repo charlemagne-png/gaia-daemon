@@ -76,6 +76,18 @@ function AgentRosterMark(agent) {
   return h("i", { text: agentGlyph(agent.id), "aria-hidden": "true" });
 }
 
+/** @param {import("./types.js").Snapshot|null|undefined} snapshot */
+function RoomPluginSections(snapshot) {
+  if (!snapshot) return [];
+  return Object.entries(snapshot.room.pluginPanels ?? {}).filter(([, pluginPanel]) => pluginPanel.placement === "room").flatMap(([plugin, pluginPanel]) => [
+    h("h3", { text: pluginPanel.title }),
+    h("div", { class: "checkpoint-list" }, (pluginPanel.items ?? []).map((item) => h("div", { class: "checkpoint-row" },
+      h("span", { class: "checkpoint-name", title: item.detail ?? "", text: item.title }),
+      ...(item.actions ?? []).map((action) => h("button", { type: "button", class: action.danger ? "checkpoint-remove" : "checkpoint-name", title: action.label, text: action.label, onclick: () => action.jumpToEvent ? void jumpToEvent(action.jumpToEvent) : void runPluginAction(plugin, [action.action, ...(action.args ?? [])]) })),
+    ))),
+  ]);
+}
+
 function renderPanel() {
   const panel = $("#room-panel");
   if (!panel) return;
@@ -141,6 +153,7 @@ function renderPanel() {
           )),
         ]
       : []),
+    ...RoomPluginSections(snapshot),
     h("h3", { text: "agents" }),
     h(
       "div",

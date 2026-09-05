@@ -41,9 +41,11 @@ export interface PluginPanelField {
  * flag of its own, so an always-returned panel would never go away. */
 export interface PluginPanel {
   title: string;
+  /** Dialog by default; room panels render in host-owned room chrome. */
+  placement?: "dialog" | "room";
   description?: string;
   forms?: Array<{ action: string; label: string; fields: PluginPanelField[] }>;
-  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean }> }>;
+  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean; jumpToEvent?: string }> }>;
 }
 
 export interface PluginContext {
@@ -87,6 +89,26 @@ export interface PluginRoomMode {
   inheritance: "root-tree";
   /** Data-only theme token; client chrome resolves it without plugin CSS/JS. */
   chromeToken: string;
+}
+
+export interface PluginEventMetadata {
+  id: string;
+  timestamp: string;
+  author: string;
+  /** Bounded display excerpt; transcript details/attachments are never exposed. */
+  text: string;
+}
+
+export interface PluginEventActionDescriptor {
+  action: string;
+  icon: string;
+  label: string;
+  prompt?: { label: string; placeholder?: string; value?: string };
+}
+
+export interface PluginEventActionContribution {
+  actions(ctx: PluginContext, event: PluginEventMetadata): readonly PluginEventActionDescriptor[] | Promise<readonly PluginEventActionDescriptor[]>;
+  run(action: string, args: string[], ctx: PluginContext, event: PluginEventMetadata): PluginResult | Promise<PluginResult>;
 }
 
 export interface PluginResult {
@@ -136,6 +158,8 @@ export interface CommandPlugin {
   /** Optional root-inherited room mode. Core resolves/read-writes the root
    * plugin bucket and projects the semantic chrome token while `key` is true. */
   roomMode?: PluginRoomMode;
+  /** Declarative message controls + plugin-bucket-only action mutation. */
+  eventActions?: PluginEventActionContribution;
   run(args: string[], ctx: PluginContext): PluginResult | Promise<PluginResult>;
   /** Optional room-local declarative panel, projected through snapshots. */
   panel?(ctx: PluginContext): PluginPanel | Promise<PluginPanel | undefined>;

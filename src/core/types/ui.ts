@@ -239,9 +239,10 @@ export interface SnapshotPluginPanelField {
  * while the plugin's own state says it's open. */
 export interface SnapshotPluginPanel {
   title: string;
+  placement?: "dialog" | "room";
   description?: string;
   forms?: Array<{ action: string; label: string; fields: SnapshotPluginPanelField[] }>;
-  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean }> }>;
+  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean; jumpToEvent?: string }> }>;
 }
 
 export interface Snapshot {

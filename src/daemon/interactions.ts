@@ -278,6 +278,14 @@ export class RoomInteractionLifecycle {
     return { snapshot, workspaceFiles: await this.host.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), message };
   }
 
+  async runPluginEventAction(workspaceId: string, roomId: string, plugin: string, eventId: string, action: string, args: string[]): Promise<SelectionPayload & { message: string }> {
+    const service = await this.host.serviceFor(workspaceId, roomId);
+    const message = await service.runPluginEventAction(plugin, eventId, action, args);
+    const snapshot = await service.getSnapshot();
+    this.host.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
+    return { snapshot, workspaceFiles: await this.host.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), message };
+  }
+
   /** Toggle room agent-dialogue (agents replying to each other's @mentions). */
   async setRoomAgentDialogue(workspaceId: string, roomId: string, on: boolean): Promise<SelectionPayload> {
     const service = await this.host.serviceFor(workspaceId, roomId);

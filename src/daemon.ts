@@ -708,6 +708,7 @@ export class Daemon {
   async setAgentRole(...args: Parameters<RoomInteractionLifecycle["setAgentRole"]>) { return this.interactions.setAgentRole(...args); }
   async setAgentDefaultRole(...args: Parameters<RoomInteractionLifecycle["setAgentDefaultRole"]>) { return this.interactions.setAgentDefaultRole(...args); }
   async runPluginAction(...args: Parameters<RoomInteractionLifecycle["runPluginAction"]>) { return this.interactions.runPluginAction(...args); }
+  async runPluginEventAction(...args: Parameters<RoomInteractionLifecycle["runPluginEventAction"]>) { return this.interactions.runPluginEventAction(...args); }
   async setRoomAgentDialogue(...args: Parameters<RoomInteractionLifecycle["setRoomAgentDialogue"]>) { return this.interactions.setRoomAgentDialogue(...args); }
   async setDefaultAgent(...args: Parameters<RoomInteractionLifecycle["setDefaultAgent"]>) { return this.interactions.setDefaultAgent(...args); }
   async deleteAgent(...args: Parameters<RoomInteractionLifecycle["deleteAgent"]>) { return this.interactions.deleteAgent(...args); }

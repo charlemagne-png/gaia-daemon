@@ -121,6 +121,14 @@ export interface LiveTurn {
   stalled?: boolean;
 }
 
+export interface RoomEventPluginAction {
+  plugin: string;
+  action: string;
+  icon: string;
+  label: string;
+  prompt?: { label: string; placeholder?: string; value?: string };
+}
+
 export interface UserRoomEvent {
   id: string;
   timestamp: string;
@@ -138,6 +146,8 @@ export interface UserRoomEvent {
    * display/attribution metadata for multi-human rooms. */
   humanId?: string;
   humanLabel?: string;
+  /** Snapshot-only declarative plugin controls; never persisted. */
+  pluginActions?: RoomEventPluginAction[];
 }
 
 export type RoomEventKind = "compact-complete" | "turn-failed";
@@ -166,6 +176,8 @@ export interface AgentRoomEvent {
    * RoomService#withRenderCapNotes) — never merged into `text`: no plugin may
    * ever inject words into what an agent apparently said. */
   renderCap?: { maxLines: number; note?: string };
+  /** Snapshot-only declarative plugin controls; never persisted. */
+  pluginActions?: RoomEventPluginAction[];
 }
 
 export type RoomEvent = UserRoomEvent | AgentRoomEvent;

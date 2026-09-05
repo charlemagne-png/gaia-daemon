@@ -319,6 +319,16 @@ export async function runPluginAction(command, args) {
   }
 }
 
+/** @param {string} plugin @param {string} eventId @param {string} action @param {string[]} args */
+export async function runPluginEventAction(plugin, eventId, action, args) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  try {
+    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/plugins/${encodeURIComponent(plugin)}/events/${encodeURIComponent(eventId)}/${encodeURIComponent(action)}`, { method: "POST", body: JSON.stringify({ args }) });
+    applySnapshotPayload(body); state.error = body.message || ""; markDirty();
+  } catch (error) { setError(error); }
+}
+
 /** Toggle room agent-dialogue (agents responding to each other's @mentions).
  * @param {boolean} on */
 export async function setRoomAgentDialogue(on) {

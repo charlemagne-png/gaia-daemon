@@ -54,6 +54,14 @@ async function roomRole(ctx: RouteContext): Promise<boolean> {
   await respond(ctx.response, () => ctx.daemon.setAgentRole(params[0], params[1], agentId.trim(), role.trim()));
   return true;
 }
+async function roomPluginEventAction(ctx: RouteContext): Promise<boolean> {
+  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/plugins\/([A-Za-z0-9_-]+)\/events\/([^/]+)\/([a-z][a-z0-9-]{0,31})$/);
+  if (ctx.request.method !== "POST" || !params) return false;
+  const body = await parseBody(ctx.request);
+  const args = Array.isArray((body as { args?: unknown }).args) ? (body as { args: unknown[] }).args.filter((arg): arg is string => typeof arg === "string").slice(0, 16) : [];
+  await respond(ctx.response, () => ctx.daemon.runPluginEventAction(params[0], params[1], params[2], params[3], params[4], args));
+  return true;
+}
 async function roomPlugin(ctx: RouteContext): Promise<boolean> {
   const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/plugins\/([A-Za-z0-9_-]+)$/);
   if (ctx.request.method !== "POST" || !params) return false;
@@ -444,6 +452,7 @@ const roomHandlers = [
   createNamedRoom,
   selectNamedRoom,
   roomRole,
+  roomPluginEventAction,
   roomPlugin,
   roomAgentDialogue,
   roomTitle,

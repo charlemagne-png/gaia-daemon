@@ -54,7 +54,7 @@ import { capabilitiesFor, contextWindowFor, findHarness, harnessIdFor, nativeCom
 import { readOptional, renderAttachmentLines, renderRoomTranscript } from "../../harness/prompt.js";
 import { readUserNameSetting } from "../user-name.js";
 import { HELP_TEXT, SLASH_COMMANDS, hasExplicitMention, mentionedAgents, parseCommand, planMentionRoute, validateThinkingLevel, type SlashCommand } from "../commands.js";
-import { loadedCommandPlugins, loadCommandPlugins, pluginStateKey, type CommandPlugin, type PluginContext, type PluginPanel, type PluginResult } from "../plugins.js";
+import { loadedCommandPlugins, loadCommandPlugins, pluginStateKey, type CommandPlugin, type PluginContext, type PluginPanel, type PluginResult, type PluginEventMetadata } from "../plugins.js";
 import { SANITIZE_REVIEWER_ID, buildSanitizePrompt, parseSanitizeProposal, type SanitizeContext } from "../sanitize.js";
 import { applyEventToDetails, finalizeInterruptedTools, runAgentTurn } from "../turns.js";
 import { ContextPolicyStore } from "../context-policy-store.js";
@@ -191,6 +191,49 @@ export class RoomCommandsMixin {
     const plugin = (await this.pluginsPromise).get(command);
     if (!plugin) throw new Error(`Unknown plugin: ${command}`);
     return (await this.runPlugin(plugin, args, command)).reply ?? "";
+  }
+
+  pluginEventMetadata(event: RoomEvent): PluginEventMetadata {
+    return { id: event.id, timestamp: event.timestamp, author: event.author, text: event.text.slice(0, 240) };
+  }
+
+  async pluginEventActions(events: RoomEvent[], state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<RoomEvent[]> {
+    const plugins = (await this.distinctPlugins()).filter((plugin) => plugin.eventActions);
+    if (!plugins.length) return events;
+    const out: RoomEvent[] = [];
+    for (const event of events) {
+      const projected = [];
+      for (const plugin of plugins) {
+        const key = pluginStateKey(plugin);
+        try {
+          const scope = await this.pluginScope(plugin, state);
+          const descriptors = await plugin.eventActions!.actions(this.pluginContext(plugin, scope.state, undefined, scope.room.roomId), this.pluginEventMetadata(event));
+          for (const descriptor of descriptors.slice(0, 8)) {
+            if (!descriptor || !/^[a-z][a-z0-9-]{0,31}$/.test(descriptor.action)) continue;
+            const icon = descriptor.icon?.slice(0, 8); const label = descriptor.label?.trim().slice(0, 80);
+            if (!icon || !label) continue;
+            projected.push({ plugin: key, action: descriptor.action, icon, label, ...(descriptor.prompt ? { prompt: { label: descriptor.prompt.label.slice(0, 80), ...(descriptor.prompt.placeholder ? { placeholder: descriptor.prompt.placeholder.slice(0, 120) } : {}), ...(descriptor.prompt.value ? { value: descriptor.prompt.value.slice(0, 240) } : {}) } } : {}) });
+          }
+        } catch (error) { console.warn(`[plugins] eventActions ${key}: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      out.push(projected.length ? { ...event, pluginActions: projected } : event);
+    }
+    return out;
+  }
+
+  async runPluginEventAction(pluginKey: string, eventId: string, action: string, args: string[]): Promise<string> {
+    await this.init();
+    const plugin = (await this.distinctPlugins()).find((candidate) => pluginStateKey(candidate) === pluginKey);
+    if (!plugin?.eventActions) throw new Error(`Unknown plugin event action owner: ${pluginKey}`);
+    const event = (await this.room.eventsFrom(0)).events.find((candidate) => candidate.id === eventId);
+    if (!event) throw new Error(`Unknown event: ${eventId}`);
+    const scope = await this.pluginScope(plugin);
+    const result = (await plugin.eventActions.run(action, args, this.pluginContext(plugin, scope.state, undefined, scope.room.roomId), this.pluginEventMetadata(event))) ?? {};
+    if (result.state) {
+      await scope.room.updateState((state) => { state.pluginState ??= {}; state.pluginState[pluginStateKey(plugin)] = result.state!; });
+      await this.emitSnapshot();
+    }
+    return result.reply ?? "";
   }
 
   async pluginPanels(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<Record<string, PluginPanel> | undefined> {

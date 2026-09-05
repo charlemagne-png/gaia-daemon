@@ -105,7 +105,7 @@ function onEscape(event) {
 }
 
 function openPanels() {
-  return Object.entries(state.snapshot?.room.pluginPanels ?? {}).filter(([, panel]) => (panel.forms?.length ?? 0) > 0 || (panel.items?.length ?? 0) > 0);
+  return Object.entries(state.snapshot?.room.pluginPanels ?? {}).filter(([, panel]) => panel.placement !== "room" && ((panel.forms?.length ?? 0) > 0 || (panel.items?.length ?? 0) > 0));
 }
 
 let escBound = false;
