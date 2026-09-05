@@ -410,6 +410,12 @@ test("resumed turn enters the settlement funnel once under a double-settle", asy
     });
     return armed;
   };
+  const sendMessage = child.sendMessage;
+  child.sendMessage = async (text, options) => {
+    const task = await sendMessage(text, options);
+    await residentHandle.updateState(() => {}); // next resident write must retain the armed contract
+    return task;
+  };
   let settled!: () => void;
   const idle = new Promise<void>((resolve) => { settled = resolve; });
   child.waitForSettled = async () => idle;
