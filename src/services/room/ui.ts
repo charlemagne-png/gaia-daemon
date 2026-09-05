@@ -66,7 +66,6 @@ export class RoomUiMixin {
     } else {
       this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
     }
-    if (status === "complete") this.maybeAutoCompact(task);
     this.maybeAutoHeal(task);
     void this.emitRoomsChanged();
     // Emit the settle snapshot BEFORE draining the next queued turn. SSE is a
@@ -88,16 +87,6 @@ export class RoomUiMixin {
           if (this.draining) this.draining = undefined;
         });
       });
-  }
-
-  maybeAutoCompact(task: Task): void {
-    const raw = Number.parseInt(process.env.GAIA_AUTO_COMPACT_PERCENT ?? "0", 10);
-    if (!Number.isFinite(raw) || raw <= 0) return;
-    for (const agentId of task.targets) {
-      const usage = this.contextUsage?.[agentId];
-      if (!usage?.maxTokens || usage.usedTokens / usage.maxTokens < raw / 100) continue;
-      void this.sendMessage(`/compact @${agentId}`, { recordUserMessage: false, queue: true }).catch(() => {});
-    }
   }
 
   maybeAutoHeal(task: Task): void {
