@@ -63,7 +63,7 @@ test("turn-completion sound hook fires from postTurn settlement and writes the a
   const roomId = "default";
   const sound = join(root, "sound.mp3");
   const ledger = join(root, "ledger.jsonl");
-  const script = join(process.cwd(), "scripts", "turn-completion-sound-hook.mjs");
+  const script = join(process.cwd(), "plugins", "hooks", "turn-completion-sound.mjs");
   await mkdir(join(root, ".gaia", "rooms", roomId), { recursive: true });
   await writeFile(sound, "not real audio", "utf8");
   const command = `GAIA_TURN_COMPLETION_SOUND_PLAYER=/usr/bin/true GAIA_TURN_COMPLETION_SOUND_PATH=${sh(sound)} GAIA_TURN_COMPLETION_SOUND_LEDGER=${sh(ledger)} bun ${sh(script)}`;

@@ -11,7 +11,7 @@
 ## turn-completion sound extraction
 
 - Owner → workspace observer hook
-- Script → `scripts/turn-completion-sound-hook.mjs`
+- Script → `plugins/hooks/turn-completion-sound.mjs`
 - Default sound → `/Users/charleshamilton/Downloads/denielcz-achievement-unlocked-463070.mp3`
 - Default ledger → `~/.gaia/turn-completion-sound.jsonl`
 - Config path → `<workspace>/.gaia/config.json`
@@ -21,10 +21,10 @@
 {
   "hooks": {
     "postTurn": [
-      { "command": "bun scripts/turn-completion-sound-hook.mjs" }
+      { "command": "bun plugins/hooks/turn-completion-sound.mjs" }
     ],
     "error": [
-      { "command": "bun scripts/turn-completion-sound-hook.mjs" }
+      { "command": "bun plugins/hooks/turn-completion-sound.mjs" }
     ]
   }
 }
