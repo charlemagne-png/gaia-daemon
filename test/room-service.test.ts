@@ -105,6 +105,7 @@ async function makeService(options: {
   summonHost?: SummonHost;
   config?: Partial<WorkspaceConfig>;
   llm?: ConsolidateLlm;
+  titleLlmAccount?: (provider: string) => string | undefined;
   /** Room id to open (default "default"). */
   roomId?: string;
   /** Seed the room's state.json as incognito before RoomService.open reads it. */
@@ -165,6 +166,7 @@ async function makeService(options: {
     ...(options.petLoader ? { petLoader: options.petLoader } : {}),
     ...(options.summonHost ? { summonHost: options.summonHost } : {}),
     ...(options.llm ? { llm: options.llm } : {}),
+    ...(options.titleLlmAccount ? { titleLlmAccount: options.titleLlmAccount } : {}),
     runtimeFactory: (agent) => {
       const runtime = options.runtimeFactory ? (options.runtimeFactory(agent, workspace) as ReturnType<typeof scriptedRuntime>) : scriptedRuntime(agent, script);
       runtimes.set(agent.id, runtime);
@@ -389,10 +391,11 @@ test("auto-created rooms get a fallback title and manual rename locks it", async
   assert.equal(state.titleSource, "manual");
 });
 
-test("auto title refinement uses the cheap DeepSeek flash model", async () => {
+test("auto title refinement uses the configured room-title model and account", async () => {
   const calls: Parameters<ConsolidateLlm>[0][] = [];
   const { service, root } = await makeService({
     roomId: "chat-title-flash",
+    titleLlmAccount: (provider) => (provider === DEFAULTS.roomTitleModel.provider ? "paloptic-pascal-cl1" : undefined),
     llm: async (input) => {
       calls.push(input);
       return "Room Rename Controls";
@@ -409,8 +412,76 @@ test("auto title refinement uses the cheap DeepSeek flash model", async () => {
 
   assert.equal(calls[0]?.model?.provider, DEFAULTS.roomTitleModel.provider);
   assert.equal(calls[0]?.model?.name, DEFAULTS.roomTitleModel.name);
+  assert.equal(calls[0]?.account, "paloptic-pascal-cl1");
   assert.equal(state.title, "Room Rename Controls");
   assert.equal(state.titleSource, "model");
+});
+
+test("auto title refinement refuses ambient credentials when no named title account exists", async () => {
+  let called = false;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const { service, root } = await makeService({
+      roomId: "chat-title-no-account",
+      llm: async () => {
+        called = true;
+        return "Ambient Should Not Run";
+      },
+    });
+    await service.sendMessage("keep titles off ambient auth");
+    await service.waitForIdle();
+    await sleep(30);
+
+    const state = await RoomHandle.open(root, "chat-title-no-account").then((room) => room.state());
+    assert.equal(called, false);
+    assert.equal(state.title, "keep titles off ambient auth");
+    assert.equal(state.titleSource, "auto");
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test("auto title drift re-checks every eighth user message with the title account", async () => {
+  const calls: Parameters<ConsolidateLlm>[0][] = [];
+  const { service, root } = await makeService({
+    roomId: "chat-title-drift",
+    titleLlmAccount: (provider) => (provider === DEFAULTS.roomTitleModel.provider ? "paloptic-pascal-cl1" : undefined),
+    llm: async (input) => {
+      calls.push(input);
+      return input.system.startsWith("You keep chat-room titles honest") ? "GaiaVoice Room Naming" : "kick off room naming";
+    },
+  });
+
+  const messages = [
+    "kick off room naming",
+    "add model-based title refinement",
+    "check hidden voice session names",
+    "restore the sidebar title display",
+    "verify rooms keep manual names",
+    "now focus on gaiavoice dispatch rooms",
+    "make the title describe voice routing",
+    "finish with room naming drift checks",
+  ];
+  for (const message of messages) {
+    await service.sendMessage(message);
+    await service.waitForIdle();
+  }
+
+  let state = await RoomHandle.open(root, "chat-title-drift").then((room) => room.state());
+  for (let i = 0; i < 30 && state.title !== "GaiaVoice Room Naming"; i += 1) {
+    await sleep(10);
+    state = await RoomHandle.open(root, "chat-title-drift").then((room) => room.state());
+  }
+
+  const driftCall = calls.find((input) => input.system.startsWith("You keep chat-room titles honest"));
+  assert.ok(driftCall);
+  assert.equal(driftCall.model?.provider, DEFAULTS.roomTitleModel.provider);
+  assert.equal(driftCall.model?.name, DEFAULTS.roomTitleModel.name);
+  assert.equal(driftCall.account, "paloptic-pascal-cl1");
+  assert.equal(state.title, "GaiaVoice Room Naming");
+  assert.equal(state.titleSource, "model");
+  assert.equal(state.titleDrift, undefined);
 });
 
 test("@mentions route to multiple agents in order; unknown mentions fail at send time", async () => {

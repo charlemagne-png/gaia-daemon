@@ -47,6 +47,7 @@ export interface RoomTurnLoopPort {
   isMonadMessage(text: string, options: SendMessageOptions): Promise<boolean>;
   runMonadTask(task: Task, text: string, options: SendMessageOptions): Promise<void>;
   maybeAutoTitle(text: string): Promise<void>;
+  maybeRetitleOnDrift(): Promise<void>;
   rememberActiveAgent(targets: string[]): Promise<void>;
   taskCancelled(task: Task): boolean;
   isConversationEnded(agentId: string): Promise<boolean>;

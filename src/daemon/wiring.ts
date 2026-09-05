@@ -9,6 +9,7 @@
 // delegating wrappers.
 
 import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { readJson } from "../core/store.js";
 import { DEFAULTS } from "../core/config.js";
 import { workspacePaths } from "../core/paths.js";
@@ -17,7 +18,9 @@ import { normalizeRoomState } from "../domain/rooms.js";
 import { ensureWorkspaceRoom, liveMaxSummonsPerRoom, loadWorkspace } from "../domain/workspace.js";
 import { workspaceRoomRefs, type RoomRef } from "../domain/workspace-index.js";
 import { MemoryStore } from "../domain/memory.js";
+import { findAccount } from "../domain/accounts.js";
 import { findModelWithAlias } from "../harness/model-aliases.js";
+import { harnessSpecFor } from "../harness/spec.js";
 import { RoomService } from "../services/room-service.js";
 import { MemoryService } from "../services/memory-service.js";
 import { playTurnCompletionSound } from "../services/turn-completion-sound.js";
@@ -26,6 +29,7 @@ import { SummonCoordinator } from "../services/summons.js";
 import type { HarnessBridge } from "../services/bridge.js";
 import type { SchedulerService } from "../services/scheduler.js";
 import type { EmbedSidecar } from "../services/embed-sidecar.js";
+import { resolveTitleLlmAccount } from "../services/title-auth.js";
 import type { WiringHost } from "./ports.js";
 
 /** Soft cap on simultaneously-resident room services. Idle rooms past this are
@@ -51,8 +55,19 @@ export function serviceKey(workspaceId: string, roomId: string): string {
 /** Builds the completion function consolidation uses. Resolved lazily per call
  * so key/model changes apply without a daemon restart; no key → the call
  * throws and consolidation skips with the error as its reason. */
+function accountAuthPath(accountId: string | undefined): string | undefined {
+  if (!accountId) return undefined;
+  const record = findAccount(accountId);
+  if (!record) throw new Error(`account not found: ${accountId}`);
+  const accounts = harnessSpecFor(record.harness).accounts;
+  if (!accounts) throw new Error(`account harness has no account auth wiring: ${record.harness}`);
+  const dir = accounts.env(record.credentials).PI_CODING_AGENT_DIR;
+  if (!dir) throw new Error(`account has no pi auth store: ${accountId}`);
+  return join(dir, "auth.json");
+}
+
 function consolidateLlm(): ConsolidateLlm {
-  return async ({ system, user, model }) => {
+  return async ({ system, user, model, account }) => {
     const provider = model?.provider ?? DEFAULTS.model.provider;
     const name = model?.name ?? DEFAULTS.model.name;
     const [{ completeSimple }, { ModelRegistry, ModelRuntime }] = await Promise.all([
@@ -60,7 +75,8 @@ function consolidateLlm(): ConsolidateLlm {
       import("@earendil-works/pi-ai/compat"),
       import("@earendil-works/pi-coding-agent"),
     ]);
-    const runtime = await ModelRuntime.create();
+    const authPath = accountAuthPath(account);
+    const runtime = await ModelRuntime.create(authPath ? { authPath } : undefined);
     // Alias fallback (RULE #0): short tier names (fable/opus/sonnet/haiku) in an
     // agent's config resolve here too — this direct pi-ai path bypasses the
     // harness CLI, so an un-aliased `find` was silently killing consolidation
@@ -135,6 +151,7 @@ async function createService(host: WiringHost, workspaceId: string, resolvedRoom
     memory: memoryServiceFor(host, workspaceId, workspace, record.path),
     // Same LLM caller consolidation uses — backs the context-gate compact.
     llm: consolidateLlm(),
+    titleLlmAccount: (provider) => resolveTitleLlmAccount(provider),
     summonHost: summonCoordinatorFor(host, workspaceId, workspace, record.path),
     setThinking: async (agentId, level) => (await host.applyThinking(workspaceId, resolvedRoom, agentId, level)).message,
     // Same reload the settings-file save route uses: /model + /thinking

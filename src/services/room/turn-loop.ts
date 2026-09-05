@@ -53,7 +53,13 @@ export class RoomTurnLoop {
         // Auto-named rooms take their display title from their first human
         // message (never from a name dialog) — the Claude Code / Codex pattern.
         // Agent-dialogue turns don't count as the human naming the room.
-        if (!options.fromAgentDialogue) await this.service.maybeAutoTitle(text);
+        if (!options.fromAgentDialogue) {
+          await this.service.maybeAutoTitle(text);
+          // Living-titles law, drift half: titles are LIVING — every user
+          // message ticks a counter, and periodically the recent conversation
+          // is re-read against the current title. Background, best-effort.
+          void this.service.maybeRetitleOnDrift();
+        }
       }
       // Authoritative refresh right after the commit: this snapshot has the
       // queued ghost dropped AND the committed user event present, so it
