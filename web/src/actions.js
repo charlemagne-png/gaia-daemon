@@ -133,7 +133,7 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
     // now-playing chip). So no stopReadAloud() here.
     const body = await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/rooms/${encodeURIComponent(roomId)}/select`, {
       method: "POST",
-      body: JSON.stringify({ ...(opts.incognito ? { incognito: true } : {}), ...(opts.voiceNavigation ? { voiceNavigation: true } : {}) }),
+      body: JSON.stringify({ ...(opts.incognito ? { incognito: true } : {}), ...(opts.voiceNavigation ? { voiceNavigation: true } : {}), ...(opts.parentRoomId ? { parentRoomId: opts.parentRoomId } : {}) }),
     });
     applySnapshotPayload(body);
     if (state.snapshot) openTab(state.snapshot.room.id, state.snapshot.workspace.id);
@@ -148,7 +148,7 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
 /**
  * Create a room without selecting/opening it. Used by GaiaVoice's hidden
  * session room: transcript persists, main chat UI stays where you left it.
- * @param {{ incognito?: boolean, title?: string, voiceSession?: boolean }} [opts]
+ * @param {{ incognito?: boolean, title?: string, voiceSession?: boolean, parentRoomId?: string }} [opts]
  * @returns {Promise<{ workspaceId: string, roomId: string } | null>}
  */
 export async function createRoom(opts = {}) {
@@ -162,6 +162,7 @@ export async function createRoom(opts = {}) {
       body: JSON.stringify({
         ...(incognito ? { incognito: true } : {}),
         ...(opts.voiceSession ? { voiceSession: true } : {}),
+        ...(opts.parentRoomId ? { parentRoomId: opts.parentRoomId } : {}),
       }),
     });
     applyRoomsPayload(snapshot.workspace.id, created.rooms);
@@ -414,6 +415,38 @@ function applyRoomsPayload(workspaceId, rooms) {
   state.workspaceRooms[workspaceId] = summaries;
   if (snapshot && snapshot.workspace.id === workspaceId) {
     snapshot.rooms = summaries.map((/** @type {import("./types.js").RoomSummary} */ room) => ({ ...room, isCurrent: room.id === snapshot.room.id }));
+  }
+}
+
+/** Open a fresh subroom under a parent room.
+ * @param {string} parentRoomId */
+export async function openSubroom(parentRoomId) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  const roomId = newAutoRoomId("chat-");
+  try {
+    await selectRoom(snapshot.workspace.id, roomId, { parentRoomId });
+  } catch (error) {
+    setError(error);
+  }
+}
+
+/** Launch a background worker into a room; result returns as a note.
+ * @param {string} roomId @param {string} agentId */
+export async function summonAgentInRoom(roomId, agentId) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  const task = await promptText(`Summon @${agentId} in a sub-room`, { placeholder: "task for the worker…", okLabel: "Summon" });
+  if (typeof task !== "string" || !task.trim()) return;
+  try {
+    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/summons`, {
+      method: "POST",
+      body: JSON.stringify({ agentId, task: task.trim() }),
+    });
+    state.error = "";
+    markDirty("sidebar", "status");
+  } catch (error) {
+    setError(error);
   }
 }
 
