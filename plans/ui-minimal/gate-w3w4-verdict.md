@@ -93,3 +93,58 @@ Enforced globally + per-mode overrides (teleport/berserk/love) ✓
 
 **Verdict:** ACCEPT—comprehensive motion tokenization, reduced-motion law enforced, clean scope
 
+---
+
+## Cross-cutting Verification
+
+### Theme Palette Integrity
+**Check method:** Diff analysis for hardcoded colors vs theme variables
+
+**Findings:**
+- All new/modified styles use theme variables (--border-subtle, --border-emphasis, --interactive-*, --accent, --fg, --ink, --good) ✓
+- color-mix() for semi-transparent effects (focus rings, hover states) ✓
+- One pre-existing hardcoded color in .design-name-input:focus (#F97316 orange) — artifact studio feature, unchanged from before wave 3, just added focus ring per spec ✓
+- No new palette damage introduced ✓
+
+**Theme variable usage:** 100% in core UI surfaces (tabs/sidebar/composer/panel), artifact studio exempted (pre-existing design)
+
+**Verdict:** PASS — theming system intact, zero new palette damage
+
+### Visual Regressions
+**Surfaces checked:** All 8 frame pairs (full-app, tab-strip, sidebar, main-topbar, right-panel, composer, statusbar, settings-modal)
+
+**Clipping:** None detected ✓  
+**Overflow:** None detected ✓  
+**Contrast:** No degradation, focus rings improve visibility ✓  
+**Layout shifts:** Radius changes don't affect spacing/alignment ✓
+
+**Verdict:** PASS — zero regressions, visual quality improved
+
+### Scope Discipline
+**Wave 5 features (tab de-crowd):** No tab-num removal, no close-X collapse — NOT present ✓  
+**Wave 6 features (sidebar disclosure):** No metadata collapse, no opacity toggling — NOT present ✓  
+**Wave 7 features (panel collapse):** No agent config max-height, no description hiding — NOT present ✓  
+**Wave 8+ features:** No composer consolidation, no statusbar merge — NOT present ✓
+
+**Verdict:** PASS — clean wave 3+4 boundary, zero scope creep
+
+---
+
+## Final Verdict
+
+**ACCEPT** commit 24e02e1
+
+**Summary:**
+- Wave 3 (radius): Systematic token application (--r-sm/md/lg/full), focus ring box-shadow, clean hierarchy ✓
+- Wave 4 (motion): Comprehensive transition tokenization (--dur-*, --ease-*), reduced-motion enforcement ✓  
+- Zero scope creep beyond waves 3+4 ✓
+- Zero palette damage (theme variables preserved) ✓
+- Zero visual regressions (clipping/overflow/contrast) ✓
+
+**Perceptual tests (spec compliance):**
+- Wave 3: "Smoother, more modern feel; focus states obvious" — CONFIRMED in frames
+- Wave 4: "Interactions feel smoother, more cohesive" — token-driven transitions verified in CSS
+
+**Production ready:** YES  
+**Binding verdict:** ACCEPT
+
