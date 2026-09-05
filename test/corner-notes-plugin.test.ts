@@ -67,6 +67,14 @@ test("corner-notes plugin provides global CRUD, normalized persistence, and a so
     assert.equal(typeof stored.notes[0].createdAt, "string");
     assert.equal(typeof stored.notes[0].updatedAt, "string");
 
+    const multilineText = "Line one\nLine two";
+    const multiline = await plugin.run(["add", multilineText], ctx("room-b"));
+    const multilineId = replyId(multiline.reply);
+    const multilineStored = JSON.parse(await readFile(path, "utf8"));
+    assert.equal(multilineStored.notes.find((note: { id: string }) => note.id === multilineId)?.text, multilineText);
+    const multilineListed = await plugin.run(["list"], ctx("room-a"));
+    assert.ok(multilineListed.reply?.includes(`${multilineId} · ${multilineText}`));
+
     await writeFile(path, JSON.stringify({ notes: [
       { id: "valid", text: "Recovered", order: "bad", pinned: "yes", createdAt: "bad", updatedAt: null },
       { id: "valid", text: "duplicate", order: 9, pinned: true, createdAt: "2026-01-01", updatedAt: "2026-01-01" },
