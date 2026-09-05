@@ -15,7 +15,7 @@ import { openKeymaker } from "./keymaker.js";
 import { $, h } from "./dom.js";
 import { isNative } from "./native.js";
 import { markDirty, registerRegion } from "./render.js";
-import { state } from "./state.js";
+import { roomUnread, state } from "./state.js";
 import { moveTabToIndex, visibleTabs } from "./tabs.js";
 
 /** @typedef {import("./types.js").RoomSummary} RoomSummary */
@@ -89,7 +89,7 @@ function Tab(room, isActive, wsId) {
   return h(
     "div",
     {
-      class: `tab ${isActive ? "active" : ""} ${room.running ? "running" : ""}`,
+      class: `tab ${isActive ? "active" : ""} ${room.running ? "running" : ""} ${roomUnread(room) && !room.running ? "unread" : ""}`,
       title: room.title ? `${room.title} — ${room.id}` : room.id,
       onpointerdown: (event) => beginDrag(event, room.id, wsId),
       onpointermove: (event) => moveDrag(event),
