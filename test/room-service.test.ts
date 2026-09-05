@@ -638,6 +638,39 @@ test("auto title refinement uses the configured room-title model and account", a
   assert.equal(state.titleSource, "model");
 });
 
+test("living-title drift applies to titled summon/subroom ids", async () => {
+  const calls: Parameters<ConsolidateLlm>[0][] = [];
+  const { service, root } = await makeService({
+    roomId: "terry-summon-title",
+    incognito: true,
+    titleLlmAccount: () => "title-named-account",
+    llm: async (input) => {
+      calls.push(input);
+      return "Retitled Worker Purpose";
+    },
+  });
+  await service.room.updateState((state) => {
+    state.parentRoomId = "default";
+    state.title = "initial worker purpose";
+    state.titleSource = "auto";
+  });
+
+  for (let i = 0; i < 8; i += 1) {
+    await service.sendMessage(`follow up ${i + 1}`);
+    await service.waitForIdle();
+  }
+
+  let state = await RoomHandle.open(root, "terry-summon-title").then((room) => room.state());
+  for (let i = 0; i < 20 && state.titleSource !== "model"; i += 1) {
+    await sleep(10);
+    state = await RoomHandle.open(root, "terry-summon-title").then((room) => room.state());
+  }
+
+  assert.equal(calls[0]?.account, "title-named-account");
+  assert.equal(state.title, "Retitled Worker Purpose");
+  assert.equal(state.titleSource, "model");
+});
+
 test("@mentions route to multiple agents in order; unknown mentions fail at send time", async () => {
   const { service, root } = await makeService();
   await assert.rejects(() => service.sendMessage("@nobody hi"), /Unknown agent/);

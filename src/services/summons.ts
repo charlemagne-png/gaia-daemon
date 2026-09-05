@@ -47,7 +47,7 @@ export interface SummonResultDelivery {
   triggerTarget?: string;
 }
 
-import { normalizeRoomState, RoomHandle } from "../domain/rooms.js";
+import { deriveRoomTitle, normalizeRoomState, RoomHandle } from "../domain/rooms.js";
 import { ensureRoomWorktree, resolveRoomWorkDir } from "../domain/worktree.js";
 import { workspacePaths } from "../core/paths.js";
 import { readJson, writeJsonAtomic } from "../core/store.js";
@@ -151,6 +151,10 @@ export interface SummonRoomAccess {
   deliverAgentResult(fromAgentId: string, reply: string, delivery: SummonResultDelivery): Promise<void>;
   /** Close exactly one CHILD turn's durable settlement contract. */
   markSummonDeliverySettled(deliveryId: string): Promise<void>;
+  /** Best-effort model refinement for a machine-owned title already seeded on
+   * disk. Optional so coordinator tests can use small fakes; real RoomService
+   * implements it through the same named-account title seam as main rooms. */
+  refineAutoTitleFromSeed?(text: string, fallback: string): Promise<void>;
   /** Rebroadcast the workspace rooms list (see RoomService.broadcastRoomsChanged). */
   broadcastRoomsChanged(): Promise<void>;
   /** Panic-stop this room's active turn — the EXACT plumbing the /cancel
@@ -447,6 +451,13 @@ export class SummonCoordinator implements SummonHost {
     // creation, immutable) so a daemon restart resumes the child's turn under
     // the SAME forced sandbox instead of quietly promoting it to trusted.
     if (untrusted) state.summonUntrusted = true;
+    // Living-titles law: a summon is a visible sub-room, never a raw id in the
+    // sidebar. Seed a cheap purpose title from the task before the child service
+    // opens; the RoomService title seam may refine it later with a named
+    // account, but launch never depends on model chrome.
+    const fallbackTitle = deriveRoomTitle(task) || `${agentId} task`;
+    state.title = fallbackTitle;
+    state.titleSource = "auto";
     // Worktree isolation (collab.isolation "worktree"): summons inherit the
     // parent room's checkout by default. ownWorktree is an explicit opt-in for
     // a child-owned checkout; if that cannot be created, degrade to the normal
@@ -470,8 +481,11 @@ export class SummonCoordinator implements SummonHost {
     await writeJsonAtomic(statePath, state);
 
     const child = await this.serviceForRoom(childRoomId);
+    const titleRefine = child.refineAutoTitleFromSeed?.(fallbackTitle, fallbackTitle);
+    if (titleRefine) void titleRefine.catch((error) => this.log(`title refine for summon '${childRoomId}' failed: ${error instanceof Error ? error.message : String(error)}`));
     const info: SummonChild = { roomId: childRoomId, parentRoomId, agentId, prompt: task, untrusted };
     this.running.set(childRoomId, info);
+    this.notifyParentRoomsChanged(parentRoomId);
 
     // Worker self-episode opt-in (AgentDef.selfEpisode): the WORKER learns from
     // its own lane. Separate from caller-side insight ledgers; keyed on the

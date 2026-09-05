@@ -173,7 +173,52 @@ test("summonAndWait creates a linked child room and returns the worker's reply",
   const state = normalizeRoomState(await readJson(workspacePaths.roomState(path, childId!)));
   assert.equal(state.parentRoomId, "default");
   assert.equal(state.incognito, true, "summon children never enter recall or episodic memory");
+  assert.equal(state.title, "do a thing", "summon subrooms get a purpose title at creation");
+  assert.equal(state.titleSource, "auto");
   assert.equal(state.summon, undefined); // no delivery record without a deliver mode
+});
+
+test("summon subroom title refinement uses the named room-title account", async () => {
+  const { workspace, path } = await makeWorkspace();
+  const calls: unknown[] = [];
+  const services = new Map<string, Promise<RoomService>>();
+  const serviceFor = (roomId: string): Promise<RoomService> => {
+    let service = services.get(roomId);
+    if (!service) {
+      service = RoomService.open({
+        workspaceId: "ws1",
+        workspace,
+        roomId,
+        memoryStore: new MemoryStore(),
+        llm: async (input) => {
+          calls.push(input);
+          return "Tide Table Review";
+        },
+        titleLlmAccount: () => "title-named-account",
+        runtimeFactory: (agentDef) => scriptedRuntime(agentDef, () => "done"),
+      }).then(async (svc) => {
+        await svc.init();
+        return svc;
+      });
+      services.set(roomId, service);
+    }
+    return service;
+  };
+  const coordinator = new SummonCoordinator(workspace, path, serviceFor, async () => 8, () => {});
+
+  const pending = coordinator.summonAndWait("default", "terry", "check the tides before dawn");
+  await pending;
+  const childId = (await (await import("node:fs/promises")).readdir(workspace.roomsDir)).find((name) => name.startsWith("terry-"));
+  assert.ok(childId, "child room dir exists");
+
+  let state = normalizeRoomState(await readJson(workspacePaths.roomState(path, childId!)));
+  for (let i = 0; i < 20 && state.titleSource !== "model"; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    state = normalizeRoomState(await readJson(workspacePaths.roomState(path, childId!)));
+  }
+  assert.equal((calls[0] as { account?: string } | undefined)?.account, "title-named-account");
+  assert.equal(state.title, "Tide Table Review");
+  assert.equal(state.titleSource, "model");
 });
 
 test("fresh summon settles through one funnel and posts back with a parent wake", async () => {

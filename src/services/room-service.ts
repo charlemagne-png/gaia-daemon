@@ -4900,9 +4900,10 @@ export class RoomService {
   }
 
   private async maybeRetitleOnDrift(): Promise<void> {
-    if (this.incognito || !isAutoRoomId(this.roomId) || !this.options.llm) return;
+    if (!this.options.llm) return;
     const state = await this.room.state();
     if (!state.title || state.imported || state.titleSource === "manual") return;
+    if (state.titleSource !== "auto" && state.titleSource !== "model") return;
     const title = state.title;
     let due = false;
     await this.room.updateState((current) => {
@@ -4946,6 +4947,11 @@ export class RoomService {
       // Same visibility rule as refineAutoTitle: keep the old title, say why.
       console.warn(`[room-title] drift check failed for ${this.roomId}: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  async refineAutoTitleFromSeed(text: string, fallback: string): Promise<void> {
+    if (!this.options.llm) return;
+    await this.refineAutoTitle(text, fallback);
   }
 
   private async refineAutoTitle(firstMessage: string, fallback: string): Promise<void> {
