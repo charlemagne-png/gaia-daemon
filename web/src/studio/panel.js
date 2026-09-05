@@ -1,9 +1,25 @@
+import { registerApplicationPanel } from "../applications.js";
 import { $, h } from "../dom.js";
 import { registerRegion } from "../render.js";
-import { closeStudioSurface, minimizeStudioSurface, openStudioPath, openStudioPopout, restoreStudioSurface, saveStudioFile, selectStudioView, sendStudioPrompt, toggleStudioMaximized, updateStudioDraft, updateStudioPrompt } from "./actions.js";
+import { closeStudioSurface, loadStudioProject, minimizeStudioSurface, openStudioPath, openStudioPopout, restoreStudioSurface, saveStudioFile, selectStudioView, sendStudioPrompt, toggleStudioMaximized, updateStudioDraft, updateStudioPrompt } from "./actions.js";
 import { selectedStudioView, studio, studioPreviewUrl } from "./state.js";
 
+/** @type {HTMLElement|null} */
+let applicationRoot = null;
+
 registerRegion("studio", renderStudioPanel);
+registerApplicationPanel("studio", {
+  mount(/** @type {HTMLElement} */ root, /** @type {any} */ context) {
+    applicationRoot = root;
+    if (context.instance.view) studio.selectedViewId = context.instance.view;
+    renderStudioPanel();
+    const projectId = context.instance.resource?.id;
+    if (projectId && studio.project?.projectId !== projectId) void loadStudioProject(projectId);
+  },
+  update() { renderStudioPanel(); },
+  unmount() { applicationRoot = null; },
+  popout() { void openStudioPopout(); },
+}, { initialResource: { kind: "studio-project" } });
 
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape" || !studio.project) return;
@@ -13,7 +29,7 @@ window.addEventListener("keydown", (event) => {
 });
 
 export function renderStudioPanel() {
-  const root = $(studio.popout ? "#app" : "#studio-root");
+  const root = studio.popout ? $("#app") : applicationRoot;
   if (!root) return;
   root.replaceChildren(studio.popout ? renderPopout() : renderPanel());
 }

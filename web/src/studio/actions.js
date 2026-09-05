@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { updateActiveApplicationResource } from "../applications.js";
 import { promptText } from "../prompt.js";
 import { markDirty, setError } from "../render.js";
 import { state } from "../state.js";
@@ -38,6 +39,7 @@ export async function openStudioPath() {
   try {
     const body = await api("/api/studio/projects/open", { method: "POST", body: JSON.stringify({ workspaceId: state.snapshot.workspace.id, path }) });
     applyStudioProject(body);
+    await updateActiveApplicationResource({ kind: "studio-project", ...(studio.project?.projectId ? { id: studio.project.projectId } : {}) }, studio.selectedViewId);
     const view = selectedStudioView();
     if (view) await loadStudioFile(view.path);
   } catch (error) {
@@ -54,6 +56,7 @@ export async function selectStudioView(viewId) {
   studio.selectedViewId = viewId;
   sessionStorage.setItem("gaia.studio.view", viewId);
   studio.previewNonce++;
+  await updateActiveApplicationResource({ kind: "studio-project", ...(studio.project?.projectId ? { id: studio.project.projectId } : {}) }, viewId);
   const view = selectedStudioView();
   if (view) await loadStudioFile(view.path);
   markDirty("studio");

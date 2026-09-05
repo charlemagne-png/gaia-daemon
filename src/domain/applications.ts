@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import type { RoomApplicationInstance, RoomApplicationsStateV1 } from "../core/types.js";
 
 export const APPLICATION_SCHEMA = 1 as const;
 export const APPLICATION_ID_PATTERN = /^[a-z][a-z0-9-]{1,47}$/;
@@ -258,4 +259,45 @@ function validateApplicationIdLike(value: unknown, path: string): string {
   const id = stringValue(value, path, 48);
   if (!APPLICATION_ID_PATTERN.test(id)) throw new Error(`${path} must match [a-z][a-z0-9-]{1,47}`);
   return id;
+}
+
+function applicationInstanceFrom(value: unknown, key: string): RoomApplicationInstance | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.instanceId !== "string" || raw.instanceId !== key || !/^app_[a-f0-9]{20}$/.test(raw.instanceId)) return undefined;
+  if (typeof raw.appId !== "string" || !APPLICATION_ID_PATTERN.test(raw.appId)) return undefined;
+  if (typeof raw.supportRoomId !== "string" || !raw.supportRoomId.trim()) return undefined;
+  if (!raw.resource || typeof raw.resource !== "object" || Array.isArray(raw.resource)) return undefined;
+  const resource = raw.resource as Record<string, unknown>;
+  if (resource.kind !== "artifacts" && resource.kind !== "studio-project" && resource.kind !== "workspace-app") return undefined;
+  if (resource.id !== undefined && (typeof resource.id !== "string" || !resource.id.trim())) return undefined;
+  if (typeof raw.createdAt !== "string" || !Number.isFinite(Date.parse(raw.createdAt))) return undefined;
+  if (typeof raw.updatedAt !== "string" || !Number.isFinite(Date.parse(raw.updatedAt))) return undefined;
+  return {
+    instanceId: raw.instanceId,
+    appId: raw.appId,
+    supportRoomId: raw.supportRoomId,
+    resource: { kind: resource.kind, ...(typeof resource.id === "string" ? { id: resource.id } : {}) },
+    ...(typeof raw.view === "string" && raw.view.trim() ? { view: raw.view.slice(0, 512) } : {}),
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+  };
+}
+
+/** Invalid persisted entries degrade to absent; order/selection cannot point at dropped instances. */
+export function normalizeRoomApplications(value: unknown): RoomApplicationsStateV1 | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (raw.schema !== 1 || !raw.instances || typeof raw.instances !== "object" || Array.isArray(raw.instances)) return undefined;
+  const instances = Object.fromEntries(
+    Object.entries(raw.instances as Record<string, unknown>)
+      .map(([key, candidate]) => [key, applicationInstanceFrom(candidate, key)] as const)
+      .filter((entry): entry is [string, RoomApplicationInstance] => Boolean(entry[1])),
+  );
+  const order = Array.isArray(raw.order)
+    ? [...new Set(raw.order.filter((id): id is string => typeof id === "string" && Boolean(instances[id])))]
+    : [];
+  for (const id of Object.keys(instances)) if (!order.includes(id)) order.push(id);
+  const activeInstanceId = typeof raw.activeInstanceId === "string" && instances[raw.activeInstanceId] ? raw.activeInstanceId : undefined;
+  return { schema: 1, ...(activeInstanceId ? { activeInstanceId } : {}), order, instances };
 }

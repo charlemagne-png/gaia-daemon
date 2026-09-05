@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   BUILTIN_APPLICATION_MANIFESTS,
+  normalizeRoomApplications,
   parseApplicationManifest,
   validateApplicationRelativePath,
   type ApplicationManifestV1,
@@ -47,6 +49,27 @@ test("application manifest rejects unknown fields, tools, and workspace native p
     () => parseApplicationManifest({ ...manifest, panel: { kind: "electron", entry: "index.html" } }, { origin: "workspace" }),
     /manifest\.panel\.kind/,
   );
+});
+
+test("browser fallback catalog is generated-equivalent to canonical built-ins", async () => {
+  const fallback = JSON.parse(await readFile(new URL("../web/src/applications-catalog.json", import.meta.url), "utf8")) as { applications: Array<{ manifest: ApplicationManifestV1 }> };
+  assert.deepEqual(fallback.applications.map((entry) => entry.manifest), BUILTIN_APPLICATION_MANIFESTS);
+});
+
+test("room application normalization drops corrupt instances and dangling selection", () => {
+  const valid = {
+    instanceId: "app_0123456789abcdefabcd",
+    appId: "design",
+    supportRoomId: "room-a",
+    resource: { kind: "artifacts" },
+    createdAt: "2026-09-05T12:00:00.000Z",
+    updatedAt: "2026-09-05T12:00:00.000Z",
+  };
+  assert.deepEqual(normalizeRoomApplications({ schema: 1, activeInstanceId: "missing", order: [valid.instanceId, "bad"], instances: { [valid.instanceId]: valid, bad: { token: "no" } } }), {
+    schema: 1,
+    order: [valid.instanceId],
+    instances: { [valid.instanceId]: valid },
+  });
 });
 
 test("application relative paths reject absolute and traversal input", () => {

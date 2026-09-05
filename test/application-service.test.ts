@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ApplicationService, ApplicationWorkspaceNotFoundError } from "../src/services/application-service.js";
+import { ApplicationInstanceConflictError, ApplicationService, ApplicationWorkspaceNotFoundError } from "../src/services/application-service.js";
+import { RoomHandle } from "../src/domain/rooms.js";
 import { createTempDir } from "./helpers/temp.js";
 
 function workspaceManifest(id: string): Record<string, unknown> {
@@ -88,6 +89,35 @@ test("application catalog rejects package and entry symlink escapes", async () =
   } finally {
     await temp.cleanup();
     await external.cleanup();
+  }
+});
+
+test("application instances persist idempotently, select, update, and close through RoomHandle", async () => {
+  const temp = await createTempDir();
+  try {
+    await mkdir(join(temp.path, ".gaia"), { recursive: true });
+    const service = new ApplicationService({ workspaceFor: async () => ({ path: temp.path, isInitialized: true }) });
+    const room = await RoomHandle.open(temp.path, "room-a");
+    const input = { requestId: "request-12345678", appId: "design", resource: { kind: "artifacts" as const } };
+    const created = await service.createInstance("ws", "room-a", room, input);
+    const retried = await service.createInstance("ws", "room-a", room, input);
+    assert.equal(retried.instance.instanceId, created.instance.instanceId);
+    assert.equal(Object.keys(retried.state.instances).length, 1);
+    assert.equal((await room.state()).applications?.activeInstanceId, created.instance.instanceId);
+
+    const updated = await service.updateInstance(room, created.instance.instanceId, {
+      resource: { kind: "artifacts", id: "artifact-1" },
+      view: "canvas",
+      baseUpdatedAt: created.instance.updatedAt,
+    });
+    assert.equal(updated.instance.resource.id, "artifact-1");
+    await assert.rejects(service.updateInstance(room, created.instance.instanceId, { view: "stale", baseUpdatedAt: created.instance.updatedAt }), ApplicationInstanceConflictError);
+
+    const closed = await service.closeInstance(room, created.instance.instanceId);
+    assert.deepEqual(closed.state.order, []);
+    assert.equal((await room.state()).applications?.activeInstanceId, undefined);
+  } finally {
+    await temp.cleanup();
   }
 });
 

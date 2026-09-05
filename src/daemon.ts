@@ -324,6 +324,34 @@ export class Daemon {
     return this.applications.catalog(workspaceId);
   }
 
+  async createApplicationInstance(workspaceId: string, roomId: string, input: Parameters<ApplicationService["createInstance"]>[3]) {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    const result = await this.applications.createInstance(workspaceId, roomId, service.room, input);
+    const snapshot = await service.getSnapshot();
+    this.broadcast({ type: "application-instance-changed", workspaceId, roomId, instance: result.instance, revision: result.instance.updatedAt });
+    this.broadcast({ type: "snapshot", workspaceId, roomId, snapshot });
+    return { ...result, snapshot };
+  }
+
+  async updateApplicationInstance(workspaceId: string, roomId: string, instanceId: string, input: Parameters<ApplicationService["updateInstance"]>[2]) {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    const result = await this.applications.updateInstance(service.room, instanceId, input);
+    const snapshot = await service.getSnapshot();
+    this.broadcast({ type: "application-instance-changed", workspaceId, roomId, instance: result.instance, revision: result.instance.updatedAt });
+    this.broadcast({ type: "snapshot", workspaceId, roomId, snapshot });
+    return { ...result, snapshot };
+  }
+
+  async closeApplicationInstance(workspaceId: string, roomId: string, instanceId: string) {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    const result = await this.applications.closeInstance(service.room, instanceId);
+    const snapshot = await service.getSnapshot();
+    const revision = new Date().toISOString();
+    this.broadcast({ type: "application-instance-changed", workspaceId, roomId, instance: null, revision });
+    this.broadcast({ type: "snapshot", workspaceId, roomId, snapshot });
+    return { ...result, revision, snapshot };
+  }
+
   /** Current cached usage as replayable events — used to seed a client the
    * moment it connects (SSE fan-out only carries events broadcast while it's
    * subscribed, so without this a fresh tab shows no chip until the next poll). */

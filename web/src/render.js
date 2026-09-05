@@ -6,9 +6,9 @@
 import { $, h } from "./dom.js";
 import { state } from "./state.js";
 
-/** @typedef {"layout"|"berserk"|"tabs"|"sidebar"|"panel"|"plugins"|"status"|"transcript"|"composer"|"studio"|"artifacts"|"dario"|"contextgate"|"theme"|"usage"|"search"|"bgtasks"|"settings"|"keymaker"} Region */
+/** @typedef {"layout"|"berserk"|"tabs"|"sidebar"|"panel"|"plugins"|"status"|"transcript"|"composer"|"applications"|"studio"|"artifacts"|"dario"|"contextgate"|"theme"|"usage"|"search"|"bgtasks"|"settings"|"keymaker"} Region */
 
-const ORDER = /** @type {Region[]} */ (["layout", "berserk", "tabs", "sidebar", "panel", "plugins", "status", "transcript", "composer", "studio", "artifacts", "dario", "contextgate", "theme", "usage", "search", "bgtasks", "settings", "keymaker"]);
+const ORDER = /** @type {Region[]} */ (["layout", "berserk", "tabs", "sidebar", "panel", "plugins", "status", "transcript", "composer", "applications", "studio", "artifacts", "dario", "contextgate", "theme", "usage", "search", "bgtasks", "settings", "keymaker"]);
 
 /** @type {Map<Region, () => void>} */
 const renderers = new Map();
@@ -78,6 +78,7 @@ export function mountApp() {
           "div",
           { class: "main-stack" },
           h("div", { class: "error", id: "error", hidden: true }),
+          h("section", { class: "application-shell", id: "application-shell", hidden: true }),
           h("section", { class: "transcript", id: "transcript" }),
         ),
         h("form", { class: "composer", id: "composer" }),

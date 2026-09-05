@@ -20,6 +20,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { BackgroundTask, ContextGatePending, EventDetails, MessageAttachment, MessageBlock, MonadConfig, PendingTurn, QueuedMessage, RoomBookmark, RoomEvent, RoomEventKind, RoomNote, RoomState, SummonDelivery, ToolDetail } from "../core/types.js";
 import { normalizePetBindings } from "./pets.js";
+import { normalizeRoomApplications } from "./applications.js";
 import { appendJsonl, ensureDir, readJson, readJsonlFrom, writeJsonAtomic, writeText, writeTextAtomic } from "../core/store.js";
 import { workspacePaths } from "../core/paths.js";
 import { newId } from "../core/ids.js";
@@ -521,8 +522,10 @@ export function normalizeRoomState(value: unknown): RoomState {
   const petBindings = normalizePetBindings(value.petBindings);
   const pluginState = pluginStateFrom(value.pluginState);
   const voiceDispatch = voiceDispatchFrom(value.voiceDispatch);
+  const applications = normalizeRoomApplications(value.applications);
   return {
     activeRoles: stringRecord(value.activeRoles),
+    ...(applications ? { applications } : {}),
     ...(typeof value.refCode === "string" && validRoomRefCode(value.refCode) ? { refCode: value.refCode.toUpperCase() } : {}),
     ...(petBindings ? { petBindings } : {}),
     ...(pluginState ? { pluginState: pluginState as Record<string, Record<string, unknown>> } : {}),
