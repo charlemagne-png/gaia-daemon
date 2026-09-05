@@ -57,6 +57,8 @@ class FakeRoom implements ScheduleRoomAccess {
 
   async waitForIdle(): Promise<void> {}
 
+  async waitForSettled(): Promise<void> {}
+
   async latestReplyFrom(): Promise<string> {
     return this.reply;
   }
@@ -147,15 +149,13 @@ test("fresh jobs seed on first sight and fire at the NEXT instant, once", async 
   await f.scheduler.tick();
   assert.equal(f.summons.launched.length, 1);
 
-  // Isolated by default: launched against the deliver room, result posted there.
+  // Isolated by default: launched against the parent; SummonCoordinator's
+  // child contract owns delivery, so Scheduler must not post a competing note.
   assert.equal(f.summons.launched[0].parentRoomId, "default");
   assert.equal(f.summons.launched[0].agentId, "gaia", "defaults to the workspace default agent");
   assert.match(f.summons.launched[0].task, /Scheduled task `poll`/);
   assert.match(f.summons.launched[0].task, /check the queue/);
-  const notes = f.rooms.get("default")?.notes ?? [];
-  assert.equal(notes.length, 1);
-  assert.match(notes[0].text, /⏰ `poll`/);
-  assert.match(notes[0].text, /summon reply/);
+  assert.equal(f.rooms.get("default")?.notes.length, 0);
 
   const record = (await f.state()).poll;
   assert.equal(record?.lastOutput, "summon reply");
@@ -228,7 +228,7 @@ test("runNow forces a run regardless of schedule; unknown ids answer politely", 
   assert.match(await f.scheduler.runNow("ws", f.root, "ghost"), /Unknown scheduled job/);
 });
 
-test("recovery: a run marked running by a dead process is reopened and delivered", async () => {
+test("recovery: a dead-process run is reopened without competing delivery", async () => {
   const f = await fixture();
   await writeJsonAtomic(workspacePaths.schedules(f.root), {
     jobs: [{ id: "long", schedule: "@daily", prompt: "x" }],
@@ -243,10 +243,7 @@ test("recovery: a run marked running by a dead process is reopened and delivered
 
   await f.scheduler.tick();
   await waitFor(async () => (await f.state()).long?.status === "complete");
-  const notes = f.rooms.get("default")?.notes ?? [];
-  assert.equal(notes.length, 1);
-  assert.match(notes[0].text, /recovered after restart/);
-  assert.match(notes[0].text, /recovered result/);
+  assert.equal(f.rooms.get("default")?.notes.length ?? 0, 0, "boot settlement funnel owns delivery");
   assert.equal((await f.state()).long?.lastOutput, "recovered result");
 });
 

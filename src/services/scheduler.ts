@@ -36,6 +36,7 @@ export interface ScheduleRoomAccess {
   readonly workspace: Workspace;
   sendMessage(text: string, options: { targets: string[] }): Promise<Task>;
   waitForIdle(timeoutMs?: number): Promise<void>;
+  waitForSettled(): Promise<void>;
   latestReplyFrom(agentId: string): Promise<string>;
   postAgentNote(agentId: string, text: string): Promise<void>;
   subscribe(listener: (event: UiEvent) => void): () => void;
