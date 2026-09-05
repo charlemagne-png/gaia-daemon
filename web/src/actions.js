@@ -467,6 +467,40 @@ export async function setRoomFavorite(roomId, favorite) {
   }
 }
 
+/** @param {string} roomId @param {string} eventId @param {string} name */
+export async function setRoomBookmark(roomId, eventId, name) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  try {
+    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/bookmarks`, {
+      method: "POST",
+      body: JSON.stringify({ eventId, name }),
+    });
+    applyRoomsPayload(snapshot.workspace.id, body.rooms);
+    state.error = "";
+    markDirty("sidebar", "tabs", "status", "panel", "transcript");
+  } catch (error) {
+    setError(error);
+  }
+}
+
+/** @param {string} roomId @param {string} bookmarkId */
+export async function deleteRoomBookmark(roomId, bookmarkId) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  try {
+    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/bookmarks/${encodeURIComponent(bookmarkId)}`, {
+      method: "DELETE",
+      body: "{}",
+    });
+    applyRoomsPayload(snapshot.workspace.id, body.rooms);
+    state.error = "";
+    markDirty("sidebar", "tabs", "status", "panel", "transcript");
+  } catch (error) {
+    setError(error);
+  }
+}
+
 /** @param {string} roomId */
 export async function deleteRoom(roomId) {
   const snapshot = state.snapshot;

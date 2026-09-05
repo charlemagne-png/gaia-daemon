@@ -88,6 +88,22 @@ async function roomFavorite(ctx: RouteContext): Promise<boolean> {
   await respond(ctx.response, () => ctx.daemon.setRoomFavorite(params[0], params[1], favorite));
   return true;
 }
+async function roomBookmarks(ctx: RouteContext): Promise<boolean> {
+  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/bookmarks$/);
+  if (ctx.request.method !== "POST" || !params) return false;
+  const body = await parseBody(ctx.request);
+  const eventId = stringField(body, "eventId")?.trim();
+  const name = stringField(body, "name")?.trim();
+  if (!eventId || !name) { json(ctx.response, 400, { error: "Missing eventId or name" }); return true; }
+  await respond(ctx.response, () => ctx.daemon.setRoomBookmark(params[0], params[1], eventId, name));
+  return true;
+}
+async function roomBookmarkDelete(ctx: RouteContext): Promise<boolean> {
+  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/bookmarks\/([^/]+)$/);
+  if (ctx.request.method !== "DELETE" || !params) return false;
+  await respond(ctx.response, () => ctx.daemon.deleteRoomBookmark(params[0], params[1], params[2]));
+  return true;
+}
 // Room-level human membership (RoomState.humans). Absent/empty = today's
 // unrestricted default for every existing room; a room only starts gating
 // reads/posts (see the /messages and /events routes below) the moment it
@@ -406,6 +422,8 @@ const roomHandlers = [
   roomAgentDialogue,
   roomTitle,
   roomFavorite,
+  roomBookmarks,
+  roomBookmarkDelete,
   roomHumansGet,
   roomHumansPost,
   roomHumansDelete,

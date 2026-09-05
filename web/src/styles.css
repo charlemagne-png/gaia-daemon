@@ -449,6 +449,7 @@ sidebar: workspaces + rooms tree
 }
 .message:hover .msg-action { opacity: 1; }
 .msg-action:hover { color: var(--fg); }
+.msg-action.bookmark.active { opacity: 1; color: var(--accent); text-shadow: 0 0 8px var(--glow); }
 /* Read-aloud stays visible while it is the active message (loading, speaking,
    paused, or ended-and-replayable), not just on hover. */
 .msg-action.ra-loading,

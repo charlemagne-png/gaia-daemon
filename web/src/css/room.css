@@ -62,6 +62,13 @@
 .room-toggle { display: flex; align-items: center; gap: 1ch; margin: 0; color: var(--muted); font-size: 11px; cursor: pointer; }
 .room-toggle input[type="checkbox"] { appearance: none; width: 12px; height: 12px; margin: 0; border: 1px solid var(--muted); border-radius: 0; background: transparent; box-shadow: none; }
 .room-toggle input[type="checkbox"]:checked { border-color: var(--accent); background: var(--accent); }
+.checkpoint-list { display: grid; gap: 5px; margin: 0 0 12px; }
+.checkpoint-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; border: 1px solid var(--border); background: var(--ink); }
+.checkpoint-name { flex: 1; min-width: 0; padding: 6px 8px; border: 0; background: transparent; box-shadow: none; color: var(--fg); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.checkpoint-remove { flex: 0 0 auto; padding: 0 8px; border: 0; border-left: 1px solid var(--border); background: transparent; box-shadow: none; color: var(--muted); opacity: .45; }
+.checkpoint-row:hover .checkpoint-remove, .checkpoint-remove:focus-visible { opacity: 1; }
+.checkpoint-remove:hover { color: var(--danger); }
+
 .agent-list { display: grid; gap: 0; }
 .roster-agent {
   display: grid;

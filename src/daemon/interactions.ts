@@ -1,5 +1,5 @@
 import { globalPaths } from "../core/paths.js";
-import type { AgentDef, Snapshot, UiEvent, VoiceCallInfo, Workspace, WorkspaceRecord } from "../core/types.js";
+import type { AgentDef, RoomBookmark, Snapshot, UiEvent, VoiceCallInfo, Workspace, WorkspaceRecord } from "../core/types.js";
 import { DEFAULT_ROOM, ensureWorkspaceRoom, initWorkspace, isValidRoomId, loadWorkspace, setWorkspaceDefaultAgent, setWorkspaceRoom, trashWorkspaceRoom } from "../domain/workspace.js";
 import { setAgentDefaultRole, trashGlobalAgent } from "../domain/agents.js";
 import { listAgentRoles } from "../domain/roles.js";
@@ -109,6 +109,18 @@ export class RoomInteractionLifecycle {
   async setRoomFavorite(workspaceId: string, roomId: string, favorite: boolean): Promise<{ rooms: Snapshot["rooms"] }> {
     const service = await this.serviceForExistingRoom(workspaceId, roomId);
     await service.setFavorite(favorite);
+    return this.refreshRoomList(workspaceId);
+  }
+
+  async setRoomBookmark(workspaceId: string, roomId: string, eventId: string, name: string): Promise<{ bookmark: RoomBookmark; rooms: Snapshot["rooms"] }> {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    const bookmark = await service.setBookmark(eventId, name);
+    return { bookmark, ...(await this.refreshRoomList(workspaceId)) };
+  }
+
+  async deleteRoomBookmark(workspaceId: string, roomId: string, bookmarkId: string): Promise<{ rooms: Snapshot["rooms"] }> {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    await service.removeBookmark(bookmarkId);
     return this.refreshRoomList(workspaceId);
   }
 
