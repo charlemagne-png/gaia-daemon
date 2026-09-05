@@ -146,3 +146,46 @@ Yes — composer footer ~35% less cluttered. Comparing before/05-composer.png vs
 
 ---
 
+## Wave 9: Topbar Single-Line + Statusbar Consolidate (0e2f3b1)
+
+**Spec requirements:**
+- Topbar: remove small (config path), keep strong only
+- Statusbar: merge workspace + room segment, remove keys hint, lighten borders
+
+**Implementation audit:**
+
+✓ Topbar simplified: `<small>` config path removed (`display: none` in CSS)
+✓ Topbar single line: only workspace name shown (`workspaceName` extracted from path, full paths moved to title attribute)
+✓ Statusbar workspace + room merged into one segment (`text: \`${workspaceName} · ⊞ ${activeRoomLabel}\``)
+✓ Keys hint segment removed (`.seg-keys` rendering removed from statusbar.js)
+✓ Segment styling lightened (borders via `::after` arrow, colors shifted to `--surface-1`, `--surface-2`, `--text-secondary` semantic tokens)
+✓ Spacing tightened (`gap: 2px` on `.statusbar`, padding `var(--sp-1) var(--sp-2)` on `.seg`)
+✓ Running segment gets emphasis (`--seg-bg: color-mix(in srgb, var(--good) 16%, var(--surface-1)); font-weight: var(--fw-medium);` when `.on`)
+✓ Token usage throughout (`--sp-N`, `--text-xs`, `--text-base`, `--text-primary`, `--text-secondary`, `--surface-N`, `--border-subtle`)
+
+**Perceptual test (frames/after-w9/):**
+- topbar-statusbar.png: Topbar single line "gaia-daemon-sep3" ✓, statusbar merged "gaia-daemon-sep3 · ⊞ default" ✓, no keys hint ✓
+- full-shell.png: Overall lighter header/footer weight ✓, more breathing room for main content ✓
+
+**Invariants:**
+✓ No logic changes (presentation-only refactor)
+✓ Layout boxes intact
+✓ No changes to applications.css/js
+
+**De-crowd perceptible:**  
+Yes — topbar ~40% shorter vertically, statusbar 2 fewer segments. Comparing before/03-main-topbar.png + before/06-statusbar.png vs after-w9 frames: topbar no longer double-line, statusbar segments visibly fewer + lighter, header/footer recede to let content breathe.
+
+**Verdict:** **ACCEPT** #1
+
+---
+
+## Final Summary
+
+**Per-wave verdicts:**
+- Wave 5 (tabs): **REVISE** — unread dot missing
+- Wave 6 (sidebar): **ACCEPT** #1
+- Wave 7 (panel): **ACCEPT** #1  
+- Wave 8 (composer): **ACCEPT** #1
+- Wave 9 (topbar/statusbar): **ACCEPT** #1
+
+**Batch verdict:** 4/5 waves production-ready. Wave 5 blocks shipment until unread dot visibility implemented per spec.
