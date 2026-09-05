@@ -2,7 +2,7 @@
 // Owning commit: 0dafdde.
 // Rollback: inline inheritance + normalization into domain/agents.ts; remove this module.
 
-export function inheritHomeWorkspacePin(base: string | undefined, override: unknown): unknown {
+export function inheritHomeWorkspacePin(base: unknown, override: unknown): unknown {
   return override !== undefined ? override : base;
 }
 

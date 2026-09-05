@@ -1,5 +1,5 @@
 // FENCED FORK FEATURE — boot auto-wake + stuck-turn watchdog retry.
-// Owning commits: dcb7c2b, 8350bb2; stall retry lineage preserved from RunnerHost watchdog work.
+// Owning commits: dcb7c2b, 8350bb2, 0c93466.
 // Rollback: inline recoverPendingTurns() into daemon/wiring.ts and maybeRequeueStall() into room-service.ts.
 import { newId } from "../../core/ids.js";
 import { workspacePaths } from "../../core/paths.js";

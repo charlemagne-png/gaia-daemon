@@ -4,7 +4,7 @@ import type { AgentEvent, PetProgressStatus, Task, UiEvent } from "../../core/ty
 import { HOOK_TEXT_CAP, runHooks, type HookEvent } from "../hooks.js";
 import { applyEventToDetails } from "../turns.js";
 import type { ConsolidateLlmInput } from "../consolidate.js";
-import { maybeAutoHeal as runAutoHeal } from "../fenced/auto-heal.js";
+import { maybeAutoHeal as runAutoHeal, type AutoHealHost } from "../fenced/auto-heal.js";
 
 
 export class RoomUiMixin {
@@ -91,7 +91,7 @@ export class RoomUiMixin {
   }
 
   maybeAutoHeal(task: Task): void {
-    runAutoHeal(this, task);
+    runAutoHeal(this as unknown as AutoHealHost, task);
   }
 
   taskCancelled(task: Task): boolean {
