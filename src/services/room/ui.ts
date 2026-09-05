@@ -4,6 +4,7 @@ import type { AgentEvent, PetProgressStatus, Task, UiEvent } from "../../core/ty
 import { HOOK_TEXT_CAP, runHooks, type HookEvent } from "../hooks.js";
 import { applyEventToDetails } from "../turns.js";
 import type { ConsolidateLlmInput } from "../consolidate.js";
+import { maybeAutoHeal as runAutoHeal } from "../fenced/auto-heal.js";
 
 
 export class RoomUiMixin {
@@ -90,15 +91,7 @@ export class RoomUiMixin {
   }
 
   maybeAutoHeal(task: Task): void {
-    if (process.env.GAIA_AUTO_HEAL === "0") return;
-    const tripped = task.targets.some((agentId) => {
-      const fallback = this.modelFallbacks?.[agentId];
-      return fallback?.refusal === true || /refusal|safety|safeguard|policy/i.test(fallback?.reason ?? "");
-    });
-    if (!tripped) return;
-    void this.room.state()
-      .then((state: any) => this.sendMessage(state.autoHeals ? "/love sanitize rebirth" : "/love sanitize auto", { recordUserMessage: false, queue: true }))
-      .catch(() => {});
+    runAutoHeal(this, task);
   }
 
   taskCancelled(task: Task): boolean {
