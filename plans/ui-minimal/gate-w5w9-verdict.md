@@ -112,3 +112,37 @@ Yes — panel scans ~50% faster. Comparing before/04-right-panel.png vs after-w7
 
 ---
 
+## Wave 8: Composer Consolidate (213b8dc)
+
+**Spec requirements:**
+- Merge target + model chips into one element
+- Thinking control = icon-only button
+- Ultrawhip = overlay position (absolute top-right), not footer
+- Voice buttons tighter group
+
+**Implementation audit:**
+
+✓ `TargetModelChip` function created, merges target + model + context into single chip with "·" separators
+✓ Old separate `ModelChip` and `ContextChip` removed from footer render (`modelWrapEl` now only contains `memory` chip)
+✓ Thinking control icon-only (`text: "\u{1F4AD}"` without `#${effective}` level text)
+✓ Thinking aria-label added (`aria-label: "thinking effort ${effective}"` for accessibility)
+✓ Ultrawhip overlay implemented (`.ultrawhip-chip { position: absolute; top: var(--sp-2); right: var(--sp-2); }` with pill styling, accent glow)
+✓ Voice buttons gap already adequate (no changes needed, existing `.voice-wrap { gap: var(--sp-2); }` sufficient)
+✓ Token usage (`--sp-N`, `--r-full`, `--text-xs`, `--fw-medium`, `--surface-1`, `--accent`, `--fg`)
+
+**Perceptual test (frames/after-w8/):**
+- composer.png: Footer shows single combined chip "@gaia · claude-f...-5 · ctx 6%" ✓, thinking button shows only 💭 ✓, clean footer ✓
+- composer-focus.png: Input focus ring visible ✓, same clean footer maintained ✓
+
+**Invariants:**
+✓ No logic changes (chip consolidation is presentation-only)
+✓ Layout boxes intact
+✓ No changes to applications.css/js
+
+**De-crowd perceptible:**  
+Yes — composer footer ~35% less cluttered. Comparing before/05-composer.png vs after-w8/composer.png: 3 separate chips (target + model + context) merged into one readable line, thinking button no longer shouts level, footer breathing room obvious.
+
+**Verdict:** **ACCEPT** #1
+
+---
+
