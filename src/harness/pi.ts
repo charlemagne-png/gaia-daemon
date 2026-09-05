@@ -38,6 +38,7 @@ import {
   type SummonCreate,
 } from "./spec.js";
 import { createEventChannel } from "./events.js";
+import { claudeCodeIdentityExtension } from "./pi/claude-code-identity.js";
 import { SessionMap } from "./sessions.js";
 import { RUNNER_ENV } from "./protocol.js";
 import { ModelLabel } from "./model-label.js";
@@ -763,6 +764,7 @@ export class PiRuntime implements AgentRuntime {
       // inside GAIA's pi-backed turns too. Skills/context remain composed by
       // GAIA, so only those stay disabled here.
       noExtensions: false,
+      extensionFactories: [claudeCodeIdentityExtension],
       noSkills: true,
       // Keep Pi's template discovery enabled: AgentSession.prompt() expands
       // these itself when RoomService passes a native slash command through.
