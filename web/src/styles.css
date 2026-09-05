@@ -1448,7 +1448,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .plugin-item { border: 1px solid var(--border); padding: var(--sp-2) calc(var(--sp-1) * 2.5); }
 .plugin-item-actions { display: flex; gap: calc(var(--sp-1) * 1.5); flex-wrap: wrap; margin-top: calc(var(--sp-1) * 1.5); }
 .plugin-dialog .prompt-input { margin: calc(var(--sp-1) * 0.5) 0; }
-.plugin-textarea { height: calc(var(--sp-6) * 3); min-height: calc(var(--sp-6) * 2); line-height: var(--lh-base); resize: vertical; overflow: auto; }
+.plugin-textarea { flex: 0 0 auto; height: calc(var(--sp-6) * 3); min-height: calc(var(--sp-6) * 2); line-height: var(--lh-base); resize: vertical; overflow: auto; }
 .plugin-corner { position: fixed; z-index: 19; display: grid; width: max-content; max-width: calc(100vw - var(--plugin-corner-gap) - var(--plugin-corner-gap)); max-height: calc(100vh - var(--plugin-corner-gap) - var(--plugin-corner-gap)); pointer-events: none; --plugin-corner-gap: calc(var(--sp-4) + var(--plugin-corner-offset, 0px)); }
 .plugin-corner > * { pointer-events: auto; }
 .plugin-corner--br { right: var(--plugin-corner-gap); bottom: var(--plugin-corner-gap); }
