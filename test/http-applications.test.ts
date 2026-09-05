@@ -82,8 +82,28 @@ test("GET workspace applications returns Design and Studio and seeds snapshot ca
 
     const snapshotResponse = await fetch(`${listening.baseUrl}/api/workspaces/${record.id}/snapshot`);
     assert.equal(snapshotResponse.status, 200);
-    const snapshotBody = await snapshotResponse.json() as { snapshot: { applications?: { applications: Array<{ manifest: { id: string } }> } } };
+    const snapshotBody = await snapshotResponse.json() as { snapshot: { applications?: { applications: Array<{ manifest: { id: string } }> }; room: { id: string; applications?: { activeInstanceId?: string; instances: Record<string, unknown> } } } };
     assert.deepEqual(snapshotBody.snapshot.applications?.applications.map((entry) => entry.manifest.id), ["design", "studio"]);
+
+    const instanceBase = `${listening.baseUrl}/api/workspaces/${record.id}/rooms/${snapshotBody.snapshot.room.id}/application-instances`;
+    const createdResponse = await fetch(instanceBase, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "request-http-1234", appId: "design", resource: { kind: "artifacts" } }) });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json() as { instance: { instanceId: string; updatedAt: string }; snapshot: { room: { applications: { activeInstanceId: string } } } };
+    assert.equal(created.snapshot.room.applications.activeInstanceId, created.instance.instanceId);
+
+    const patchResponse = await fetch(`${instanceBase}/${created.instance.instanceId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource: { kind: "artifacts", id: "artifact-http" }, baseUpdatedAt: created.instance.updatedAt }) });
+    assert.equal(patchResponse.status, 200);
+    const staleResponse = await fetch(`${instanceBase}/${created.instance.instanceId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ view: "stale", baseUpdatedAt: created.instance.updatedAt }) });
+    assert.equal(staleResponse.status, 409);
+
+    const restoredResponse = await fetch(`${listening.baseUrl}/api/workspaces/${record.id}/snapshot`);
+    const restored = await restoredResponse.json() as { snapshot: { room: { applications: { activeInstanceId: string } } } };
+    assert.equal(restored.snapshot.room.applications.activeInstanceId, created.instance.instanceId);
+
+    const closedResponse = await fetch(`${instanceBase}/${created.instance.instanceId}`, { method: "DELETE" });
+    assert.equal(closedResponse.status, 200);
+    const closed = await closedResponse.json() as { snapshot: { room: { applications: { activeInstanceId?: string } } } };
+    assert.equal(closed.snapshot.room.applications.activeInstanceId, undefined);
 
     const missing = await fetch(`${listening.baseUrl}/api/workspaces/missing/applications`);
     assert.equal(missing.status, 404);

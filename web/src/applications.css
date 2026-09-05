@@ -1,0 +1,66 @@
+/* Applications owns a separate stylesheet → parallel redesign waves never
+   collide with styles.css. Values use the shared minimal-futuristic tokens. */
+.applications-title { margin-top: var(--sp-4); }
+.applications-title-button {
+  padding: var(--sp-0);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: var(--fw-semibold);
+}
+
+.applications-launcher { display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(var(--sp-7) * 4), 1fr)); gap: var(--sp-3); }
+.applications-launcher.compact { grid-template-columns: minmax(var(--sp-0), 1fr); gap: var(--sp-1); }
+.application-card {
+  display: grid;
+  grid-template-columns: auto minmax(var(--sp-0), 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-3);
+  color: var(--text-primary);
+  text-align: left;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.applications-launcher.compact .application-card { padding: var(--sp-2); border-color: transparent; background: transparent; }
+.application-card:hover { background: var(--interactive-hover); border-color: var(--border-emphasis); transform: translateY(calc(var(--sp-1) * -0.25)); }
+.application-card.open { border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle)); }
+.application-icon, .application-chrome-icon { display: grid; place-items: center; color: var(--accent); font-size: var(--text-lg); }
+.application-card-copy { display: grid; min-width: var(--sp-0); gap: var(--sp-1); }
+.application-card-copy strong { overflow: hidden; text-overflow: ellipsis; font-weight: var(--fw-medium); }
+.application-card-copy small, .application-card-meta { color: var(--text-secondary); font-size: var(--text-xs); }
+.application-card-meta { padding: var(--sp-1) var(--sp-2); border-radius: var(--r-full); background: var(--surface-2); }
+
+.application-shell { min-height: var(--sp-0); overflow: hidden; background: var(--surface-0); }
+.main.applications-open .main-stack { grid-template-rows: auto minmax(var(--sp-0), 1fr); }
+.main.applications-open .transcript, .main.applications-open .composer { display: none; }
+.application-home { height: 100%; overflow: auto; padding: var(--sp-5); }
+.application-home-head, .application-chrome { display: flex; align-items: center; gap: var(--sp-2); }
+.application-home-head { justify-content: space-between; margin-bottom: var(--sp-5); }
+.application-home-head h2 { margin: var(--sp-1) var(--sp-0) var(--sp-0); font-size: var(--text-xl); }
+.application-kicker { color: var(--text-secondary); font-size: var(--text-xs); }
+.application-chrome {
+  min-height: calc(var(--sp-7) + var(--sp-1));
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+.application-chrome button, .application-home-head button { border-radius: var(--r-sm); transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.application-identity { display: grid; flex: 1; min-width: var(--sp-0); }
+.application-identity strong { font-weight: var(--fw-semibold); }
+.application-identity small, .application-save-state { color: var(--text-secondary); font-size: var(--text-xs); }
+.application-save-state { padding: var(--sp-1) var(--sp-2); border-radius: var(--r-full); background: var(--surface-2); }
+.application-surface { min-height: var(--sp-0); height: calc(100% - var(--sp-7) - var(--sp-1)); overflow: auto; }
+.application-empty { display: grid; height: 100%; place-items: center; color: var(--text-secondary); }
+
+/* Native Design adapter → existing artifact body, no ledger/payload move. */
+.application-surface .artifact-panel.application-embedded { position: static; width: 100%; height: 100%; min-height: var(--sp-0); border: 0; box-shadow: none; }
+.application-surface .studio-panel { min-height: 100%; border: 0; border-radius: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  .application-card, .application-chrome button, .application-home-head button { transition-duration: var(--dur-instant); }
+}

@@ -3,6 +3,7 @@
 // by default behind a twisty. Nesting is unbounded — grandchildren summon
 // their own children.
 import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, openSubroom, renameRoom, selectRoom, setRoomFavorite, setRoomProject, summonAgentInRoom } from "./actions.js";
+import { ApplicationsLauncher, openApplicationLauncher } from "./applications.js";
 import { closeSidebarOverlay } from "./chrome.js";
 import { $, h } from "./dom.js";
 import { PathText } from "./links.js";
@@ -112,6 +113,10 @@ function renderSidebar() {
     ),
     RoomTree(),
     RoomContextMenu(),
+    h("div", { class: "nav-title nav-title-row applications-title" },
+      h("button", { class: "applications-title-button", type: "button", onclick: () => openApplicationLauncher(), text: "Applications" }),
+      h("span", { class: "nav-title-actions" }, h("button", { class: "nav-title-add", type: "button", disabled: true, title: "Create app arrives in Wave 2", text: "+" }))),
+    ApplicationsLauncher(),
     h("div", { class: "spacer" }),
     h("button", { class: "nav-action", onclick: () => openSettings(), text: "settings" }),
   ];

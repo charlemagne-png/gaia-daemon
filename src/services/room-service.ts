@@ -4364,6 +4364,7 @@ export class RoomService {
         id: this.roomId,
         statePath: this.room.statePath,
         ...(state.refCode ? { refCode: state.refCode } : {}),
+        ...(state.applications ? { applications: state.applications } : {}),
         events,
         eventTotal: all.length,
         ...(state.thanksDario ? { thanksDario: true } : {}),

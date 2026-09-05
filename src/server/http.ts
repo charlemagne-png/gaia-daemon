@@ -42,7 +42,7 @@ import type { ReadAloudDelivery } from "../services/read-aloud.js";
 import { completionChunk, completionDone, completionPayload, isStreamingRequest, modelListPayload, newCompletionId } from "../services/voice.js";
 import { checkCredential, importCredential, normalizeWorkspaceId, readKeymakerState, setRoomWorkspaceBinding } from "../services/keymaker.js";
 import { StudioConflictError, StudioNotFoundError } from "../services/studio-service.js";
-import { ApplicationWorkspaceNotFoundError } from "../services/application-service.js";
+import { ApplicationInstanceConflictError, ApplicationInstanceNotFoundError, ApplicationWorkspaceNotFoundError, type CreateApplicationInstanceInput, type UpdateApplicationInstanceInput } from "../services/application-service.js";
 
 export interface WebServerOptions {
   cwd: string;
@@ -793,6 +793,36 @@ export class GaiaWebServer {
         return json(response, 200, await this.daemon.applicationCatalog(params[0]));
       } catch (error) {
         if (error instanceof ApplicationWorkspaceNotFoundError) return json(response, 404, { error: error.message });
+        return json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/application-instances$/))) {
+      const body = await parseBody(request);
+      try {
+        return json(response, 201, await this.daemon.createApplicationInstance(params[0], params[1], body as unknown as CreateApplicationInstanceInput));
+      } catch (error) {
+        if (error instanceof ApplicationInstanceNotFoundError) return json(response, 404, { error: error.message });
+        return json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    if (method === "PATCH" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/application-instances\/([^/]+)$/))) {
+      const body = await parseBody(request);
+      try {
+        return json(response, 200, await this.daemon.updateApplicationInstance(params[0], params[1], params[2], body as unknown as UpdateApplicationInstanceInput));
+      } catch (error) {
+        if (error instanceof ApplicationInstanceNotFoundError) return json(response, 404, { error: error.message });
+        if (error instanceof ApplicationInstanceConflictError) return json(response, 409, { error: error.message });
+        return json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    if (method === "DELETE" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/application-instances\/([^/]+)$/))) {
+      try {
+        return json(response, 200, await this.daemon.closeApplicationInstance(params[0], params[1], params[2]));
+      } catch (error) {
+        if (error instanceof ApplicationInstanceNotFoundError) return json(response, 404, { error: error.message });
         return json(response, 400, { error: error instanceof Error ? error.message : String(error) });
       }
     }

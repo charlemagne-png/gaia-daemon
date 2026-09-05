@@ -289,8 +289,27 @@ export interface VoiceDispatchState {
   lastTargetAt: string;
 }
 
+export interface RoomApplicationInstance {
+  instanceId: string;
+  appId: string;
+  supportRoomId: string;
+  resource: { kind: "artifacts" | "studio-project" | "workspace-app"; id?: string };
+  view?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoomApplicationsStateV1 {
+  schema: 1;
+  activeInstanceId?: string;
+  order: string[];
+  instances: Record<string, RoomApplicationInstance>;
+}
+
 export interface RoomState {
   activeRoles: Record<string, string>;
+  /** Durable room-owned application instances; payloads remain in their owning ledgers. */
+  applications?: RoomApplicationsStateV1;
   /** Stable human-speakable workspace-scoped room reference (A01…Z99,
    * A201…Z299, then A301…); assigned once, persisted in state.json. */
   refCode?: string;
@@ -1263,6 +1282,8 @@ export interface Snapshot {
     statePath: string;
     /** Stable short reference code for this room, unique inside the workspace. */
     refCode?: string;
+    /** Durable application instances + active selection for this room only. */
+    applications?: RoomApplicationsStateV1;
     /** Events carry their runtime details on `details` (v1 sent side-band
      * underscore fields merged client-side; that heuristic is gone). */
     events: RoomEvent[];
@@ -1365,6 +1386,7 @@ export type UiEvent =
   // is the steer's user RoomEvent (scope.eventId is, as always, the REPLY's).
   | ({ type: "steered"; steerEventId: string } & StreamScope)
   | { type: "settings-saved"; workspaceId?: string; roomId?: string; fileId: string }
+  | { type: "application-instance-changed"; workspaceId: string; roomId: string; instance: RoomApplicationInstance | null; revision: string }
   | { type: "canvas-command"; command: string; params: unknown }
   | { type: "studio-project"; workspaceId: string; roomId: string; project: unknown }
   | { type: "studio-files-changed"; workspaceId: string; roomId: string; projectId: string; paths: string[]; source: "human" | "agent" | "external"; observedAt: string }

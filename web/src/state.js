@@ -73,6 +73,7 @@ import { isNative, isNativeWindowFocused } from "./native.js";
  *   manualUnread: Record<string, boolean>,
  *   workspaceRooms: Record<string, RoomSummary[]>,
  *   keymaker: {open: boolean, loading: boolean, error: string, data: any|null, selectedIdentity: string},
+ *   applications: {catalog: any[], instances: Record<string, any>, order: string[], activeInstanceId: string, launcherOpen: boolean, loading: boolean, error: string},
  *   settingsOpen: boolean,
  *   settingsTab: "general"|"workspace"|"agents"|"accounts",
  *   settingsAgentId: string|null,
@@ -211,6 +212,9 @@ export const state = {
   // not just the open one). The open workspace reads live from state.snapshot.
   workspaceRooms: {},
   keymaker: { open: false, loading: false, error: "", data: null, selectedIdentity: "" },
+  // Catalog + durable instance mirrors. Only launcher/loading/error are local;
+  // syncApplications() replaces every durable slice from each snapshot.
+  applications: { catalog: [], instances: {}, order: [], activeInstanceId: "", launcherOpen: false, loading: false, error: "" },
   // The Settings modal (sidebar's "settings" button / see settings.js). Files are
   // raw-edited for now (JSON/markdown content + textarea); settingsFileHints mirrors
   // whatever file is currently open so a later smart-form renderer can drive

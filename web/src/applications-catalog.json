@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "generatedFrom": "src/domain/applications.ts#BUILTIN_APPLICATION_MANIFESTS",
+  "applications": [
+    {
+      "source": "builtin",
+      "launchable": true,
+      "manifest": {
+        "schema": 1,
+        "id": "design",
+        "name": "Design",
+        "icon": { "kind": "symbol", "value": "◇" },
+        "panel": { "kind": "native", "entry": "design", "defaultSize": "workspace", "popout": false },
+        "agent": { "preferred": ["dieter"], "fallback": "active", "context": "visual artifact and canvas work" },
+        "tools": ["artifact"],
+        "resources": ["artifact", "versions", "preview"],
+        "createdBy": { "kind": "builtin" },
+        "createdAt": "2026-09-05T00:00:00.000Z",
+        "updatedAt": "2026-09-05T00:00:00.000Z"
+      }
+    },
+    {
+      "source": "builtin",
+      "launchable": true,
+      "manifest": {
+        "schema": 1,
+        "id": "studio",
+        "name": "Studio",
+        "icon": { "kind": "symbol", "value": "▣" },
+        "panel": { "kind": "native", "entry": "studio", "defaultSize": "workspace", "popout": true },
+        "agent": { "preferred": [], "fallback": "active", "context": "inspect, edit, preview, and iterate source" },
+        "tools": ["read", "write", "edit", "artifact"],
+        "resources": ["files", "versions", "preview"],
+        "createdBy": { "kind": "builtin" },
+        "createdAt": "2026-09-05T00:00:00.000Z",
+        "updatedAt": "2026-09-05T00:00:00.000Z"
+      }
+    }
+  ],
+  "diagnostics": []
+}
