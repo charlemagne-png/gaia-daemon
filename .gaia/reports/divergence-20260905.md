@@ -1,6 +1,6 @@
 # Upstream divergence map · 20260905
 
-Refs → ours=`main@01555b3b3` · theirs=`clean/pascal-upstream-20260905@43bbcb5b2`
+Refs → ours=`main@e848b54b8` · theirs=`clean/pascal-upstream-20260905@43bbcb5b2`
 Scope → `src/services` · `src/harness` · `src/server` · `web/src` · `docs`
 Evidence → `git diff --numstat main clean/pascal-upstream-20260905 -- src/services src/harness src/server web/src docs` · `git log main..clean/pascal-upstream-20260905`
 
@@ -11,13 +11,13 @@ Evidence → `git diff --numstat main clean/pascal-upstream-20260905 -- src/serv
 | `src/services` | 67 | 8890 | 7494 | 0 |
 | `src/harness` | 23 | 2170 | 4866 | 0 |
 | `src/server` | 12 | 2450 | 2292 | 0 |
-| `web/src` | 62 | 5677 | 8852 | 0 |
+| `web/src` | 62 | 5677 | 8853 | 0 |
 | `docs` | 25 | 2316 | 95 | 0 |
 
 ## Top divergent files
 
 - `src/services/room-service.ts` → +390/-4686 · src/services
-- `web/src/styles.css` → +672/-2392 · web/src
+- `web/src/styles.css` → +672/-2393 · web/src
 - `src/server/http.ts` → +440/-1807 · src/server
 - `src/harness/claude.ts` → +0/-1513 · src/harness
 - `src/harness/codex.ts` → +0/-1264 · src/harness
