@@ -61,7 +61,7 @@ function renderTabs() {
     h(
       "div",
       { class: "tab-strip" },
-      tabs.map((room, index) => Tab(room, index + 1, room.id === currentId, wsId)),
+      tabs.map((room) => Tab(room, room.id === currentId, wsId)),
       snapshot ? h("button", { class: "tab-new", title: "new room (⌘T / ⌘⇧N) · ⌥-click = incognito 🕶", onclick: (/** @type {MouseEvent} */ e) => void addRoom({ incognito: e.altKey }), text: "+" }) : null,
     ),
     h("div", { class: "tab-spacer" }),
@@ -82,11 +82,10 @@ registerRegion("tabs", renderTabs);
 
 /**
  * @param {RoomSummary} room
- * @param {number} number
  * @param {boolean} isActive
  * @param {string|undefined} wsId
  */
-function Tab(room, number, isActive, wsId) {
+function Tab(room, isActive, wsId) {
   return h(
     "div",
     {
@@ -97,8 +96,7 @@ function Tab(room, number, isActive, wsId) {
       onpointerup: (event) => endDrag(event),
       onpointercancel: (event) => cancelDrag(event),
     },
-    h("span", { class: "tab-num", text: String(number) }),
-    room.running ? h("span", { class: "tab-dot" }) : null,
+    h("span", { class: "tab-dot" }),
     room.favorite ? h("span", { class: "room-star", title: "favorite", text: "★" }) : null,
     room.incognito ? h("span", { class: "tab-incognito", title: "incognito — no memory", text: "🕶" }) : null,
     h("span", { class: "tab-name", text: room.title ?? room.id }),
