@@ -331,7 +331,7 @@ function renderComposer() {
     autocompleteEl.replaceChildren();
   }
 
-  targetStatusEl.textContent = composerTargetStatus(snapshot, state.composerText);
+  targetStatusEl.replaceChildren(TargetModelChip(snapshot, state.composerText));
 
   // Pinned, always visible (not gated on `busy`) — /ultrawhip stays live
   // across turns until toggled off, so the indicator has to too.
@@ -350,10 +350,8 @@ function renderComposer() {
   const thinking = ThinkingControl(snapshot, state.composerText);
   thinkingWrapEl.replaceChildren(...(thinking ? [thinking] : []));
 
-  const model = ModelChip(snapshot, state.composerText);
-  const context = ContextChip(snapshot, state.composerText);
   const memory = MemoryChip(snapshot);
-  modelWrapEl.replaceChildren(...[model, context, memory].filter((chip) => chip !== null));
+  modelWrapEl.replaceChildren(...[memory].filter((chip) => chip !== null));
 
   voiceWrapEl.replaceChildren(...VoiceButtons());
 }
@@ -851,6 +849,44 @@ function composerTargetStatus(snapshot, text) {
   return composerTargets(snapshot, text).map((target) => `@${target}`).join(", ");
 }
 
+/**
+ * One footer chip for target + live model + context, replacing the old trio.
+ * @param {Snapshot|null} snapshot
+ * @param {string} text
+ * @returns {HTMLElement}
+ */
+function TargetModelChip(snapshot, text) {
+  const target = composerTargetStatus(snapshot, text);
+  const special = !snapshot || target === "command mode" || target.startsWith("unknown:");
+  if (special) return h("span", { class: `target-model-chip ${target.startsWith("unknown:") ? "warn" : ""}`, text: target });
+  const agent = composerAgent(snapshot, text);
+  const parts = [h("span", { class: "agent", text: target })];
+  if (agent) {
+    const fallback = agent.modelFallback;
+    parts.push(h("span", { class: "target-chip-sep", text: "·" }));
+    parts.push(h("span", {
+      class: fallback ? "warn" : "",
+      title: fallback
+        ? `provider switched models on the last turn: ${fallback.from} → ${fallback.to} — ${fallback.reason}`
+        : `model for @${agent.id} (configured: ${agent.configuredModel}; ran: ${agent.modelLabel})`,
+      text: shortModel(agent.modelLabel),
+    }));
+    const context = agent.context;
+    if (context) {
+      const percent = context.maxTokens ? Math.round((context.usedTokens / context.maxTokens) * 100) : null;
+      parts.push(h("span", { class: "target-chip-sep", text: "·" }));
+      parts.push(h("span", {
+        class: percent !== null && percent >= 80 ? "warn" : "",
+        title: context.maxTokens
+          ? `context used: ${context.usedTokens.toLocaleString()} of ${context.maxTokens.toLocaleString()} tokens — /compact frees it`
+          : `context used: ${context.usedTokens.toLocaleString()} tokens (window size unknown)`,
+        text: percent !== null ? `ctx ${percent}%` : `ctx ${Math.round(context.usedTokens / 1000)}k`,
+      }));
+    }
+  }
+  return h("span", { class: "target-model-chip" }, parts);
+}
+
 // Last non-off level per agent, so the off-toggle can come back to it.
 /** @type {Map<string, string>} */
 const thinkingReturnLevels = new Map();
@@ -921,7 +957,8 @@ function ThinkingControl(snapshot, text) {
       state.thinkingMenuOpen = !state.thinkingMenuOpen;
       markDirty("composer");
     },
-    text: `\u{1F4AD} #${effective}`,
+    "aria-label": `thinking effort ${effective}`,
+    text: "\u{1F4AD}",
   });
 
   return h(
