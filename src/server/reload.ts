@@ -38,7 +38,7 @@ interface OrphanWatchdogOptions {
  * 2026-08-07: a second instance on :8797 rewrote daemon.pid → shell fired
  * spurious mid-boot reloads + the real daemon's orphan-retire saw a foreign
  * pid and exited). */
-export function pidfilePath(port = DEFAULTS.port): string {
+export function pidfilePath(port: number = DEFAULTS.port): string {
   return globalPaths.daemonPidfile(port, DEFAULTS.port);
 }
 
