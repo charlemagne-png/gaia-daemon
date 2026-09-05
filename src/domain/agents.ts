@@ -13,6 +13,7 @@ import { agentPaths, globalPaths } from "../core/paths.js";
 import { canonicalHarnessId } from "../core/harness-id.js";
 import { ensureDir, jsonText, readJson, writeJsonAtomic, writeText, writeTextIfMissing } from "../core/store.js";
 import { MemoryStore } from "./memory.js";
+import { inheritHomeWorkspacePin, normalizeHomeWorkspacePin } from "./fenced/home-workspace-pin.js";
 
 interface RawAgentConfig {
   id?: string;
@@ -367,7 +368,7 @@ function mergeAgentConfig(base: RawAgentConfig, override: RawAgentConfig): RawAg
     harness: rawHarness(override) !== undefined ? rawHarness(override) : rawHarness(base),
     permissionMode: override.permissionMode !== undefined ? override.permissionMode : base.permissionMode,
     account: override.account !== undefined ? override.account : base.account,
-    homeWorkspace: override.homeWorkspace !== undefined ? override.homeWorkspace : base.homeWorkspace,
+    homeWorkspace: inheritHomeWorkspacePin(base.homeWorkspace, override.homeWorkspace),
     memory: override.memory !== undefined ? override.memory : base.memory,
     mcpServers: override.mcpServers !== undefined ? override.mcpServers : base.mcpServers,
     env: override.env !== undefined ? override.env : base.env,
@@ -440,7 +441,7 @@ export async function loadAgentDefinitions(globalAgentsDir: string, projectAgent
       icon: typeof raw.icon === "string" && raw.icon.trim() ? raw.icon : "•",
       ...(raw.aliases !== undefined ? { aliases: stringList(raw.aliases, []) } : {}),
       workspace: typeof raw.workspace === "string" && raw.workspace.trim() ? raw.workspace.trim() : undefined,
-      homeWorkspace: typeof raw.homeWorkspace === "string" && raw.homeWorkspace.trim() ? raw.homeWorkspace.trim() : undefined,
+      homeWorkspace: normalizeHomeWorkspacePin(raw.homeWorkspace),
       voice: typeof raw.voice === "string" && raw.voice.trim() ? raw.voice.trim() : undefined,
       tts: parseTtsConfig(raw.tts),
       dir,
