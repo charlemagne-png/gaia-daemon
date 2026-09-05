@@ -6,7 +6,7 @@ import { accountsCatalog, selectRoom } from "./actions.js";
 import { artifactPanelOpen, toggleArtifactPanel } from "./design/artifacts.js";
 import { api } from "./api.js";
 import { $, h } from "./dom.js";
-import { LinkedText, PathText } from "./links.js";
+import { LinkedText } from "./links.js";
 import { stopReadAloud } from "./readaloud.js";
 import { clearError, markDirty, registerRegion, setError } from "./render.js";
 import { openSearch } from "./search.js";
@@ -33,12 +33,12 @@ function renderTopbar() {
   const topbar = $("#topbar");
   if (!topbar) return;
   const snapshot = state.snapshot;
+  const workspaceName = snapshot?.workspace.rootDir.split("/").filter(Boolean).pop() ?? snapshot?.workspace.id;
   topbar.replaceChildren(
     h(
       "div",
-      {},
-      h("strong", {}, snapshot ? PathText(snapshot.workspace.rootDir) : LinkedText("No workspace selected")),
-      h("small", {}, snapshot ? PathText(snapshot.workspace.configPath) : LinkedText("Add an initialized workspace to begin.")),
+      { title: snapshot ? `${snapshot.workspace.rootDir}\n${snapshot.workspace.configPath}` : "Add an initialized workspace to begin." },
+      h("strong", {}, snapshot ? document.createTextNode(workspaceName ?? snapshot.workspace.id) : LinkedText("No workspace selected")),
     ),
     h(
       "div",
@@ -99,8 +99,8 @@ function renderStatusbar() {
     const running = (snapshot.rooms ?? []).filter((room) => room.running).length;
     const activeRoom = snapshot.rooms?.find((room) => room.id === snapshot.room.id);
     const activeRoomLabel = activeRoom?.title ?? snapshot.room.id;
-    segs.push({ text: snapshot.workspace.rootDir.split("/").filter(Boolean).pop() ?? snapshot.workspace.id, cls: "seg-head", title: snapshot.workspace.rootDir });
-    segs.push({ text: `⊞ ${activeRoomLabel}`, cls: "seg-a", title: `active room: ${snapshot.room.id}` });
+    const workspaceName = snapshot.workspace.rootDir.split("/").filter(Boolean).pop() ?? snapshot.workspace.id;
+    segs.push({ text: `${workspaceName} · ⊞ ${activeRoomLabel}`, cls: "seg-head", title: `${snapshot.workspace.rootDir}\nactive room: ${snapshot.room.id}` });
     segs.push({ text: `${snapshot.rooms?.length ?? 0} rooms`, cls: "seg-b" });
     segs.push({
       text: running ? `● ${running} running` : "○ idle",
@@ -142,7 +142,6 @@ function renderStatusbar() {
   const theme = themeById(currentThemeId());
   segs.push({ text: `◈ ${theme.name}`, cls: "seg-theme", title: "themes (Alt+T)", onclick: openThemePalette });
   segs.push({ text: clockText(), cls: "seg-clock", id: "statusClock" });
-  segs.push({ text: "^T new · ^B panes", cls: "seg-keys", title: "Ctrl+T new room · Ctrl+B/G toggle panes" });
 
   footer.replaceChildren(
     ...segs.map((seg) =>

@@ -590,14 +590,14 @@ body.resizing { cursor: col-resize; user-select: none; }
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
-  padding: calc(var(--sp-1) * 2.25) calc(var(--sp-1) * 3.5);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg2);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
 }
 
 .topbar > div:first-child { min-width: 0; }
-.topbar strong, .topbar small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topbar strong { color: var(--fg); font-weight: var(--fw-semibold); }
+.topbar strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); font-size: var(--text-base); font-weight: var(--fw-semibold); }
+.topbar small { display: none; }
 
 .topbar-right { display: flex; align-items: center; gap: var(--sp-2); flex-shrink: 0; }
 .status { color: var(--accent); white-space: nowrap; }
@@ -1722,10 +1722,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .statusbar {
   display: flex;
   align-items: stretch;
+  gap: 2px;
   height: 28px;
-  background: var(--bg);
-  border-top: 1px solid var(--border);
-  font-size: 0.85em;
+  padding: 0 var(--sp-2);
+  background: var(--surface-0);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
   overflow: hidden;
 }
 
@@ -1735,14 +1737,15 @@ body.resizing { cursor: col-resize; user-select: none; }
 .seg {
   display: flex;
   align-items: center;
-  gap: calc(var(--sp-1) * 1.5);
-  padding: 0 var(--sp-4) 0 var(--sp-3);
-  color: var(--fg);
-  background: var(--seg-bg, var(--bg2));
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-secondary);
+  background: var(--seg-bg, var(--surface-1));
   position: relative;
   border: none;
   box-shadow: none;
   white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
 /* The trailing powerline arrow — pure CSS, no Nerd Font needed. */
@@ -1756,18 +1759,19 @@ body.resizing { cursor: col-resize; user-select: none; }
   z-index: 1;
   border-top: 14px solid transparent;
   border-bottom: 14px solid transparent;
-  border-left: 9px solid var(--seg-bg, var(--bg2));
+  border-left: 9px solid var(--seg-bg, var(--surface-1));
+  opacity: 0.6;
 }
 
-.seg.spacer { --seg-bg: var(--bg); flex: 1; padding: 0; }
+.seg.spacer { --seg-bg: var(--surface-0); flex: 1; padding: 0; }
 .seg.spacer::after { display: none; }
 
-.seg-head { --seg-bg: var(--accent); color: var(--bg); font-weight: var(--fw-bold); letter-spacing: 1px; }
-.seg-a { --seg-bg: var(--bg3); color: var(--accent); }
-.seg-b { --seg-bg: var(--bg2); color: var(--muted); }
-.seg-run { --seg-bg: var(--bg3); color: var(--muted); }
-.seg-run.on { color: var(--good); }
-.seg-voice { --seg-bg: var(--bg2); color: var(--accent2); }
+.seg-head { --seg-bg: var(--surface-2); color: var(--text-primary); font-weight: var(--fw-semibold); letter-spacing: 0.03em; }
+.seg-a { --seg-bg: var(--surface-2); color: var(--accent); }
+.seg-b { --seg-bg: var(--surface-1); color: var(--text-secondary); }
+.seg-run { --seg-bg: var(--surface-2); color: var(--text-secondary); }
+.seg-run.on { --seg-bg: color-mix(in srgb, var(--good) 16%, var(--surface-1)); color: var(--good); font-weight: var(--fw-medium); }
+.seg-voice { --seg-bg: var(--surface-1); color: var(--accent2); }
 
 /* Read-aloud now-playing chip — a message may keep speaking after you switch
    rooms, so this lit, gently-pulsing chip says where it's playing (click to
@@ -1800,8 +1804,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 
 .seg-theme:hover { color: var(--fg); }
-.seg-clock { --seg-bg: var(--bg3); color: var(--muted); }
-.seg-keys { --seg-bg: var(--accent); color: var(--bg); font-weight: var(--fw-semibold); }
+.seg-clock { --seg-bg: var(--surface-2); color: var(--text-secondary); }
+.seg-keys { --seg-bg: var(--surface-2); color: var(--text-primary); font-weight: var(--fw-semibold); }
 .seg-keys::after { display: none; }
 
 /* Account usage chip (subscription session/weekly caps). Colour tracks the
