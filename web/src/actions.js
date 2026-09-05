@@ -123,7 +123,7 @@ export async function addWorkspace() {
 /**
  * @param {string} workspaceId
  * @param {string} roomId
- * @param {{ incognito?: boolean; voiceNavigation?: boolean }} [opts] `incognito` only takes effect when this
+ * @param {{ incognito?: boolean; voiceNavigation?: boolean; parentRoomId?: string }} [opts] `incognito` only takes effect when this
  *   call creates the room (a no-op when selecting one that already exists).
  */
 export async function selectRoom(workspaceId, roomId, opts = {}) {
