@@ -25,28 +25,30 @@ test("corner-notes plugin provides global CRUD, normalized persistence, and a so
     assert.equal(plugin.id, "corner-notes");
     assert.equal(plugin.command, "notes");
 
-    const opened = await plugin.run([], ctx("room-a"));
-    assert.deepEqual(opened.state, { open: true });
-    const emptyPanel = await plugin.panel(ctx("room-a", opened.state));
+    const emptyPanel = await plugin.panel(ctx("room-a"));
     assert.equal(emptyPanel?.placement, "corner");
     assert.equal(emptyPanel?.corner, "br");
     assert.equal(emptyPanel?.forms?.[0]?.action, "add");
     assert.equal(emptyPanel?.forms?.[0]?.fields[0]?.type, "textarea");
     assert.deepEqual(emptyPanel?.items, []);
+    const emptyListed = await plugin.run([], ctx("room-a"));
+    assert.deepEqual(emptyListed, { state: {}, reply: "No corner notes." });
 
-    const alpha = await plugin.run(["add", "Alpha", "note"], ctx("room-a", opened.state));
+    const alpha = await plugin.run(["add", "Alpha", "note"], ctx("room-a"));
     const alphaId = replyId(alpha.reply);
     const beta = await plugin.run(["add", "Beta"], ctx("room-b"));
     const betaId = replyId(beta.reply);
 
     const pinned = await plugin.run(["pin", betaId], ctx("room-b"));
     assert.match(pinned.reply ?? "", /^Pinned/);
-    const panel = await plugin.panel(ctx("room-a", { open: true }));
+    const panel = await plugin.panel(ctx("room-a"));
+    const otherRoomPanel = await plugin.panel(ctx("room-b"));
+    assert.deepEqual(panel?.items, otherRoomPanel?.items, "panel items are identical across rooms");
     assert.deepEqual(panel?.items?.map((item) => item.title), ["Beta", "Alpha note"], "pinned notes sort before order");
     assert.deepEqual(panel?.items?.[0]?.actions?.map((action) => action.action), ["edit", "pin", "del"]);
     assert.equal(panel?.items?.[0]?.actions?.[2]?.danger, true);
 
-    const editMode = await plugin.run(["edit", alphaId], ctx("room-a", { open: true }));
+    const editMode = await plugin.run(["edit", alphaId], ctx("room-a"));
     const editPanel = await plugin.panel(ctx("room-a", editMode.state));
     assert.equal(editPanel?.forms?.[1]?.action, `edit:${alphaId}`);
     assert.equal(editPanel?.forms?.[1]?.fields[0]?.type, "textarea");
@@ -80,7 +82,7 @@ test("corner-notes plugin provides global CRUD, normalized persistence, and a so
       { id: "valid", text: "duplicate", order: 9, pinned: true, createdAt: "2026-01-01", updatedAt: "2026-01-01" },
       { id: "missing-text" },
     ] }));
-    const normalizedPanel = await plugin.panel(ctx("room-c", { open: true }));
+    const normalizedPanel = await plugin.panel(ctx("room-c"));
     assert.deepEqual(normalizedPanel?.items?.map((item) => item.title), ["Recovered"]);
     await plugin.run(["pin", "valid"], ctx("room-c"));
     const normalized = JSON.parse(await readFile(path, "utf8"));
@@ -96,7 +98,7 @@ test("corner-notes plugin provides global CRUD, normalized persistence, and a so
     assert.equal(Number.isFinite(Date.parse(normalized.notes[0].updatedAt)), true);
     assert.equal((await readdir(temp.path)).some((name) => name.endsWith(".tmp")), false);
 
-    assert.equal(await plugin.panel(ctx("room-a", { open: false })), undefined);
+    assert.ok(await plugin.panel(ctx("room-a", { open: false })), "legacy open state cannot hide the panel");
     const missing = await plugin.run(["del", "unknown"], ctx("room-a"));
     assert.equal(missing.reply, "Corner note not found: unknown.");
   } finally {

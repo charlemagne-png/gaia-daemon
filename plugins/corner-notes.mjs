@@ -41,7 +41,7 @@ function normalizeState(raw) {
 
 function normalizeUiState(raw) {
   const record = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  const state = { open: record.open === true };
+  const state = {};
   if (typeof record.editing === "string" && record.editing) state.editing = record.editing;
   return state;
 }
@@ -104,12 +104,11 @@ export default {
     const [action, ...values] = args;
     const ui = normalizeUiState(ctx.state);
 
-    if (!action) return { state: { ...ui, open: true }, reply: "Corner notes opened." };
-    if (action === "close") return { state: { open: false }, reply: "Corner notes closed." };
-    if (action === "list") {
+    if (!action || action === "list") {
       const state = await readState(ctx);
-      return { state: { ...ui, open: true }, reply: listReply(state.notes) };
+      return { state: ui, reply: listReply(state.notes) };
     }
+    if (action === "close") return { state: ui };
     if (action === "add") {
       const text = values.join(" ").trim();
       if (!text) return { state: ui, reply: usage() };
@@ -120,7 +119,7 @@ export default {
         state.notes.push(created);
         return created;
       });
-      return { state: { open: ui.open }, reply: `Added corner note ${note.id}.` };
+      return { state: ui, reply: `Added corner note ${note.id}.` };
     }
 
     const panelEdit = action.startsWith("edit:");
@@ -131,10 +130,10 @@ export default {
       if (textValues.length === 0) {
         const state = await readState(ctx);
         if (!state.notes.some((note) => note.id === id)) return { state: ui, reply: `Corner note not found: ${id}.` };
-        return { state: { ...ui, open: true, editing: id }, reply: "Edit corner note." };
+        return { state: { editing: id }, reply: "Edit corner note." };
       }
       const text = textValues.join(" ").trim();
-      if (!text) return { state: { ...ui, open: true, editing: id }, reply: "Corner note text is required." };
+      if (!text) return { state: { editing: id }, reply: "Corner note text is required." };
       const note = await mutate(ctx, (state) => {
         const found = state.notes.find((item) => item.id === id);
         if (!found) return undefined;
@@ -143,7 +142,7 @@ export default {
         return found;
       });
       return note
-        ? { state: { open: true }, reply: `Updated corner note ${id}.` }
+        ? { state: {}, reply: `Updated corner note ${id}.` }
         : { state: ui, reply: `Corner note not found: ${id}.` };
     }
 
@@ -157,7 +156,7 @@ export default {
         return true;
       });
       return removed
-        ? { state: { open: ui.open }, reply: `Deleted corner note ${id}.` }
+        ? { state: ui.editing === id ? {} : ui, reply: `Deleted corner note ${id}.` }
         : { state: ui, reply: `Corner note not found: ${id}.` };
     }
 
@@ -181,7 +180,6 @@ export default {
 
   async panel(ctx) {
     const ui = normalizeUiState(ctx.state);
-    if (!ui.open) return undefined;
     const state = await readState(ctx);
     const editing = state.notes.find((note) => note.id === ui.editing);
     return {
