@@ -51,6 +51,8 @@ export interface PluginContext {
   roomId: string;
   workspaceRoot: string;
   state?: Record<string, unknown>;
+  /** Room whose plugin bucket supplied `state` (root for inherited modes). */
+  stateRoomId?: string;
   agents: PluginAgent[];
   /** The specific command name that triggered this `run()` call, when the
    * plugin owns more than one (see `CommandPlugin.command` below). Absent for
@@ -78,6 +80,15 @@ export interface PluginRenderCap {
   note?: string;
 }
 
+export interface PluginRoomMode {
+  /** Plugin-owned state property whose literal `true` means active. */
+  key: string;
+  /** Resolve state at the cycle-safe root of the room ancestry. */
+  inheritance: "root-tree";
+  /** Data-only theme token; client chrome resolves it without plugin CSS/JS. */
+  chromeToken: string;
+}
+
 export interface PluginResult {
   steer?: string;
   reply?: string;
@@ -94,7 +105,7 @@ export interface PluginResult {
    * the room's agent generate the actual reply as a REAL turn, never a
    * synthesized string speaking for it. `targets` pins who the turn
    * addresses (defaults to the room's default target when omitted). */
-  rewriteAsMessage?: boolean;
+  rewriteAsMessage?: boolean | string;
   targets?: string[];
 }
 
@@ -122,6 +133,9 @@ export interface CommandPlugin {
    * (see pluginStateKey). Defaults to the first `command` name. */
   id?: string;
   description?: string;
+  /** Optional root-inherited room mode. Core resolves/read-writes the root
+   * plugin bucket and projects the semantic chrome token while `key` is true. */
+  roomMode?: PluginRoomMode;
   run(args: string[], ctx: PluginContext): PluginResult | Promise<PluginResult>;
   /** Optional room-local declarative panel, projected through snapshots. */
   panel?(ctx: PluginContext): PluginPanel | Promise<PluginPanel | undefined>;

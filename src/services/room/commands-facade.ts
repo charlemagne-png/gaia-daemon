@@ -136,17 +136,30 @@ export class RoomCommandsMixin {
     return loadedCommandPlugins(await this.pluginsPromise);
   }
 
-  /** Runs a local command-plugin's .run(), tolerating a thrown/rejected plugin
-   * the same way loadCommandPlugins tolerates a bad module at load time —
-   * never crashes the caller. See services/plugins.ts for the contract.
-   * `command`, when given, is the specific command name that invoked `run()`
-   * (PluginContext.command) — relevant only for a plugin owning several. */
-  pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>, command?: string): PluginContext {
+  /** Root-tree plugin scope → cycle-safe ancestry walk; malformed cycles pick
+   * one deterministic root. Missing parents terminate without creating rooms. */
+  async pluginScope(plugin: CommandPlugin, state?: Awaited<ReturnType<RoomHandle["state"]>>, roomId = this.roomId): Promise<{ room: RoomHandle; state: Awaited<ReturnType<RoomHandle["state"]>> }> {
+    let room = roomId === this.roomId ? this.room : await RoomHandle.open(this.workspace.rootDir, roomId);
+    let current = state ?? await room.state();
+    if (plugin.roomMode?.inheritance !== "root-tree") return { room, state: current };
+    const chain = [{ room, state: current }];
+    const seen = new Set([room.roomId]);
+    while (current.parentRoomId) {
+      const parentId = current.parentRoomId;
+      if (seen.has(parentId)) return chain.sort((a, b) => a.room.roomId.localeCompare(b.room.roomId))[0];
+      if (!existsSync(workspacePaths.roomState(this.workspace.rootDir, parentId))) break;
+      seen.add(parentId);
+      room = await RoomHandle.open(this.workspace.rootDir, parentId);
+      current = await room.state();
+      chain.push({ room, state: current });
+    }
+    return chain[chain.length - 1];
+  }
+
+  pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>, command?: string, stateRoomId = this.roomId): PluginContext {
     return {
-      homedir: homedir(),
-      roomId: this.roomId,
-      workspaceRoot: this.workspace.rootDir,
-      state: state.pluginState?.[pluginStateKey(plugin)],
+      homedir: homedir(), roomId: this.roomId, workspaceRoot: this.workspace.rootDir,
+      state: state.pluginState?.[pluginStateKey(plugin)], stateRoomId,
       agents: Object.values(this.workspace.agents).map((agent) => ({ id: agent.id, displayName: agent.displayName, icon: agent.icon })),
       ...(command ? { command } : {}),
     };
@@ -154,16 +167,17 @@ export class RoomCommandsMixin {
 
   async runPlugin(plugin: CommandPlugin, args: string[], command?: string): Promise<PluginResult> {
     try {
-      const state = await this.room.state();
-      const result = (await plugin.run(args, this.pluginContext(plugin, state, command))) ?? {};
+      const scope = await this.pluginScope(plugin);
+      const result = (await plugin.run(args, this.pluginContext(plugin, scope.state, command, scope.room.roomId))) ?? {};
       if (result.state || (result.activeAgent && this.workspace.agents[result.activeAgent])) {
-        await this.room.updateState((next) => {
-          if (result.state) {
-            next.pluginState ??= {};
-            next.pluginState[pluginStateKey(plugin)] = result.state;
-          }
-          if (result.activeAgent && this.workspace.agents[result.activeAgent]) next.activeAgent = result.activeAgent;
+        await scope.room.updateState((next) => {
+          if (result.state) { next.pluginState ??= {}; next.pluginState[pluginStateKey(plugin)] = result.state; }
+          // Selection remains local; only the mode bucket is root-scoped.
+          if (scope.room.roomId === this.roomId && result.activeAgent && this.workspace.agents[result.activeAgent]) next.activeAgent = result.activeAgent;
         });
+        if (scope.room.roomId !== this.roomId && result.activeAgent && this.workspace.agents[result.activeAgent]) {
+          await this.room.updateState((next) => { next.activeAgent = result.activeAgent; });
+        }
         await this.emitSnapshot();
       }
       return result;
@@ -172,8 +186,6 @@ export class RoomCommandsMixin {
     }
   }
 
-  /** Generic API/UI bridge: plugin action args use the exact same durable run
-   * path as a slash command, so extensions never write room state themselves. */
   async runPluginAction(command: string, args: string[]): Promise<string> {
     await this.init();
     const plugin = (await this.pluginsPromise).get(command);
@@ -187,11 +199,10 @@ export class RoomCommandsMixin {
       if (!plugin.panel) continue;
       const key = pluginStateKey(plugin);
       try {
-        const panel = await plugin.panel(this.pluginContext(plugin, state));
+        const scope = await this.pluginScope(plugin, state);
+        const panel = await plugin.panel(this.pluginContext(plugin, scope.state, undefined, scope.room.roomId));
         if (panel) panels[key] = panel;
-      } catch (error) {
-        console.warn(`[plugins] panel ${key}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      } catch (error) { console.warn(`[plugins] panel ${key}: ${error instanceof Error ? error.message : String(error)}`); }
     }
     return Object.keys(panels).length ? panels : undefined;
   }
@@ -201,56 +212,52 @@ export class RoomCommandsMixin {
     for (const plugin of await this.distinctPlugins()) {
       if (!plugin.prompt) continue;
       try {
-        const block = await plugin.prompt({ ...this.pluginContext(plugin, state), agentId });
+        const scope = await this.pluginScope(plugin, state);
+        const block = await plugin.prompt({ ...this.pluginContext(plugin, scope.state, undefined, scope.room.roomId), agentId });
         if (block?.trim()) blocks.push(block.trim());
-      } catch (error) {
-        console.warn(`[plugins] prompt ${pluginStateKey(plugin)}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      } catch (error) { console.warn(`[plugins] prompt ${pluginStateKey(plugin)}: ${error instanceof Error ? error.message : String(error)}`); }
     }
     return blocks.length ? blocks.join("\n\n") : undefined;
   }
 
-  /** Generic display-time render cap (services/plugins.ts CommandPlugin.
-   * renderCap) resolved ONCE per commit turn — see #commitReply. Returns the
-   * FIRST plugin-supplied cap, in load order; today only one plugin
-   * (plugins/defaults/dog-mode.mjs) ever defines this hook. */
+  async pluginChromeTokens(state?: Awaited<ReturnType<RoomHandle["state"]>>, roomId = this.roomId): Promise<string[] | undefined> {
+    const tokens = new Set<string>();
+    for (const plugin of await this.distinctPlugins()) {
+      const mode = plugin.roomMode;
+      if (!mode || !/^[a-z][a-z0-9-]{0,31}$/.test(mode.chromeToken) || !mode.key) continue;
+      try {
+        const scope = await this.pluginScope(plugin, state, roomId);
+        if (scope.state.pluginState?.[pluginStateKey(plugin)]?.[mode.key] === true) tokens.add(mode.chromeToken);
+      } catch (error) { console.warn(`[plugins] roomMode ${pluginStateKey(plugin)}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    return tokens.size ? [...tokens] : undefined;
+  }
+
   async pluginRenderCap(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<RenderCap | undefined> {
     for (const plugin of await this.distinctPlugins()) {
       if (!plugin.renderCap) continue;
       try {
-        const cap = await plugin.renderCap(this.pluginContext(plugin, state));
+        const scope = await this.pluginScope(plugin, state);
+        const cap = await plugin.renderCap(this.pluginContext(plugin, scope.state, undefined, scope.room.roomId));
         if (cap) return cap;
-      } catch (error) {
-        console.warn(`[plugins] renderCap ${pluginStateKey(plugin)}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      } catch (error) { console.warn(`[plugins] renderCap ${pluginStateKey(plugin)}: ${error instanceof Error ? error.message : String(error)}`); }
     }
     return undefined;
   }
 
-  /** Generic per-turn-start hook (services/plugins.ts CommandPlugin.
-   * turnStart) — called once per target right before its turn runs (see
-   * #runAgentTask), letting a plugin expire a transient flag in its own state
-   * (e.g. plugins/defaults/dog-mode.mjs's /facial marker). A returned object
-   * REPLACES that plugin's persisted state wholesale; `state` (the live
-   * snapshot this call read from) is updated in place too, so the REST of
-   * this same turn sees the fresh value without a second room.state() read. */
   async pluginTurnStart(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<void> {
-    const updates: Record<string, Record<string, unknown>> = {};
     for (const plugin of await this.distinctPlugins()) {
       if (!plugin.turnStart) continue;
       const key = pluginStateKey(plugin);
       try {
-        const next = await plugin.turnStart(this.pluginContext(plugin, state));
-        if (next !== undefined) updates[key] = next;
-      } catch (error) {
-        console.warn(`[plugins] turnStart ${key}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+        const scope = await this.pluginScope(plugin, state);
+        const next = await plugin.turnStart(this.pluginContext(plugin, scope.state, undefined, scope.room.roomId));
+        if (next === undefined) continue;
+        await scope.room.updateState((current) => { current.pluginState = { ...(current.pluginState ?? {}), [key]: next }; });
+        scope.state.pluginState = { ...(scope.state.pluginState ?? {}), [key]: next };
+        if (scope.room.roomId === this.roomId) state.pluginState = scope.state.pluginState;
+      } catch (error) { console.warn(`[plugins] turnStart ${key}: ${error instanceof Error ? error.message : String(error)}`); }
     }
-    if (Object.keys(updates).length === 0) return;
-    await this.room.updateState((current) => {
-      current.pluginState = { ...(current.pluginState ?? {}), ...updates };
-    });
-    state.pluginState = { ...(state.pluginState ?? {}), ...updates };
   }
 
 

@@ -731,7 +731,13 @@ export class RoomService {
         // only the room's agent ever generates the actual reply. Never an
         // early return — unlike the steer/reply branch just below.
         if (result.rewriteAsMessage) {
+          if (result.reply) {
+            const event: RoomEvent = { id: newRoomEventId(), timestamp: new Date().toISOString(), author: "system", text: result.reply };
+            await this.room.appendEvent(event);
+            this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
+          }
           const target = result.targets?.[0] ?? (await this.roomDefaultTarget());
+          text = typeof result.rewriteAsMessage === "string" ? result.rewriteAsMessage : text;
           command = { type: "message", text };
           options = { ...options, targets: result.targets ?? [target], pluginMessageTurn: true };
         } else if (result.steer) {

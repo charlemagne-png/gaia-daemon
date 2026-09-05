@@ -55,6 +55,7 @@ export interface RoomTurnLoopPort {
   emitPetProgress(task: Task, agentId: string, status: PetProgressStatus, toolName?: string): void;
   pluginTurnStart(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<void>;
   pluginPrompt(state: Awaited<ReturnType<RoomHandle["state"]>>, agentId: string): Promise<string | undefined>;
+  pluginChromeTokens(state?: Awaited<ReturnType<RoomHandle["state"]>>, roomId?: string): Promise<string[] | undefined>;
   pluginRenderCap(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<RenderCap | undefined>;
   pluginRoomMetadataPolicy(text: string): Promise<void>;
   fireWatchdogSteer(target: string, runtime: AgentRuntime, message: string): Promise<void>;
@@ -107,7 +108,8 @@ export interface RoomCommandsFacadePort {
   emit(event: UiEvent): void;
   emitSnapshot(): Promise<void>;
   distinctPlugins(): Promise<CommandPlugin[]>;
-  pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>, command?: string): PluginContext;
+  pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>, command?: string, stateRoomId?: string): PluginContext;
+  pluginScope(plugin: CommandPlugin, state?: Awaited<ReturnType<RoomHandle["state"]>>, roomId?: string): Promise<{ room: RoomHandle; state: Awaited<ReturnType<RoomHandle["state"]>> }>;
   runPlugin(plugin: CommandPlugin, args: string[], command?: string): Promise<PluginResult>;
   roomDefaultTarget(): Promise<string>;
   unknownAgentMessage(agentId: string): string;

@@ -152,6 +152,8 @@ export interface RoomSummary {
   voiceSession?: boolean;
   /** Effective /berserk mode. */
   berserk?: boolean;
+  /** Data-only semantic room chrome contributed by plugins. */
+  pluginChromeTokens?: string[];
   /** Effective /love mode. */
   love?: boolean;
   /** Room-local /teleport flag. */
@@ -264,6 +266,8 @@ export interface Snapshot {
     refCode?: string;
     /** Effective /berserk mode. */
     berserk?: boolean;
+    /** Data-only semantic room chrome contributed by plugins. */
+    pluginChromeTokens?: string[];
     /** Effective /love mode. */
     love?: boolean;
     /** Room-local /teleport flag. */

@@ -80,6 +80,7 @@ export class RoomSnapshotMixin {
     const events = this.displayEvents(all.slice(-this.workspace.config.transcriptWindow));
     const state = await this.room.state();
     const pluginPanels = await this.pluginPanels(state);
+    const pluginChromeTokens = await this.pluginChromeTokens(state);
     // The selected agent plus any agents actively executing this room's turn
     // are the only identities that can spend here. This is deliberately not
     // the workspace roster: an unrelated agent/account in another room must
@@ -109,6 +110,7 @@ export class RoomSnapshotMixin {
         events,
         ...(state.refCode ? { refCode: state.refCode } : {}),
         ...(state.berserk ? { berserk: true } : {}),
+        ...(pluginChromeTokens ? { pluginChromeTokens } : {}),
         ...(state.love ? { love: true } : {}),
         ...(state.teleport ? { teleport: true } : {}),
         eventTotal: all.length,
@@ -186,11 +188,12 @@ export class RoomSnapshotMixin {
     // closes the start-of-turn gap), and any live summon children (whose markers
     // likewise trail their start).
     const running = new Set(this.options.summonHost?.runningChildren().map((child: { roomId: string }) => child.roomId) ?? []);
-    return base.map((room) => {
+    return Promise.all(base.map(async (room) => {
       const isCurrent = room.id === this.roomId;
       const live = room.running || running.has(room.id) || (isCurrent && Boolean(this.activeAgentTurn));
-      return { ...room, isCurrent, ...(live ? { running: true } : {}) };
-    });
+      const pluginChromeTokens = await this.pluginChromeTokens(undefined, room.id);
+      return { ...room, isCurrent, ...(live ? { running: true } : {}), ...(pluginChromeTokens ? { pluginChromeTokens } : {}) };
+    }));
   }
 
   /** Human rename. This is display metadata only: the durable room id/path stay
