@@ -56,6 +56,7 @@ export interface RoomTurnLoopPort {
   pluginTurnStart(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<void>;
   pluginPrompt(state: Awaited<ReturnType<RoomHandle["state"]>>, agentId: string): Promise<string | undefined>;
   pluginRenderCap(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<RenderCap | undefined>;
+  pluginTurnSettled(status: "complete" | "cancelled" | "error", targets: readonly string[]): Promise<void>;
   pluginRoomMetadataPolicy(text: string): Promise<void>;
   fireWatchdogSteer(target: string, runtime: AgentRuntime, message: string): Promise<void>;
   recordBackgroundTask(agentId: string, event: Extract<AgentEvent, { type: "background-task" }>): Promise<void>;

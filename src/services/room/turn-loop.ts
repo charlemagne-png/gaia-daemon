@@ -514,7 +514,10 @@ export class RoomTurnLoop {
       if (partialReply && options.goalStartedAt) await this.service.maybeContinueGoal(target, partialReply, options.goalStartedAt);
     }
 
-    if (!this.service.taskCancelled(task)) this.service.settleTask(task, "complete");
+    if (!this.service.taskCancelled(task)) {
+      await this.service.pluginTurnSettled("complete", task.targets);
+      this.service.settleTask(task, "complete");
+    }
   }
 
   /** The ctx chip's usage figure for the snapshot. Live usage wins, but the

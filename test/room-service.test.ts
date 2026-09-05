@@ -15,6 +15,7 @@ import { RunnerHost } from "../src/harness/host.js";
 import { registerHarness, type AgentInput, type AgentRuntime } from "../src/harness/spec.js";
 import type { SummonHost } from "../src/services/summons.js";
 import type { ConsolidateLlm } from "../src/services/consolidate.js";
+import type { CommandPlugin, PluginTurnSettledContext } from "../src/services/plugins.js";
 
 process.env.GAIA_HOME = await mkdtemp(join(tmpdir(), "gaia-home-"));
 
@@ -2048,6 +2049,49 @@ test("/rewind truncates after the n-th-last user message and resets cursors + se
   await service.sendMessage("/rewind 5");
   const untouched = await service.room.eventsFrom(0);
   assert.equal(untouched.events.length, 2);
+});
+
+
+test("turnSettled plugin callback is awaited after durable reply and can enqueue before drain", async () => {
+  const seen: PluginTurnSettledContext[] = [];
+  let compactCalls = 0;
+  const { service } = await makeService({
+    runtimeFactory: (agent) => {
+      const runtime = scriptedRuntime(agent, () => [
+        { type: "context-usage", usedTokens: 42_000, maxTokens: 100_000 } as AgentEvent,
+        { type: "text-delta", delta: "done" } as AgentEvent,
+      ]);
+      runtime.capabilities = { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsCompact: true };
+      runtime.compact = async () => {
+        compactCalls += 1;
+        return { compacted: true, message: "session compacted." };
+      };
+      return runtime;
+    },
+  });
+  const plugin: CommandPlugin = {
+    id: "settle-test",
+    async run() { return {}; },
+    async turnSettled(ctx) {
+      seen.push(ctx);
+      await ctx.enqueueCommand("/compact @gaia");
+    },
+  };
+  (service as unknown as { pluginsPromise: Promise<Map<string, CommandPlugin>> }).pluginsPromise = Promise.resolve(new Map([["settle-test", plugin]]));
+
+  await service.sendMessage("hello");
+  await waitFor(() => compactCalls === 1);
+  await service.waitForSettled();
+
+  assert.equal(compactCalls, 1);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]?.status, "complete");
+  assert.deepEqual(seen[0]?.targets, ["gaia"]);
+  assert.deepEqual(seen[0]?.contextUsage.gaia, { usedTokens: 42_000, maxTokens: 100_000 });
+  assert.equal(seen[0]?.capabilities.gaia.supportsCompact, true);
+  const { events: transcript } = await service.room.eventsFrom(0);
+  assert.ok(transcript.some((event) => event.author === "gaia" && event.text === "done"));
+  assert.ok(transcript.some((event) => event.author === "system" && /session compacted/.test(event.text)));
 });
 
 test("postTurn hooks fire with the committed reply (uniform, room-layer)", async () => {

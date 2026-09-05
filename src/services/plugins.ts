@@ -98,6 +98,16 @@ export interface PluginResult {
   targets?: string[];
 }
 
+
+
+export interface PluginTurnSettledContext {
+  status: "complete" | "cancelled" | "error";
+  targets: string[];
+  contextUsage: Record<string, { usedTokens: number; maxTokens?: number }>;
+  capabilities: Record<string, { supportsCompact: boolean }>;
+  enqueueCommand(text: string, options?: { force?: boolean }): Promise<void>;
+}
+
 export interface RoomMetadataPolicyContext {
   homedir: string;
   roomId: string;
@@ -135,6 +145,8 @@ export interface CommandPlugin {
    * the plugin's persisted state (e.g. to expire a transient flag); returning
    * undefined leaves it untouched. Never blocks or mutates the turn itself. */
   turnStart?(ctx: PluginContext): Record<string, unknown> | undefined | Promise<Record<string, unknown> | undefined>;
+  /** Awaited after a durable turn outcome, before queued work is admitted. */
+  turnSettled?(ctx: PluginTurnSettledContext): void | Promise<void>;
   roomMetadataPolicy?(ctx: RoomMetadataPolicyContext & { event: "post-user-commit"; text: string }): Record<string, unknown> | void | Promise<Record<string, unknown> | void>;
 }
 
@@ -198,7 +210,7 @@ export async function loadCommandPlugins(): Promise<Map<string, CommandPlugin>> 
           candidate?.command === undefined ||
           typeof candidate?.command === "string" ||
           (Array.isArray(candidate?.command) && candidate.command.length > 0 && candidate.command.every((c: unknown) => typeof c === "string" && c));
-        const hookOk = typeof candidate?.run === "function" || typeof candidate?.panel === "function" || typeof candidate?.prompt === "function" || typeof candidate?.renderCap === "function" || typeof candidate?.turnStart === "function" || typeof candidate?.roomMetadataPolicy === "function";
+        const hookOk = typeof candidate?.run === "function" || typeof candidate?.panel === "function" || typeof candidate?.prompt === "function" || typeof candidate?.renderCap === "function" || typeof candidate?.turnStart === "function" || typeof candidate?.turnSettled === "function" || typeof candidate?.roomMetadataPolicy === "function";
         if (!candidate || !commandOk || !hookOk) {
           console.warn(`[plugins] skipped ${file}: invalid plugin (needs a default export with a command hook or room hook)`);
           continue;

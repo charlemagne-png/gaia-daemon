@@ -254,6 +254,33 @@ export class RoomCommandsMixin {
   }
 
 
+
+  async pluginTurnSettled(status: "complete" | "cancelled" | "error", targets: readonly string[]): Promise<void> {
+    const contextUsage = Object.fromEntries(
+      targets.flatMap((target) => this.contextUsage[target] ? [[target, { ...this.contextUsage[target] }] as const] : []),
+    );
+    const capabilities = Object.fromEntries(
+      targets.map((target) => [target, { supportsCompact: this.runtimes[target]?.capabilities.supportsCompact === true }]),
+    );
+    const enqueueCommand = async (command: string, options: { force?: boolean } = {}) => {
+      const text = command.trim();
+      if (!text.startsWith("/")) throw new Error("plugin enqueueCommand requires a slash command");
+      if (options.force !== true) {
+        const duplicate = (task?: Task) => task?.text.trim() === text;
+        if (duplicate(this.activeTask) || this.queuedTasks.some((task) => duplicate(task))) return;
+      }
+      await this.sendMessage(text, { recordUserMessage: false, queue: true });
+    };
+    for (const plugin of await this.distinctPlugins()) {
+      if (!plugin.turnSettled) continue;
+      try {
+        await plugin.turnSettled({ status, targets: [...targets], contextUsage, capabilities, enqueueCommand });
+      } catch (error) {
+        console.warn(`[plugins] turnSettled ${pluginStateKey(plugin)}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
   async pluginRoomMetadataPolicy(text: string): Promise<void> {
     const state = await this.room.state();
     for (const plugin of await this.distinctPlugins()) {
