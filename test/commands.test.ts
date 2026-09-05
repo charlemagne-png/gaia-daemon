@@ -14,6 +14,8 @@ test("parseCommand: known commands and arguments", () => {
   assert.deepEqual(parseCommand("/role brainstorm"), { type: "role", role: "brainstorm" });
   assert.deepEqual(parseCommand("/role gaia brainstorm"), { type: "role", agent: "gaia", role: "brainstorm" });
   assert.deepEqual(parseCommand("/summon terry fix the tests"), { type: "summon", agent: "terry", task: "fix the tests" });
+  assert.deepEqual(parseCommand("/upstream"), { type: "upstream", ref: undefined });
+  assert.deepEqual(parseCommand("/upstream clean/pascal-upstream-20260905"), { type: "upstream", ref: "clean/pascal-upstream-20260905" });
   assert.deepEqual(parseCommand("/thinking high"), { type: "thinking", level: "high" });
   // /berserk: bare = deathmode ON; a single "off" token stands the tree down.
   assert.deepEqual(parseCommand("/berserk"), { type: "berserk" });

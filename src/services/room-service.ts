@@ -77,6 +77,7 @@ import { HOOK_TEXT_CAP, runHooks, type HookEvent } from "./hooks.js";
 import { MonadEngine } from "./monad.js";
 import { activateSetup, deactivateMonad, discoverSetups } from "./setups.js";
 import { sdkThinkingLevels } from "./hints.js";
+import { runUpstreamDivergence } from "./upstream-divergence.js";
 import { readVoiceSettings } from "./voice.js";
 import { availableVoiceDispatcherAgentId, findLeadingVoiceAddress, findVoiceTargetMention, setStickyVoiceTarget, stickyVoiceTarget, voiceDispatcherAgentId } from "./voice-dispatch.js";
 import { createAgentRuntime } from "../harness/host.js";
@@ -453,6 +454,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   // A bare /queue (no text) only — /queue <text> is rewritten to a queued
   // message turn in sendMessage before this registry is consulted.
   queue: async () => "usage: /queue <text> — park an idea on the durable queue without steering the running turn; pause/resume it under tasks in the room panel",
+  upstream: (service, command) => (command.type === "upstream" ? service.runUpstreamCommand(command.ref) : Promise.resolve("")),
   // A bare /note (no text) only — /note <text> is handled synchronously in
   // sendMessage (like steer/cancel) so a sticky lands even mid-turn.
   note: async () => "usage: /note <text> — pin a sticky note of something to prompt later; it sits above the queued messages in the tasks panel",
@@ -3851,6 +3853,12 @@ export class RoomService {
     return on
       ? "\uD83D\uDC97 LOVEMODE. This room and every subroom beneath it now glow pink. From this moment, every word that arrives is translated into pure love before any agent reads or thinks \u2014 and every response is logically embedded in the vector of love, until the human says /love off."
       : "Lovemode is OFF for this room and every subroom \u2014 the pink fades, the words stand plain again.";
+  }
+
+  /** /upstream [ref] — fetch Pascal's remote, map divergence against main,
+   * then return a named feature digest for human selection. Recon only. */
+  async runUpstreamCommand(ref?: string): Promise<string> {
+    return runUpstreamDivergence(this.workspace.rootDir, ref);
   }
 
   /** /berserk [off] — adversarial deathmode for the WHOLE room tree. The flag

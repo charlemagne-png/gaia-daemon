@@ -1,0 +1,577 @@
+# Upstream divergence map · 20260905
+
+Refs → ours=`main@01555b3b3` · theirs=`clean/pascal-upstream-20260905@43bbcb5b2`
+Scope → `src/services` · `src/harness` · `src/server` · `web/src` · `docs`
+Evidence → `git diff --numstat main clean/pascal-upstream-20260905 -- src/services src/harness src/server web/src docs` · `git log main..clean/pascal-upstream-20260905`
+
+## Subsystem summary
+
+| subsystem | files | + | - | binary |
+|---|---:|---:|---:|---:|
+| `src/services` | 67 | 8890 | 7494 | 0 |
+| `src/harness` | 23 | 2170 | 4866 | 0 |
+| `src/server` | 12 | 2450 | 2292 | 0 |
+| `web/src` | 62 | 5677 | 8852 | 0 |
+| `docs` | 25 | 2316 | 95 | 0 |
+
+## Top divergent files
+
+- `src/services/room-service.ts` → +390/-4686 · src/services
+- `web/src/styles.css` → +672/-2392 · web/src
+- `src/server/http.ts` → +440/-1807 · src/server
+- `src/harness/claude.ts` → +0/-1513 · src/harness
+- `src/harness/codex.ts` → +0/-1264 · src/harness
+- `web/src/voice-control.js` → +0/-1244 · web/src
+- `src/harness/pi.ts` → +36/-1145 · src/harness
+- `web/src/canvas.js` → +0/-992 · web/src
+- `src/services/summons.ts` → +582/-298 · src/services
+- `src/server/routes/api.ts` → +836/-0 · src/server
+- `docs/REFACTOR-BUGS.md` → +796/-0 · docs
+- `web/src/sidebar.js` → +507/-275 · web/src
+- `web/src/archtree/renderer.js` → +706/-0 · web/src
+- `src/services/room/commands-facade.ts` → +617/-0 · src/services
+- `src/services/room/turn-loop.ts` → +542/-0 · src/services
+- `web/src/dictation.js` → +120/-388 · web/src
+- `web/src/settings.js` → +67/-434 · web/src
+- `src/server/reload.ts` → +0/-485 · src/server
+- `web/src/panel.js` → +226/-257 · web/src
+- `src/services/room/queue.ts` → +482/-0 · src/services
+- `src/server/routes/rooms.ts` → +461/-0 · src/server
+- `src/harness/pi/compaction.ts` → +453/-0 · src/harness
+- `src/harness/pi/runtime.ts` → +451/-0 · src/harness
+- `web/src/transcript.js` → +244/-205 · web/src
+- `src/services/studio-service.ts` → +0/-422 · src/services
+
+## Commits unique to theirs (530)
+
+- `43bbcb5b2ed9` · archive: preserve clean worktree WIP before unification
+- `855816085eef` · docs: add 0904 release and staged install record
+- `f849e58165ab` · Merge branch 'fix/native-weblinks-terra' into trunk/0904
+- `a472024c00e4` · Merge branch 'feat/archtree-add-root' into trunk/0904
+- `33e5e4917aca` · Merge branch 'feat/auto-compact' into trunk/0904
+- `44385322dde9` · Merge branch 'feat/recall-filter' into trunk/0904
+- `d60a4dfc23d2` · Merge branch 'fix/open-0827' into trunk/0904
+- `01b1c2676750` · Merge branch 'fix/voice-stall' into trunk/0904
+- `7b764e0ff8f9` · feat: add room auto-compact command
+- `0f6235470fcb` · docs: record restored clean compaction gates
+- `b0270f6b9fb4` · feat(archtree): add roots while tree is live
+- `9b42ad377da7` · chore(pi): keep clean registry loader internal
+- `551b380b20a4` · fix(links): open message URLs on plain click
+- `d5eaf26fae34` · test(dsc-compact): prove empty replay after cursor advance
+- `7efa9e914f47` · feat: auto-compact room context on threshold
+- `c0e3deabc63b` · restore(commands): dispatch explicit dsc compact
+- `816a9c764e05` · feat(memory): filter excluded auto-recall hits
+- `ec2a8dd7d169` · restore(pi): explicit clean compaction runtime
+- `cb956eb0fde9` · Merge commit '7d782d3' into room/chat-mtnfls78-um5f
+- `724cef96e126` · docs: record clean compaction mechanism state
+- `7879707f11eb` · ui: keep room tabs global across workspaces
+- `30de282ebcfa` · fix(dsc-compact): set floor to newest content-bearing entry (my old newestValidCutId pattern) so an oversized poisoned turn-prompt entry sinks BELOW the floor instead of pinning the cut point at itself every time
+- `440dca7e650d` · fix(read-aloud): stop the silent mid-clip stall in the client transport
+- `3944f3296150` · fix(web): render GAIA thoughts in every text span
+- `7d782d39d16b` · ui(transcript): keep thinking rows for encrypted/redacted reasoning
+- `c4a6b027abe8` · fix(read-aloud): destroy the response on mid-stream TTS failure instead of a clean end()
+- `267c61cc47c5` · ui(sidebar): workspace context menu 'Mark all as read' — clears unread rolled up from rooms the paginated list never shows
+- `448b94a0baab` · reload: log loudly when gaia-source.json root no longer exists (silent no-op /rebuild)
+- `e9cb2adcce61` · ui(sidebar): subroom rollup dot blinks green too
+- `a37afc632543` · ui(sidebar): green blinking dot while running, amber static when unread
+- `2e5795dbd4a3` · sidebar/checkbox UI fixes + close-tabs-to-right
+- `dd65e6ec28e7` · retry transient upstream turn failures
+- `f71f0cfdd125` · Merge branch 'main' into gaia/chat-mtkm14p2-y7le
+- `cb0cfb5230d1` · docs: log wave 2 worktree sweep
+- `34cd59732abf` · docs: record PASS5D compiled plugin reload live evidence
+- `5991ecd4c716` · docs: record PASS5C module identity fix
+- `2d1babf0a15e` · fix: give plugin reloads content module identity
+- `7eb9758e1150` · test: reproduce cached plugin module reload
+- `782b90e88aeb` · docs: record pass 5c compiled live evidence
+- `43334627f54d` · merge main into room plugin reload fix
+- `0097a92b6304` · fix(plugins): resolve room commands by generation
+- `a5e80f5e30ea` · docs(refactor): ATOM 3 PASS5B ledger — PASS5B-001/002 tickets, log line, live-queue case 3/4 restatement
+- `2f700f617559` · docs(refactor): record pass5b compiled live evidence
+- `62fdfe8c3430` · docs(refactor): triage ADV-024 as test-setup; main-build compiles a995bb0
+- `7098b7784035` · docs: conclude pass 5 W3 sign-off
+- `bc7105eb3638` · docs(pass5-w3-signoff): static adversarial ledger, ADV-020..023 all PASS (findings-only)
+- `d433e4122d44` · docs: record pass 5 live blocker and parent gate
+- `13a737551f08` · docs: record pass5 W3 cleanup evidence
+- `1aa93d8d884f` · docs: record pass5 W3 live build blocker
+- `faf0f8c9eb73` · docs: open pass 5 W3 sign-off ledger
+- `a995bb09614d` · fix(ADV-021): acknowledge durable plugin events
+- `1dc052a9bac0` · merge: durable plugin reply evidence
+- `077d84665156` · fix(ADV-021): durable plugin command replies + capability denials
+- `217787230c91` · fix(plugins): stage manifest reloads via API
+- `f218e91766e6` · fix(plugins): register bundled manifest commands
+- `ad85ee3ed146` · docs: close W3 pass 4 with live blockers
+- `c74f5597d159` · docs: record pass 4 live evidence
+- `b9ee54bd31df` · docs: W3 pass4 static independent review — ADV-014/016-019 verified, ADV-020 new (bundled command plugins unreachable in production)
+- `9d649ff3b94b` · docs: log A6j resumePendingTurn extraction
+- `72bf6a8a5f4e` · refactor(A6j): move resumePendingTurn into RoomQueue
+- `7bd0f56690d6` · docs: record pass 4 parent gate salvage
+- `5af38be08b5d` · docs: record pass 4 static kimi audit
+- `a9550fbb75b0` · docs: open pass 4 live ledger
+- `1aba0e2d7ff7` · docs: open W3 pass4 static independent review section (naru-sonnet)
+- `262293702735` · docs: start pass 4 static kimi audit
+- `b98c3cef9165` · docs: open W3 pass 4 adversary ledger
+- `338db79c3a59` · refactor: disambiguate registry lifecycle errors
+- `9dc9bd02c7dd` · test: remove obsolete loose plugin migration coverage
+- `09f6b7c3775e` · docs: correct W3 daemon size
+- `2f47acc5df9d` · docs: close W3 adversary ledger
+- `212159e4e4f4` · test: include workspace capability context
+- `7c05b9f48c69` · merge: wire daemon capability policy sources
+- `c529bf445f91` · ADV-014: wire real daemon boot capability broker sources
+- `3b8403f44a38` · merge: manifest bundled plugin packages
+- `de3975d8c591` · merge: fix A16 parent assertion and duplicate limit
+- `66411072e97a` · test: stage bundled manifest packages
+- `74b0d700c149` · fix: keep bundled RPG package registry-loadable
+- `4589145c07a9` · feat: discover bundled plugins through manifests
+- `6bca2e1e6c49` · test: prove A16 fresh tail parent link
+- `6db2d173445a` · test: cover daemon registry command adapter
+- `1de4129a0ce4` · refactor: inject daemon plugin registry into rooms
+- `c03795b13ae0` · Merge commit 'a304ef9ba6893cddf82794ebc47a169c027ee4f7' into gaia/naru-kimi-mtkp4cem22msnu
+- `3e68b17da07b` · refactor: inject canonical plugin registry
+- `a304ef9ba689` · fix: remove empty sidebar and roster gutters
+- `56cec2dd9b65` · Merge commit '4fda75d' into gaia/naru-kimi-mtkp4cem22msnu
+- `4fda75d53202` · docs: record pass 3 landing gate
+- `ca5f591a0d17` · Merge commit '249e7b1' into audit/pass3-w3-a16-20260903
+- `8ad4bec96e65` · docs: conclude pass 3 W3 and A16 audit
+- `f56f18518380` · docs: record pass 3 W3 adversarial findings
+- `249e7b144494` · refactor(A6i): extract room maintenance facade
+- `cf73776d932d` · docs: open pass 3 W3 and A16 audit ledger
+- `0bb260c75c3c` · docs: checkpoint A6g monad execution
+- `ec954645ff42` · refactor(A6g): extract runMonadTask into room/monad-execution.ts
+- `c8023a30b132` · docs: correct A6h commit reference
+- `bc6c96cb0405` · docs: checkpoint A6h command execution
+- `a93135103167` · refactor: extract room command execution
+- `4c8740f5e54b` · docs: correct A6f commit reference
+- `28ae12abc77d` · docs: checkpoint A6f task operations
+- `0b3bfe09a47d` · refactor: extract room task operations
+- `48792c9dda01` · docs: correct A6e commit reference
+- `7dbb53534aab` · docs: checkpoint A6e lifecycle
+- `89d5936f92cb` · refactor: extract room bootstrap lifecycle
+- `d2e615e11707` · docs: checkpoint W3 plugin migration
+- `0597626768cf` · plugins: migrate command loader to manifests
+- `a936cf576ada` · docs: checkpoint A6d summon lifecycle
+- `9ffba401be9b` · refactor(A6d): extract summon-lifecycle + agent-dialogue delivery from room-service
+- `0f87b5e7221d` · docs: checkpoint W3 contribution ports
+- `e98f6b5556fe` · plugins: add typed contribution ports
+- `0e4213e86a9f` · docs: checkpoint W4 live regression code
+- `f812940a7324` · test(W4 A16): edit/resend live regression code — ephemeral-daemon seed + evidence readers, opt-in live path queued for 陰
+- `ac887da9de15` · docs: checkpoint W3 plugin registry
+- `60f682d4088b` · plugins: stage registry generations at turn boundaries
+- `51a71cf22c09` · docs: checkpoint W3 manifest and capabilities
+- `5070d24b9954` · A12: capability broker foundation (services/capabilities)
+- `ef898f66f802` · plugins: add manifest-first foundation
+- `91524325d6a4` · docs: queue A6c and W4 live regression
+- `5385f093e0b4` · refactor: gate room queue extraction
+- `77c28ee4ed94` · refactor: extract room turn results
+- `3a0a8a2ee271` · extract room durable queue routing
+- `9fdefe539c71` · refactor(room): extract agent configuration command cohort (A6)
+- `7c7e83146f40` · sidebar: Finder-style Favorites section, drop per-row star icons
+- `3a7d0ae8e595` · Merge commit 'b72fea6d2f3196ed3b6f79520435f98e5c62baeb' into refactor/a6c-room-service-build
+- `693899b20093` · Merge branch 'main' into gaia/naru-kimi-mtkmhva9zivoqb
+- `615f90e8d419` · refactor: extract room maintenance commands
+- `b72fea6d2f31` · Merge branch 'main' into v2ui/running-since
+- `273d0c588b36` · feat(ui): show running since for summon lanes
+- `8fcea00832ff` · refactor: extract room background tasks
+- `0d460f78b2ca` · docs(refactor): record A6 facade typing gate
+- `ccdb418963bc` · Merge commit '37c3113f6e49549fcbf3e115826012030c7c6bd8' into refactor/a6c-room-service-build
+- `0f8f62b35ad0` · refactor(room): type commands facade collaborator
+- `37923de673c4` · refactor(room): type RoomCommandsMixin this via RoomCommandsFacadePort
+- `37c3113f6e49` · docs(refactor): triage ADV-013 as pre-existing (domain/workspace.ts:147), A5 smoke = PASS
+- `e93fb4fbed3c` · merge main into room branch (ledger: take main)
+- `8637aaf352a0` · docs(refactor): preserve live evidence hashes
+- `bf5fcbed8f00` · Merge branch 'main' into gaia/ghoul-terra-mtklq5ixkikbww
+- `1c1d49dcca0d` · docs(refactor): record live queue verdicts
+- `f3557f4caa89` · Merge commit 'c5849ed890842eedecdeae9824124c4fcf3290b7' into refactor/a6c-room-service-build
+- `1d462e230bac` · refactor(room): type sanitize facade
+- `62ec85f5b81c` · refactor(room): type durable turn loop
+- `c5849ed89084` · Merge branch 'main' into gaia/ghoul-terra-mtklq7t5cvle3p
+- `60555828c849` · refactor(room): type fork collaborator
+- `c2c4c8b59f64` · Merge commit 'b942811' into gaia/ghoul-terra-mtklq7t5cvle3p
+- `17d9fce358bb` · Merge commit '590cb3fdc9ff1425699d8b331b067267ffefcb75' into refactor/a6c-room-service-build
+- `d25343277677` · docs(refactor): record A6 ports and ADV-012 gate
+- `12d980c06934` · refactor(server): drop dead A5c route residue
+- `590cb3fdc9ff` · merge origin/main (retry) into v2skin/names
+- `2ece0fcccb90` · Merge branch 'main' into refactor/a6c-room-service-build
+- `b942811e31af` · refactor(room): add facade ports
+- `26ab0d0b7af6` · merge origin/main into v2skin/names
+- `094b3d9d63b1` · fix(ui): speaker names render plain, @ for addressing only
+- `b4c126dab4b7` · docs(refactor): conclude adversarial pass 2
+- `a0f7bc8b3e86` · Merge branch 'main' into gaia/jareth-mtklhqjcox0sbw-pass2
+- `779fb2515f96` · docs(refactor): record live luna prerequisite blocker
+- `20eb9b693018` · Merge remote-tracking branch 'origin/main' into gaia/chat-mtk77l0h-onob
+- `d8c024507798` · Merge branch 'main' into v2skin/titlebar
+- `16d90b8c4fa0` · refine native titlebar tabs
+- `d7d637ed9d27` · docs: open adversarial refactor pass 2
+- `a2203cfba788` · Merge branch 'v2fix/draft' into gaia/chat-mtk77l0h-onob
+- `230ca8eedcdc` · fix(web): restore room drafts after reload
+- `b800c07dd7d8` · docs(refactor): record latest-main A5c A7d gate
+- `b30e5708add2` · fix(ui): preserve thinking trace expanders
+- `f71b774ec071` · Merge branch 'main' into refactor/a7d-adopt
+- `a915e40c2427` · Merge branch 'main' into refactor/a5-a7-integration
+- `f25bb138407f` · docs: add live queue executor ledger
+- `d8a9241607cf` · Merge branch 'main' into refactor/a7d-adopt
+- `5a4fd94c4291` · docs(refactor): checkpoint A5c A7d main integration
+- `f383f22f9339` · fix(ui): done mark = U+2713+VS15 (0xProto renders bare check root-shaped)
+- `f518445c5d46` · Merge branch 'refactor/a5c-http' into refactor/a7d-adopt
+- `adcb510f36ef` · docs(refactor): record A7d interaction gate
+- `e763d313f00e` · Merge branch 'main' into refactor/a7d-adopt
+- `37f23a9048ba` · refactor: extract room interaction lifecycle
+- `efc2e48bf4c2` · feat(shell): place macOS tabs in title bar
+- `51cc3d3f27b3` · Merge branch 'main' into refactor/a7d-daemon
+- `4bd87beb3a29` · docs(refactor): record A5c route-table gate
+- `c80c068bc956` · Merge branch 'main' into refactor/a5c-adopt
+- `c75a7d3c7b16` · fix(ui): slim room header
+- `c80a07423811` · fix(ui): drop inner border-left on #room-panel (double hairline right of transcript)
+- `f2eebd400486` · refactor(server): edit-retry domain — clean, confirm real dispatch
+- `311a07e27a76` · refactor(server): usage domain — delete dead duplicate, drop fabricated route
+- `fe329a5eddc2` · refactor(server): artifacts domain — real dispatch, reuse harness-gate helper
+- `fefc1f8e2d38` · Merge branch 'main' into gaia/chat-mtk77l0h-onob
+- `2d3e9a278c5d` · fix(ui): invisible pane resizers — 0px grid column, overhanging 5px handle (kill the border slabs)
+- `faa476eb766e` · refactor(server): memory domain — real dispatch, shared harness-gate helper
+- `487f68c9b78d` · refactor(server): agents domain — real dispatch, delete inline duplicates
+- `7564b47d6a64` · refactor: extract harness claim RPC API
+- `dd996d817b99` · refactor(server): rooms domain — real dispatch, delete inline duplicates
+- `0339f45d6b46` · fix(server): restore http.ts as the real listener+dispatch file (ADV-006)
+- `9117c24e5cda` · merge: main into A7b verify
+- `bd2db65b1e0a` · refactor(daemon): make wiring ports explicit
+- `48648a94c5cd` · docs: reply to every ADV-* adversary ticket; chore: pin knip to devDependencies (ADV-003 partial)
+- `1220a3a0bb7d` · Merge branch 'main' into refactor/a5c-http
+- `6f5459cc3033` · wip: rooms domain extraction (in progress)
+- `768115b7e349` · docs(refactor): audit late A6b landing
+- `b493bf35cf6c` · Merge branch 'main' into room/chat-mtk78q14-wa40
+- `b52e790c8146` · docs(refactor): close bounded adversary wave
+- `e056a35131c5` · docs: record Bhairava live edit retry evidence
+- `8fcad7e7183e` · merge: main into A6b verify
+- `201ee2acb3c2` · docs(refactor): ADV-009 ts-nocheck disables gate on durability seam
+- `43de1618a09a` · docs(audit): append Vishnu/Kali tickets (T-V1..T-V4, T-K1) for 820e568..main
+- `7418fea938e7` · merge main into refactor/a5c-http
+- `2515749bb918` · docs(audit): L2 static integration scans (RULE0/layer/hardcode) for 820e568..main
+- `648a349f539d` · refactor(room): extract plugin and review command facades
+- `8e2d1d6b6bc7` · docs(refactor): ticket incomplete A6 and A7 splits
+- `bd31b236befd` · fix(server): preserve pet asset MIME responses
+- `50cd3c8c70f8` · refactor(room): extract task and UI lifecycle facade
+- `b8db1692bcf3` · refactor(server): dispatch HTTP routes through shared contexts
+- `875f1c54ec22` · refactor(room): extract snapshot, roster, attachment facade
+- `a85cfeae19af` · Merge branch 'main' into room/chat-mtk78q14-wa40
+- `2128ac7c9b1b` · Merge branch 'main' into gaia/chat-mtk77l0h-onob
+- `bbc2c5f04d32` · merge: main into A8b verify
+- `2c96d207b48b` · docs(refactor): record A5 focused gate failure
+- `8c71e311847e` · merge main into LAND v2 skin
+- `7a218abe0e21` · refactor(pi): split runtime compaction internals
+- `a5bc6071ded2` · merge: main into A7 verify (keep both live-queue entries)
+- `1d4dccc930ce` · docs(refactor): reject A5 HTTP god-file relocation
+- `2573e2eacfc6` · docs: A7 live-repro queue entry (settings hot-reload + boot recovery sweeps)
+- `8350bb26d657` · refactor(daemon): split A7 - extract daemon/wiring.ts + daemon/reload.ts
+- `966204663be1` · docs(refactor): reject A8 god-file relocation
+- `81abec675d2e` · merge: main into A6 verify
+- `0231fa0b642b` · docs: queue A6 room live repro
+- `3b2e31744754` · refactor: extract room turn loop
+- `364909df0c03` · fix: load recorder asset from room routes
+- `41836cd53a7f` · merge: main into A8 verify
+- `8b07c27085a5` · Merge branch 'main' into refactor/a5-http
+- `2ad4e4254434` · refactor: split pi harness runtime
+- `638fed8c92b1` · refactor: extract room fork rewind path
+- `6a1873e37f07` · test(server): cover extracted HTTP route adapters
+- `c222aebcfa5c` · refactor(server): centralize API parameter matching
+- `350840e57bd8` · refactor: extract room context gate
+- `5f307be44dbf` · style: enforce v2 flat skin law
+- `64752f6c257b` · refactor(server): route artifact tools through shared declaration
+- `58a40f344659` · refactor(server): separate agent memory usage route adapters
+- `3774a85c9e4c` · refactor(server): wire room route adapters
+- `741744b2d4a5` · refactor(server): isolate room route body adapters
+- `718a1ccab29f` · refactor(server): move HTTP runtime behind route entry
+- `b19d5424555d` · merge: main into A9 verify
+- `5602e34836aa` · Merge branch 'v2skin/settings' into gaia/chat-mtk77l0h-onob
+- `48a29f3abea4` · merge: v2 room skin
+- `df58abc57a79` · refactor(core): split types vocabulary by domain
+- `46d8454f2d69` · Merge branch 'v2skin/transcript' into gaia/chat-mtk77l0h-onob
+- `b0cc858aa5d0` · merge: main (W1) into A3b verify
+- `7d949acf212a` · refactor(domain): centralize transcript reads
+- `ec712cfa9b51` · feat(v2skin): transcript lane — flat entries, time separators, 22px trace rows, kind colors
+- `db72481f3542` · docs: W1 wave summary (A0-A4)
+- `312d6baa5623` · merge: main (W1 A1-A3) into room branch
+- `630a7b5cbc55` · merge: main (A2+A3) into A1 verify
+- `e41bbea0cbab` · merge: main (A3) into A2 verify
+- `c1f029d2a848` · docs(refactor): flag A3 path-semantics drift
+- `4233f82cec80` · refactor(harness): inject tool service providers
+- `e47adf0cf7ae` · refactor(A2c): delete verified-dead exports in web/src
+- `94f12ea81640` · style: default v2 palette to obsidian violet
+- `cec7a22f291e` · refactor(A2b): delete verified-dead exports in src/harness+src/services
+- `944dff2b4cca` · style: size v2 panes by character grid
+- `0d9f1415ce4f` · refactor(A2a): delete verified-dead exports in src/core+src/domain
+- `7da562cce380` · style: expose v2 dim color token
+- `a93b633f14fc` · feat: render flat v2 frame chrome
+- `16cae4dbbb36` · refactor(core): reuse JSON response writer
+- `6b30b8bdf540` · style: flatten v2 frame chrome
+- `f6a1ac7f0adb` · feat(ui): port v2 room skin
+- `5a39b0b06b0f` · refactor(core): centralize GAIA path resolution
+- `5948608477ba` · refactor(core): centralize retry sleep
+- `64de8ef81e06` · docs(refactor): reject non-enforcing A4 dead-code gate
+- `49ea9cdc45d9` · style: flatten settings theme palette
+- `b8845eb9766e` · chore(A4): commit knip.json + wire non-failing check:dead into bun run check
+- `d190332c1cde` · style: add v2 settings skin
+- `9f0616e4ba41` · docs(refactor): record A0 adversary blockers
+- `e8f2e5948e2f` · docs: refactor laws v1 (lane spec preamble)
+- `7cd43bb3f417` · merge: main (A0 green) into room branch
+- `9e8da9bc839c` · docs: V2-SKIN spec (skin port, 4 lanes)
+- `dc2c552de417` · fix(harness): complete compact-clean seam (protocol union + runner case + runtime hook) [A0]
+- `094bd514bb3d` · merge: fix/native-weblinks (A0 lineage repair)
+- `037643fbd8d0` · Merge branch 'main' into room/chat-mtk78q14-wa40
+- `820e568d09dc` · Merge branch 'v2ui/native' into gaia/chat-mtk77l0h-onob
+- `8e023c1a90fd` · feat(ui): v2 parity §G4 — todo-section, swarm-phase-tree, roster-row/status, unread-dot
+- `55d5e57ce059` · Merge branch 'v2ui/room' into gaia/chat-mtk77l0h-onob
+- `dff1923e7290` · feat(ui): port v2 room shell
+- `196d48ff55fd` · fix(web): persist composer completion drafts
+- `cafbd4e5b27f` · feat(web): style v2 composer controls and dictation
+- `698bf93e98c7` · feat(web): adopt v2 attachment chip classes
+- `a6a2b1eca8ef` · feat(web): port v2 composer shell and metadata
+- `69fdb242ed7b` · docs: isolated live-verification recipe (a shared-store daemon SIGTERMs live lanes)
+- `296a0987ddd3` · feat(ui): v2 trace payload rendering — typed bash/read/write/edit results, JSON+syntax tinting, word-level diffs
+- `55d17369c2b8` · docs+scaffold: v2 UI parity gap inventory + per-lane CSS partials
+- `d42d5a2ff0ee` · fix(ui): thinking-effort chip uses the monochrome thinking mark
+- `6951d0bfc836` · fix(ui): glyph pool — drop ⌘ (mac cmd key) and ❖ (skill mark collision)
+- `011007bc50fd` · fix(ui): purge emoji from chrome — monochrome activity marks + agent glyphs in roster
+- `02054ee1dd6f` · merge main into ui-v2 port (panel.js imports: main dropped the room-humans feature; kept glyph import)
+- `1b26cf5dc1d9` · feat(ui): dictation is room-bound + app-wide chip; mic glyph ⌁
+- `df91c2f56c82` · merge: STT engine slash-command switch (/stt, /tts)
+- `3abaeecaae7f` · docs: edit/resend live test — v1 pi-history-only, fork verified
+- `224179c8d76a` · feat(voice): switch dictation engine by slash command
+- `eac16f5aa24e` · feat(ui): v2 symbol vocabulary + v2-style theme handling
+- `7e5e31db3a04` · docs: v1 refactor plan (waves A0-A16)
+- `5d2487f6d291` · docs: v1 refactor inventory
+- `e4deb5eb6ef8` · docs: plugin-system recon (deepseek·v2·v1)
+- `6be49972835f` · Merge branch 'main' into room/chat-mtk78q14-wa40
+- `5502e3936f85` · fix(web): open native web links through daemon
+- `31f99b94915c` · feat(prompt): support per-agent protocol opt-outs
+- `91666d3f2e07` · refactor: normalize removed harness ids at registry boundaries
+- `71e80b5ab1fb` · refactor: route legacy harness records through Pi
+- `712d2c89fe84` · refactor: remove non-Pi harness implementations
+- `93019768875a` · web: permanently remove local login UI
+- `991974080e54` · docs: clarify claude helper reuse policy
+- `787922206bf9` · chore: remove obsolete claude tts process control
+- `2d8cae9d4bc6` · fix: surface read aloud audio context failures
+- `9c56279386dc` · fix: harden claude tts audio delivery
+- `a9bac88441b5` · feat(voice): add apple STT engine (local SFSpeechRecognizer, macOS)
+- `1fea449e322d` · docs(archtree): UI proof — /archtree against an isolated ephemeral daemon
+- `dc60d89ad900` · feat(archtree): /archtree slash command opens the 3D room-tree view
+- `bbe5a628139d` · test(links): cover modifier link opening
+- `5d6fe2ea3b17` · fix(links): open modifier clicks on mousedown
+- `2ab0f6292655` · test(agents): cover graceful conversation ending
+- `e359ef826ca8` · feat(agents): add graceful conversation ending tool
+- `c5d279004f6d` · feat(rooms): persist agent conversation endings
+- `dabd72827385` · fix(tunnel): bound KV origin pushes
+- `feefda9407f9` · fix(dictation): let daemon report slow STT results
+- `0e8f370eddc8` · Reapply "fix(pi): expose gaia tool through Claude Code MCP"
+- `69c21f3d1ee0` · Revert "fix(pi): load extension providers before model resolution"
+- `8c2733e4d483` · Revert "fix(pi): expose gaia tool through Claude Code MCP"
+- `11daa9345735` · fix(pi): expose gaia tool through Claude Code MCP
+- `0e6b0acc8456` · fix(pi): load extension providers before model resolution
+- `1ad6ccde9d65` · compaction: model-free override via clean-summaries registry
+- `a64194e40a3b` · Merge branch 'main' into gaia/chat-mt8l6ofm-irzm
+- `99ba2dcd40f7` · remove /execute completely
+- `4e9faec0e7f6` · merge main into room branch before landing /compact --edit
+- `6b2e9b6a0e39` · cleanup: drop dead typeof-string branch in runCompactCommand
+- `a23e7a77f11e` · fix(compact-edit): collapse to ONE session_before_compact listener
+- `d87ef0692c94` · feat: add editable pi compaction drafts
+- `9915418f6f68` · Merge branch 'main' into gaia/chat-mt8l6ofm-irzm
+- `28806203c3ec` · rewrite /execute: just run new on the active agent + print a line
+- `0696c1be701b` · merge main into room branch before landing compact-fallback fix
+- `d1f6a92dd5ad` · feat: /execute posts a visible verdict on the wall (agent + reason), no longer structural
+- `196be3184312` · fix(compact): mechanical fallback when compact-fallback model == room's own model
+- `722054abf10f` · fix: /execute clears only the active agent context, not the whole room
+- `f8853293c374` · read-aloud: strip <gaia:think> before TTS → reasoning never spoken
+- `f228bd34afbc` · dictation: remove 5min auto-stop cap → unlimited recording
+- `9493dd8bc168` · feat(rooms): /execute — law-ledger execution record then clear
+- `0762124bb34b` · feat(rooms): record executions before clearing rooms
+- `ab7cbff05abd` · feat(commands): parse execute slash command
+- `6956056c9589` · Merge branch 'main' into gaia/chat-msfzjz9m-3ss6
+- `400336e2754d` · read-aloud regression attempt 3: CDP repro rig (throwaway) + design submodule bump
+- `080fb069f9de` · test(summons): red-proof the resume seal ownership window (predecessor cleanup unsealing a sealed successor strands turn C)
+- `489f45492fe8` · test(summons): wait for the caller callback instead of racing the resumeStatus stamp
+- `5fa4f653a7ed` · fix: preserve successor resume seal ownership
+- `6bd8e221fd30` · RC8: seal a resume watcher the instant it observes the room idle, not after the outcome read returns
+- `436705f6edf2` · RC7: a sealed resume watcher no longer swallows the next turn, and a settling one no longer clears a newer contract
+- `7548186206b2` · RC6: resume epochs get a per-room sequence, and closing one requires its token
+- `abd9f46b22a4` · dog-mode plugin: fix real routing bug (targets re-derivation misrouted to @unknown), stop leaking a stale maxLines override past /dog on|off|/release, tsc clean, targeted+room-service+rooms tests green
+- `40afd643df08` · RC5: epoch-close a resume contract — a watcher may only close its own resume
+- `79f5921547c9` · dog-mode plugin: fix tsc errors + restore renderCap persistence across restart (rooms.ts roomEventFrom was still parsing the deleted dogRender shape and never parsed the new renderCap field)
+- `c8d6d27a9160` · fix: rearm joined resume after predecessor settles
+- `0fa5a208072f` · resume: close the no-delivery window (arm watcher before send, stamp/identity-keyed cleanup)
+- `b81adef299aa` · Merge commit '7e6827e' into gaia/chat-msfzjz9m-3ss6
+- `7e6827e1a0be` · fix: initialize submodules in room worktrees
+- `db6698a069e6` · fix: avoid duplicate overlapping resume recovery
+- `eea4986072bb` · fix(summons): deliver a resumed turn exactly once under concurrent resumes
+- `aa6d9e4ec9fe` · Merge commit '658f070' into gaia/chat-msfzjz9m-3ss6
+- `658f070d3c20` · fix: isolate runner process groups
+- `9547d52a911d` · notes: independent cross-check of summon enqueue poll fix
+- `e00c1cdd9837` · dog-mode: delete every placeholder, real agent turns only, storage never truncates
+- `0d3ca5027c02` · dog-mode: bare /dog toggles collar; discipline acks authored by the collared agent
+- `eed98c22a540` · dog-mode: remove enabled config gate; sound-register acks; kill /shock echo
+- `c0d2bf11d4e7` · Fix #1+#2 (gaia-daemon-triage/FIX-DESIGN.md): resume-completion tracking + summon --status census
+- `11e0ea4c8661` · DogMode (09-DOG-MODE): adult D/s persona-register, render/post-layer enforced
+- `381c50c1c998` · Merge main into gaia/chat-mt5ro7gg-cffs
+- `4710f3ee0a35` · fix(web): serve shared transcript modules
+- `4d01f4c5750e` · fix(links): suppress WKWebView native gesture on cmd/ctrl+click mousedown
+- `6e4f8bde6c33` · Merge branch 'main' into gaia/naru-kimi-mt4caz24gt1q7o
+- `63d05f86eb5f` · fix(prompt): seal foreign seat projection leaks
+- `680b37d9e801` · fix(web): the artifact panel keeps its own keyboard, and the reload path is quiet
+- `1decbf55d0cc` · fix(shared): permit unknown tool payload traversal
+- `492a4081197b` · test(room): enforce tool result owner paging
+- `02386b787ae1` · feat(prompt): project other agent activity by seat
+- `857c67e32e8c` · fix(deploy): initialize source submodules
+- `d6eafbf84baa` · fix(deploy): discard transient Bun dependencies
+- `2518ea518b24` · fix(deploy): create release backup before copy
+- `8a44da76c432` · deploy: add timer-driven rollback rollouts
+- `2175a19ba117` · feat(web): canvas inspector chrome for the new fields; bump design submodule
+- `0a2adeaed773` · chore(design): bump submodule to the Sketch-shaped canvas
+- `9719ce72ac3e` · style(web): dark three-rail canvas chrome to match the Sketch reference
+- `14a36773ff79` · fix(web): artifact fence detection accepts info-string words
+- `0f1dfbfc8afb` · Merge branch 'main' into gaia/chat-mt3d7rdv-7psb
+- `7a223197fd61` · style(web): canvas toolbar separators + compact min-height
+- `ae3f23e4bf31` · feat(web): design canvas chrome for the artifact panel
+- `d301fd317d14` · docs: recon Anthropic Skills API compatibility
+- `5597d5976173` · fix(image-read): stop baking build-machine path into compiled binary
+- `24d2691af79a` · fix(graphql): ship server/graphql.ts as pre-bundled asset so compiled binary can load it
+- `c209b7a20d5c` · fix(shell): allow notification plugin permission check
+- `583eddde8bb6` · config: enable GraphQL surface via .gaia/config.json graphql section
+- `77bf4ddf3011` · context-diet: expose diet + tool_result_fetch as gaia-tool verbs (tools-pi.ts, additive-only)
+- `bd6810114a26` · context-diet: daemon/server routes + bridge + pi/codex runtime wiring for tool_result_fetch and diet
+- `0fe4980d4aaf` · context-diet: /diet room command, RoomService dietView/dietSet/toolResultSlice, per-turn dietPolicy wiring
+- `0972ef3cc256` · context-diet: render-time decay in renderRoomTranscript + AgentInput.dietPolicy wiring
+- `eb233b990c56` · context-diet: domain policy type + file-backed policy store (default OFF)
+- `6a7ccee6c520` · feat(graphql): add /graphql test surface over the gaia verb dispatcher
+- `193560390bfd` · feat(web): split gaia web verb into search vs fetch, wire youtube transcript+comments
+- `fa42f3a48c2f` · feat(web): add web-fetch service (readable extraction + youtube transcript/comments)
+- `0ac45b447cfe` · merge: main into chat-mt0gczoy-wu2p (land sidebar star/dot row fix)
+- `f2074f4e49b6` · harness(pi): fall back /compact to claude-sonnet-5 when the session model is stuck
+- `d7c08619fead` · sidebar: fix star/status-dot stacking, give each a fixed-width slot
+- `3907523863d4` · sidebar: cap top-level rooms list at 8 (was 25), matching workspaces
+- `f19be8a394e8` · merge: workspace favorite/reorder into sidebar cap/collapse
+- `6008a360a695` · feat(workspaces): favorite + drag-drop reorder (sidebar + registry + HTTP)
+- `777a444d67c3` · merge: main into chat-mszwmvsz-jxd4 (land sidebar cap/collapse fix)
+- `2fba6e81c794` · feat(gaia-tool): progressive image read pipeline
+- `dc83ae100d4a` · feat(gaia-tool): schema tightness — per-verb typed args + precise validation
+- `5bb549596348` · feat(tools): default agents to unified gaia surface
+- `c609d3e093c7` · feat(web): add Brave Tavily Serper fallback
+- `d2882bae0c59` · sidebar: cap + collapse workspaces/rooms lists
+- `92d8f711d854` · fix(voice): Replicate whisper fallback language sentinel None -> auto
+- `b2814b1fd5e0` · merge: L2 adversarial PoC consolidation + /api/events isolation PoC (ghoul-opus)
+- `c359f763dca2` · merge: adversarial security audit tests (ghoul-sonnet L1/L4/L5 room-membership)
+- `06be5ff420ac` · audit(isolation): PoC — anon /api/events bypasses per-user workspace ownership (main 58d12c5/20623c3)
+- `44feff9a628a` · test(security-audit): consolidate L2 adversarial PoC suites (auth e5b58fb + membership b00cabe)
+- `90f08fad22e3` · test: adversarial audit — 3 RED tests proving room-membership (RoomState.humans) enforcement gaps (L1 SSE bypass, L4 land-grab lockout, L5 last-member reopen)
+- `57358ca9f5a5` · test: verify assigned workspace isolation live
+- `58d12c5ab11a` · feat: scope workspaces to human owners
+- `20623c3e6c30` · feat(users): validate optional workspace ownership
+- `28c9607b8fad` · deploy: package telegram bridge service
+- `a91be2e5b165` · fix: send membership endpoint user id field
+- `20b0d9ca83b7` · fix: establish session after account registration
+- `ba6ba0df85d7` · feat: add human login and room membership UI
+- `55e22ec21877` · feat: Telegram <-> GAIA room bridge (standalone plugin process)
+- `b00cabef2494` · feat: room-level human membership (invite/remove/list)
+- `e5b58fbda96f` · feat: human user accounts, login sessions, multi-human message attribution
+- `fc95c44be621` · merge: land GAIA_BASE_PATH support (terra branch) for server deploy
+- `2687805c88a6` · fix(memory): stop embedder health wedging permanently OFF
+- `78c235ee9772` · merge: GAIA_BASE_PATH support
+- `5d0c0958647c` · feat: GAIA_BASE_PATH — mount the web client under a reverse-proxy URL prefix
+- `95b8cdebb663` · build: allow selecting Bun compile target
+- `c1342a8b70bc` · test: gate canvas style boundary
+- `ed54a733bd9d` · design: preserve canvas metadata boundary
+- `6e38a57ac9be` · design: advance canvas style boundary
+- `53e637ac59d3` · fix: harden served artifact canvas styles
+- `be01e0c8f142` · fix: raise artifact card contrast
+- `d234a11607ef` · design: finish compact artifact cards
+- `78af033f63b5` · design: style accessible artifact cards
+- `b8a2bd3d07ed` · design: pure artifact card presentation model
+- `2c8ce38c5811` · build: omit source-only design tests
+- `2572c130ecf5` · design: advance safe artifact projection
+- `7e0af1cb8962` · fix: harden artifact MIME and payload reads
+- `dbf42c5fd514` · chore: advance artifact ledger dependency
+- `3ec54fa6210f` · design: guard oversize artifact reads
+- `0aa7a99f4269` · feat: harden artifact ledger boundaries
+- `3f4fe9f32545` · test: add adversarial artifact boundaries
+- `660c734b21fb` · feat: add artifact revision migration seam
+- `f76ccad866ab` · plugins: align lifecycle host with v2 contract
+- `6b0ce6b712e6` · test: attack shutdown lease race
+- `87d843740674` · plugin-host: terminal shutdown — refuse leases after close, idempotent shutdown, uniform busy message
+- `6a12d4c8acc3` · test: expose post-shutdown lease acquisition (attack4)
+- `7552744365c7` · fix: serialize plugin host shutdown
+- `0ff86a64115b` · test: expose plugin shutdown reload race
+- `c762fdf1da4d` · fix(plugin-host): shutdown honours turn leases; generations never reused
+- `23c55ca1e19e` · test: attack2 — shutdown lease invariant + generation id reuse
+- `52d8ff3cb154` · fix: guard plugin reload swap against leases
+- `068b692053c6` · test: expose plugin reload lease race
+- `d6118fefa64d` · plugins: add disconnected plugin lifecycle host
+- `b408567e25ac` · plugins: isolate bundled manifest inventory
+- `a7845f35d450` · plugins: snapshot bundled addon manifests
+- `36eac7af391b` · plugins: close manifest validation edge cases
+- `2b28f3c0bc8f` · plugins: harden manifest contract
+- `34e01aa67119` · services: add plugin manifest validation
+- `e6df9671b019` · rooms: keep legacy transcripts appendable
+- `cfe64267dc86` · test: fail closed on future transcript metadata
+- `1794c432e08c` · rooms: preserve nested transcript metadata on rewrites
+- `ecfb263d4d65` · room: preserve physical transcript cursor semantics
+- `bb611ba497ce` · room: make transcript state mutations atomic
+- `8fc351c5c70d` · store: retry short writes so durable appends cannot truncate
+- `67af1e7e4448` · test: cover transcript structural writer races
+- `02d159c42c84` · room-service: EOF cursor is healthy, fork refuses an occupied id
+- `49ff565a17fd` · rooms: batch archive fsync, single-write jsonl append
+- `1f90d009726f` · test: verify transcript crash and force-import coordination
+- `fdd96ccf44a2` · rooms: durable appends, composite clear/fork, stale-cursor fail-safe
+- `db87f7b6f130` · rooms: coordinate transcript writers under the room lock
+- `00ae779624ca` · test: add cross-process transcript race reproducer
+- `042dc1acfb6e` · fix: harden room coordination recovery
+- `8d84f74ed82f` · fix: fail closed on unreadable room privacy bits
+- `b798ec227336` · fix: exclusive room seeding + read-only room open
+- `18f63961d5e9` · fix: serialize room state across processes
+- `63157701cd07` · fix: seed summon child rooms and forks through RoomHandle deltas
+- `58fe32ec5d87` · test: cover summon state preservation at runtime
+- `9c4bd3e87675` · test: guard + regression cover for room state writers bypassing RoomHandle
+- `e4afd2013d97` · fix: serialize setup room state mutations
+- `55fe70d01f3b` · test: cover setup room state delta preservation
+- `7ecca6111206` · test: reproduce cross-process room state lost updates
+- `c67c778706d4` · merge: transplant v1 room-state guarantees onto main
+- `960e019ce8d7` · refactor: gate unsupported runtime settings
+- `a9a2a9d2510e` · refactor: gate incompatible room state
+- `4625ebb65087` · refactor: recover durable queued messages
+- `59146bcc241d` · refactor: serialize controller room mutations
+- `6c7ccf18fcd7` · refactor: preserve future room state fields
+- `1a1a6e05b7ff` · fix(summons): keep delegation parents alive through callbacks
+- `2767a970f119` · refactor: serialize room state updates
+- `94b575e9ebfa` · test: prove workspace room composition is swappable
+- `df201a2bc6d1` · refactor: compose room lifecycle per workspace
+- `e21b995f4e65` · merge: harden lifecycle room initialization against races
+- `60968e61d1f1` · review(Mahakala): restore import ordering in workspace-loader
+- `5010bb9c1706` · Merge branch 'lane/agni-room-init' into lane/mahakala-audit
+- `80dc65051089` · test: pin initial-room-creation contract before moving layout out of workspace-loader
+- `c199fa84b14b` · refactor(room): move room layout init into RoomStore/RoomLifecycle
+- `a1ece1854773` · refactor: initialize workspace rooms through lifecycle
+- `8ad2551247a6` · fix: reserve fork rooms atomically
+- `a0ccdb19087a` · refactor: room lifecycle (enumeration/existence/fork ids) lives in workspace, not the controller
+- `82521ecaf90a` · merge: workspace room lifecycle
+- `a28a70fa4645` · wip: assess room lifecycle boundary
+- `49ec02915d83` · refactor: extract RoomDirectory for room enumeration/existence/fork naming
+- `f042d237d703` · refactor: drop controller-side mkdir; room layout owned by RoomStore
+- `f1e590abf352` · chore(rebuild): keep bundle inventory context terse
+- `d5639e2ce1a5` · Revert "test: confine bun test discovery to test/ (dist/design copies polluted filters)"
+- `28c33914d1b6` · test: confine bun test discovery to test/ (dist/design copies polluted filters)
+- `3fd294f393d7` · test(rebuild): retain bundle asset parity regression
+- `ec14bc3c2f95` · fix(rebuild): atomically install every bundled runtime asset
+- `4c422046cb2c` · fix(rebuild): single source of truth for bundle assets — design/ survives atomic swap
+- `8dde0ef561f5` · test: characterize gaia controller room persistence
+- `c186fac4ab91` · refactor: keep fork transcript copying behind RoomStore
+- `5ba2f41f176b` · room: route gaia-controller state IO through RoomStore
+- `968c9bb67dcd` · test: enforce v2 harness purity
+- `5095732fa371` · test: cover room store factory compatibility
+- `f41c84783b36` · room: single openRoomStore factory; route setup-loader + summon-coordinator state IO through it
+- `7cba03b4e408` · refactor: isolate legacy room storage boundary
+- `7f96aea6df9c` · web: expose complete slash palette with goal first
+- `bddc7c9b9f35` · build: snapshot extracted design runtime assets
+- `5587973175b5` · Merge branch 'main' into room/chat-mset2n4w-yk66
+- `3de7c695243f` · goal: start and recover autonomous room objectives
+- `a9533fd933bd` · Merge branch 'main' into room/chat-mset2n4w-yk66
+- `5afb78ee7f90` · goal: execute durable room objective loop
+- `acc16a40aec7` · goal: /goal parse + SLASH_COMMANDS registration + help text
+- `0f908756b637` · fix(rooms): preserve queue eventId/recorded through state normalization (crash-idempotency)
+- `f0b4a6c2cabd` · goal: RoomGoal type + durable room-state normalization
+- `79ca5f479e11` · test: preserve queued goal handoff markers on restart
+

@@ -25,6 +25,7 @@ export type SlashCommand =
   | { type: "schedule"; sub: "list" | "run"; id?: string }
   | { type: "steer"; text?: string }
   | { type: "queue"; text?: string }
+  | { type: "upstream"; ref?: string }
   | { type: "note"; text?: string }
   | { type: "scaffold"; task?: string }
   | { type: "cancel" }
@@ -75,6 +76,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   { name: "schedule", type: "schedule", description: "list scheduled jobs or run one now: /schedule [run <id>]" },
   { name: "steer", type: "steer", description: "inject guidance into the running turn: /steer <text>" },
   { name: "queue", type: "queue", description: "park an idea on the durable queue without steering the running turn: /queue <text> (pause/resume it in the tasks panel)" },
+  { name: "upstream", type: "upstream", description: "fetch Pascal's upstream and map selectable feature divergences against main: /upstream [ref]" },
   { name: "note", type: "note", description: "pin a sticky note of something to prompt later: /note <text> (shown above queued messages in the tasks panel)" },
   {
     name: "scaffold",
@@ -189,6 +191,8 @@ export function parseCommand(input: string): SlashCommand {
     }
     case "queue":
       return { type: "queue", text: args.join(" ") || undefined };
+    case "upstream":
+      return { type: "upstream", ref: args[0] || undefined };
     case "note":
       return { type: "note", text: args.join(" ") || undefined };
     case "scaffold":
