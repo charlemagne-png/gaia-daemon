@@ -1,0 +1,27 @@
+diff --git a/node_modules/@earendil-works/pi-ai/dist/auth/oauth/anthropic.js b/node_modules/@earendil-works/pi-ai/dist/auth/oauth/anthropic.js
+index 0000000..0000000 100644
+--- a/node_modules/@earendil-works/pi-ai/dist/auth/oauth/anthropic.js
++++ b/node_modules/@earendil-works/pi-ai/dist/auth/oauth/anthropic.js
+@@ -140,16 +140,22 @@
+         });
+     });
+ }
+ async function postJson(url, body) {
+     const response = await fetch(url, {
+         method: "POST",
+         headers: {
+             "Content-Type": "application/json",
+             Accept: "application/json",
++            // Cloudflare in front of platform.claude.com/v1/oauth/token 403s
++            // (error 1010 browser_signature_banned) requests with no explicit
++            // User-Agent — the bare client default this fetch() sends without
++            // this header. Any real UA string clears it; this one just names
++            // the actual client honestly.
++            "User-Agent": "pi-ai-oauth-client/1.0 (+bun)",
+         },
+         body: JSON.stringify(body),
+         signal: AbortSignal.timeout(30_000),
+     });
+     const responseBody = await response.text();
+     if (!response.ok) {
+         throw new Error(`HTTP request failed. status=${response.status}; url=${url}; body=${responseBody}`);
