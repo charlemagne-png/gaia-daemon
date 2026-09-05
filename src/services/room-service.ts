@@ -59,6 +59,7 @@ import { ensureWorkspaceRoom } from "../domain/workspace.js";
 import { effectiveAgentSkills, effectiveAgentTools, effectiveRoleName, listAgentRoles, resolveAgentRole } from "../domain/roles.js";
 import { resolveSkillRefs } from "../domain/skills.js";
 import type { MemoryStore, MemoryAction, MemoryMutationResult } from "../domain/memory.js";
+import type { ApplicationCatalog } from "../domain/applications.js";
 import { formatMemoryHits, type ActiveContextRef, type MemorySearchHit } from "../domain/workspace-index.js";
 import type { AgentRuntime, HarnessHost } from "../harness/spec.js";
 import { capabilitiesFor, contextWindowFor, findHarness, harnessIdFor, nativeCommandsFor, usageAccountFor } from "../harness/spec.js";
@@ -117,6 +118,8 @@ export interface RoomServiceOptions {
   /** Memory v3 hooks (auto-recall, episodic capture, consolidation). Absent →
    * turns run exactly as before; the hooks are additive. */
   memory?: RoomMemoryHooks;
+  /** Workspace catalog snapshot; read-only in Applications Wave 0. */
+  applications?: () => Promise<ApplicationCatalog>;
   /** One-shot LLM call (same caller consolidation uses) for the context-gate
    * "compact" option — summarizes the room to seed a new agent. Absent → the
    * compact choice degrades to a raw transcript slice. */
@@ -4337,7 +4340,7 @@ export class RoomService {
     return { events: events.slice(start, end), hasMore: start > 0 };
   }
 
-  async getSnapshot(): Promise<Snapshot> {
+  async getSnapshot(): Promise<Snapshot & { applications?: ApplicationCatalog }> {
     await this.init();
     const all = (await this.room.eventsFrom(0)).events;
     const events = all.slice(-this.workspace.config.transcriptWindow);
@@ -4361,6 +4364,7 @@ export class RoomService {
       .filter((account): account is string => Boolean(account));
     const voiceDispatcherAvailable = Boolean(await this.availableVoiceDispatcherId());
     return {
+      ...(this.options.applications ? { applications: await this.options.applications() } : {}),
       workspace: {
         id: this.workspaceId,
         rootDir: this.workspace.rootDir,
