@@ -71,15 +71,17 @@ export class RoomSnapshotMixin {
     const found = beforeId ? events.findIndex((event: RoomEvent) => event.id === beforeId) : -1;
     const end = found >= 0 ? found : events.length;
     const start = Math.max(0, end - Math.max(1, limit));
-    return { events: this.displayEvents(events.slice(start, end)), hasMore: start > 0 };
+    const state = await this.room.state();
+    return { events: await this.pluginEventActions(this.displayEvents(events.slice(start, end)), state), hasMore: start > 0 };
   }
 
   async getSnapshot(): Promise<Snapshot> {
     await this.init();
     const all = (await this.room.eventsFrom(0)).events;
-    const events = this.displayEvents(all.slice(-this.workspace.config.transcriptWindow));
     const state = await this.room.state();
+    const events = await this.pluginEventActions(this.displayEvents(all.slice(-this.workspace.config.transcriptWindow)), state);
     const pluginPanels = await this.pluginPanels(state);
+    const pluginChromeTokens = await this.pluginChromeTokens(state);
     // The selected agent plus any agents actively executing this room's turn
     // are the only identities that can spend here. This is deliberately not
     // the workspace roster: an unrelated agent/account in another room must
@@ -108,7 +110,7 @@ export class RoomSnapshotMixin {
         statePath: this.room.statePath,
         events,
         ...(state.refCode ? { refCode: state.refCode } : {}),
-        ...(state.berserk ? { berserk: true } : {}),
+        ...(pluginChromeTokens ? { pluginChromeTokens } : {}),
         ...(state.love ? { love: true } : {}),
         ...(state.teleport ? { teleport: true } : {}),
         eventTotal: all.length,
@@ -186,11 +188,12 @@ export class RoomSnapshotMixin {
     // closes the start-of-turn gap), and any live summon children (whose markers
     // likewise trail their start).
     const running = new Set(this.options.summonHost?.runningChildren().map((child: { roomId: string }) => child.roomId) ?? []);
-    return base.map((room) => {
+    return Promise.all(base.map(async (room) => {
       const isCurrent = room.id === this.roomId;
       const live = room.running || running.has(room.id) || (isCurrent && Boolean(this.activeAgentTurn));
-      return { ...room, isCurrent, ...(live ? { running: true } : {}) };
-    });
+      const pluginChromeTokens = await this.pluginChromeTokens(undefined, room.id);
+      return { ...room, isCurrent, ...(live ? { running: true } : {}), ...(pluginChromeTokens ? { pluginChromeTokens } : {}) };
+    }));
   }
 
   /** Human rename. This is display metadata only: the durable room id/path stay
@@ -403,12 +406,10 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.activeAgent ? { agent: state.activeAgent } : {}),
             ...(state.favorite ? { favorite: true } : {}),
             ...(state.project ? { project: state.project } : {}),
-            ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),
             ...(state.incognito ? { incognito: true } : {}),
             ...(state.voiceSession ? { voiceSession: true } : {}),
-            ...(state.berserk ? { berserk: true } : {}),
-            ...(state.love ? { love: true } : {}),
+                ...(state.love ? { love: true } : {}),
             ...(state.teleport ? { teleport: true } : {}),
             ...(activity ? { lastActivity: activity } : {}),
           } as Snapshot["rooms"][number],

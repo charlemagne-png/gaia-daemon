@@ -319,6 +319,16 @@ export async function runPluginAction(command, args) {
   }
 }
 
+/** @param {string} plugin @param {string} eventId @param {string} action @param {string[]} args */
+export async function runPluginEventAction(plugin, eventId, action, args) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  try {
+    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/plugins/${encodeURIComponent(plugin)}/events/${encodeURIComponent(eventId)}/${encodeURIComponent(action)}`, { method: "POST", body: JSON.stringify({ args }) });
+    applySnapshotPayload(body); state.error = body.message || ""; markDirty();
+  } catch (error) { setError(error); }
+}
+
 /** Toggle room agent-dialogue (agents responding to each other's @mentions).
  * @param {boolean} on */
 export async function setRoomAgentDialogue(on) {
@@ -485,40 +495,6 @@ export async function setRoomFavorite(roomId, favorite) {
     applyRoomsPayload(snapshot.workspace.id, body.rooms);
     state.error = "";
     markDirty("sidebar", "tabs", "status");
-  } catch (error) {
-    setError(error);
-  }
-}
-
-/** @param {string} roomId @param {string} eventId @param {string} name */
-export async function setRoomBookmark(roomId, eventId, name) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  try {
-    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/bookmarks`, {
-      method: "POST",
-      body: JSON.stringify({ eventId, name }),
-    });
-    applyRoomsPayload(snapshot.workspace.id, body.rooms);
-    state.error = "";
-    markDirty("sidebar", "tabs", "status", "panel", "transcript");
-  } catch (error) {
-    setError(error);
-  }
-}
-
-/** @param {string} roomId @param {string} bookmarkId */
-export async function deleteRoomBookmark(roomId, bookmarkId) {
-  const snapshot = state.snapshot;
-  if (!snapshot) return;
-  try {
-    const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/bookmarks/${encodeURIComponent(bookmarkId)}`, {
-      method: "DELETE",
-      body: "{}",
-    });
-    applyRoomsPayload(snapshot.workspace.id, body.rooms);
-    state.error = "";
-    markDirty("sidebar", "tabs", "status", "panel", "transcript");
   } catch (error) {
     setError(error);
   }

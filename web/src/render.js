@@ -6,9 +6,9 @@
 import { $, h } from "./dom.js";
 import { state } from "./state.js";
 
-/** @typedef {"layout"|"berserk"|"tabs"|"sidebar"|"panel"|"plugins"|"status"|"transcript"|"composer"|"studio"|"artifacts"|"dario"|"contextgate"|"theme"|"usage"|"search"|"bgtasks"|"settings"|"keymaker"} Region */
+/** @typedef {"layout"|"chrome"|"tabs"|"sidebar"|"panel"|"plugins"|"status"|"transcript"|"composer"|"studio"|"artifacts"|"dario"|"contextgate"|"theme"|"usage"|"search"|"bgtasks"|"settings"|"keymaker"} Region */
 
-const ORDER = /** @type {Region[]} */ (["layout", "berserk", "tabs", "sidebar", "panel", "plugins", "status", "transcript", "composer", "studio", "artifacts", "dario", "contextgate", "theme", "usage", "search", "bgtasks", "settings", "keymaker"]);
+const ORDER = /** @type {Region[]} */ (["layout", "chrome", "tabs", "sidebar", "panel", "plugins", "status", "transcript", "composer", "studio", "artifacts", "dario", "contextgate", "theme", "usage", "search", "bgtasks", "settings", "keymaker"]);
 
 /** @type {Map<Region, () => void>} */
 const renderers = new Map();
@@ -136,10 +136,12 @@ function renderLayout() {
 
 registerRegion("layout", renderLayout);
 
-// Room chrome flags: body classes drive the mode-specific glow CSS. Berserk is
-// effective (daemon resolves ancestor inheritance); teleport is room-local only.
-registerRegion("berserk", () => {
-  document.body.classList.toggle("berserk", Boolean(state.snapshot?.room.berserk));
+// Semantic plugin chrome stays data-only; the client theme owns rendering.
+// Legacy core flags retain their classes until each feature adopts this seam.
+registerRegion("chrome", () => {
+  const tokens = state.snapshot?.room.pluginChromeTokens ?? [];
+  document.body.dataset.roomChrome = tokens.join(" ");
+  document.body.classList.toggle("berserk", tokens.includes("danger"));
   document.body.classList.toggle("love", Boolean(state.snapshot?.room.love));
   document.body.classList.toggle("teleport", Boolean(state.snapshot?.room.teleport));
 });

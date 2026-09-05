@@ -1494,6 +1494,8 @@ test("/cancel aborts a running compaction — the pass is killed and the reply s
 });
 
 test("a successful compact refreshes the stale ctx chip: streamed summary size, else dropped", async () => {
+  process.env.GAIA_AUTO_COMPACT_PERCENT = "0";
+  try {
   // Before the fix the chip sat on the pre-compact % until the next turn.
   let compactCalls = 0;
   const factory = (agent: AgentDef) => {
@@ -1528,6 +1530,9 @@ test("a successful compact refreshes the stale ctx chip: streamed summary size, 
   await service.sendMessage("/compact");
   const dropped = (await service.getSnapshot()).agents.find((agent) => agent.id === "gaia")?.context;
   assert.equal(dropped, undefined, "stale usage dropped when the harness streamed no post-compact figure");
+  } finally {
+    delete process.env.GAIA_AUTO_COMPACT_PERCENT;
+  }
 });
 
 test("durable compaction: a compacted agent that LOSES its session reloads [summary + tail], not the full raw transcript", async () => {

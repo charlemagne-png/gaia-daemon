@@ -118,18 +118,6 @@ export class RoomInteractionLifecycle {
     return this.refreshRoomList(workspaceId);
   }
 
-  async setRoomBookmark(workspaceId: string, roomId: string, eventId: string, name: string): Promise<{ bookmark: RoomBookmark; rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    const bookmark = await service.setBookmark(eventId, name);
-    return { bookmark, ...(await this.refreshRoomList(workspaceId)) };
-  }
-
-  async deleteRoomBookmark(workspaceId: string, roomId: string, bookmarkId: string): Promise<{ rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    await service.removeBookmark(bookmarkId);
-    return this.refreshRoomList(workspaceId);
-  }
-
   private async serviceForExistingRoom(workspaceId: string, roomId: string): Promise<RoomService> {
     const record = await this.host.registry.find(workspaceId);
     if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
@@ -273,6 +261,14 @@ export class RoomInteractionLifecycle {
   async runPluginAction(workspaceId: string, roomId: string, command: string, args: string[]): Promise<SelectionPayload & { message: string }> {
     const service = await this.host.serviceFor(workspaceId, roomId);
     const message = await service.runPluginAction(command, args);
+    const snapshot = await service.getSnapshot();
+    this.host.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
+    return { snapshot, workspaceFiles: await this.host.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), message };
+  }
+
+  async runPluginEventAction(workspaceId: string, roomId: string, plugin: string, eventId: string, action: string, args: string[]): Promise<SelectionPayload & { message: string }> {
+    const service = await this.host.serviceFor(workspaceId, roomId);
+    const message = await service.runPluginEventAction(plugin, eventId, action, args);
     const snapshot = await service.getSnapshot();
     this.host.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
     return { snapshot, workspaceFiles: await this.host.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId), message };

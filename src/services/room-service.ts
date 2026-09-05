@@ -294,9 +294,6 @@ export const AGENT_DIALOGUE_MAX_HOPS = 8;
  * event back into the history they just reset. */
 const TRANSCRIPT_STRUCTURAL_COMMANDS = new Set(["clear", "fork", "rewind"]);
 
-const BERSERK_CHARGE =
-  "⚔️ The berserker is summoned — a task in this room has hit a wall. Name the plateaued task and exact wall, split it into independent attack vectors, summon worker lanes where useful, cross-examine the findings, and report the breach plan.";
-
 /** Command handlers, keyed by parsed type. Adding a command = one entry here
  * plus one line in SLASH_COMMANDS. Each returns the system reply text, with an
  * optional event discriminator when the transcript should render it specially,
@@ -363,7 +360,6 @@ const COMMANDS: Record<string, CommandHandler> = {
   goal: (service, command) => (command.type === "goal" ? service.runGoalCommand(command) : Promise.resolve("")),
   recall: (service, command) => (command.type === "recall" ? service.runRecallCommand(command.agent, command.query) : Promise.resolve("")),
   gaiago: (service, command) => (command.type === "gaiago" ? service.runGaiagoCommand(command.text) : Promise.resolve("")),
-  berserk: (service, command) => (command.type === "berserk" ? service.runBerserkCommand(command.off) : Promise.resolve("")),
   love: (service, command) =>
     command.type === "love"
       ? command.sanitize
@@ -693,14 +689,6 @@ export class RoomService {
     await this.init();
 
     let command: RoomCommand = parseCommand(text);
-    if (command.type === "berserk" && !command.off) {
-      const proclamation = await this.runBerserkCommand(false);
-      const event: RoomEvent = { id: newRoomEventId(), timestamp: new Date().toISOString(), author: "system", text: proclamation };
-      await this.room.appendEvent(event);
-      this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
-      text = BERSERK_CHARGE;
-      command = { type: "message", text };
-    }
     // Harness-native passthrough: an unrecognized `/command` becomes a command
     // TURN to the active agent when that agent has CHECKED that command as a
     // skill (claude builtins like deep-research) and its harness can run them.
@@ -728,7 +716,13 @@ export class RoomService {
         // only the room's agent ever generates the actual reply. Never an
         // early return — unlike the steer/reply branch just below.
         if (result.rewriteAsMessage) {
+          if (result.reply) {
+            const event: RoomEvent = { id: newRoomEventId(), timestamp: new Date().toISOString(), author: "system", text: result.reply };
+            await this.room.appendEvent(event);
+            this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
+          }
           const target = result.targets?.[0] ?? (await this.roomDefaultTarget());
+          text = typeof result.rewriteAsMessage === "string" ? result.rewriteAsMessage : text;
           command = { type: "message", text };
           options = { ...options, targets: result.targets ?? [target], pluginMessageTurn: true };
         } else if (result.steer) {
@@ -945,7 +939,7 @@ export class RoomService {
    * settled — either a queued item claims `activeTask` or the queue is
    * confirmed empty — so a caller tracking `this.draining` (settleTask) can
    * resolve without waiting for a queued COMMAND's full execution below. */
-  private async drain(onDecided?: () => void): Promise<void> {
+  async drain(onDecided?: () => void): Promise<void> {
     try {
       if (this.activeTask) return;
       let next = await this.room.peekQueue();

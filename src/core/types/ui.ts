@@ -1,7 +1,7 @@
 import type { BackgroundTask } from "./harness.js";
 import type { EventDetails, LiveTurn, MessageAttachment, ModelFallback, RoomEvent, SkillInvocation } from "./events.js";
 import type { AgentDef } from "./agents.js";
-import type { ContextGatePending, RoomBookmark, RoomState } from "./rooms.js";
+import type { ContextGatePending, RoomState } from "./rooms.js";
 import type { SanitizeStatus } from "./sanitize.js";
 import type { FieldHintOption } from "./settings.js";
 import type { UsageLimits } from "./usage.js";
@@ -141,8 +141,6 @@ export interface RoomSummary {
   favorite?: boolean;
   /** Project label for sidebar grouping. */
   project?: string;
-  /** User-named checkpoints. */
-  bookmarks?: RoomBookmark[];
   /** Original created_at of an imported chat (see RoomState.imported). */
   imported?: string;
   /** Incognito room (see RoomState.incognito) — the tab/list marks it so an
@@ -150,8 +148,8 @@ export interface RoomSummary {
   incognito?: boolean;
   /** GaiaVoice session room. */
   voiceSession?: boolean;
-  /** Effective /berserk mode. */
-  berserk?: boolean;
+  /** Data-only semantic room chrome contributed by plugins. */
+  pluginChromeTokens?: string[];
   /** Effective /love mode. */
   love?: boolean;
   /** Room-local /teleport flag. */
@@ -239,9 +237,10 @@ export interface SnapshotPluginPanelField {
  * while the plugin's own state says it's open. */
 export interface SnapshotPluginPanel {
   title: string;
+  placement?: "dialog" | "room";
   description?: string;
   forms?: Array<{ action: string; label: string; fields: SnapshotPluginPanelField[] }>;
-  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean }> }>;
+  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean; jumpToEvent?: string }> }>;
 }
 
 export interface Snapshot {
@@ -262,8 +261,8 @@ export interface Snapshot {
     eventTotal: number;
     /** Stable short reference code for voice/typing room lookup. */
     refCode?: string;
-    /** Effective /berserk mode. */
-    berserk?: boolean;
+    /** Data-only semantic room chrome contributed by plugins. */
+    pluginChromeTokens?: string[];
     /** Effective /love mode. */
     love?: boolean;
     /** Room-local /teleport flag. */

@@ -8,7 +8,7 @@
 
 import { DEFAULTS } from "../core/config.js";
 import { canonicalHarnessId } from "../core/harness-id.js";
-import type { AgentDef, AgentEvent, BackgroundTaskInfo, CompactProgressUpdate, CompactResult, MessageAttachment, RoomBookmark, RoomEvent, UsageProbeResult, Workspace } from "../core/types.js";
+import type { AgentDef, AgentEvent, BackgroundTaskInfo, CompactProgressUpdate, CompactResult, MessageAttachment, RoomEvent, UsageProbeResult, Workspace } from "../core/types.js";
 import { listAccounts, type AccountRecord } from "../domain/accounts.js";
 import type { MemoryStore } from "../domain/memory.js";
 import type { MemorySearchHit } from "../domain/workspace-index.js";
@@ -40,15 +40,11 @@ export interface AgentInput {
   /** Room-wide GAIA-THINK protocol level (0-10) from RoomState.thinkingLevel;
    * rides into the `# Protocols` section of the system prompt. Unset = 0. */
   protocolThinkingLevel?: number;
-  /** /berserk tree mode is active for this room. */
-  berserk?: boolean;
   /** /love tree mode is active for this room. */
   love?: boolean;
   /** Auto-retrieved memory block for this turn ("" / absent = nothing cleared
    * the relevance gate). Turn-level overlay, never part of the session. */
   recall?: string;
-  /** User-named checkpoints from RoomState.bookmarks. */
-  checkpoints?: RoomBookmark[];
   /** Voice-control concierge overlay: room index for this turn only. */
   voiceRoomMap?: string;
   /** Room-local context supplied by installed command plugins. Resolved once in

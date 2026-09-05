@@ -1,6 +1,6 @@
 // The right-hand room panel: agents (role select, main-agent star, voice call
 // button) and recent tasks.
-import { accountsCatalog, cancelActiveTask, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, runPluginAction, sendMessage, setQueuedPaused, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setRoomAgentDialogue } from "./actions.js";
+import { accountsCatalog, cancelActiveTask, deleteAgent, deleteNote, deleteQueuedMessage, runPluginAction, sendMessage, setQueuedPaused, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setRoomAgentDialogue } from "./actions.js";
 import { agentGlyph, STATE, UI } from "./glyphs.js";
 import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
 import { $, h } from "./dom.js";
@@ -76,6 +76,18 @@ function AgentRosterMark(agent) {
   return h("i", { text: agentGlyph(agent.id), "aria-hidden": "true" });
 }
 
+/** @param {import("./types.js").Snapshot|null|undefined} snapshot */
+function RoomPluginSections(snapshot) {
+  if (!snapshot) return [];
+  return Object.entries(snapshot.room.pluginPanels ?? {}).filter(([, pluginPanel]) => pluginPanel.placement === "room").flatMap(([plugin, pluginPanel]) => [
+    h("h3", { text: pluginPanel.title }),
+    h("div", { class: "checkpoint-list" }, (pluginPanel.items ?? []).map((item) => h("div", { class: "checkpoint-row" },
+      h("span", { class: "checkpoint-name", title: item.detail ?? "", text: item.title }),
+      ...(item.actions ?? []).map((action) => h("button", { type: "button", class: action.danger ? "checkpoint-remove" : "checkpoint-name", title: action.label, text: action.label, onclick: () => action.jumpToEvent ? void jumpToEvent(action.jumpToEvent) : void runPluginAction(plugin, [action.action, ...(action.args ?? [])]) })),
+    ))),
+  ]);
+}
+
 function renderPanel() {
   const panel = $("#room-panel");
   if (!panel) return;
@@ -88,9 +100,6 @@ function renderPanel() {
   // or the workspace default when it has none yet. Marks the "active" row and
   // is who a bare next message goes to.
   const activeAgent = snapshot ? (snapshot.room.activeAgent ?? snapshot.workspace.defaultAgent) : undefined;
-  const currentRoom = snapshot?.rooms.find((room) => room.isCurrent);
-  const bookmarks = currentRoom?.bookmarks ?? [];
-  const roomId = snapshot?.room.id ?? "";
   const agentMenu = AgentContextMenu();
   const swarmSection = SwarmSection(snapshot);
   panel.replaceChildren(
@@ -118,29 +127,7 @@ function renderPanel() {
           )
         : null,
     ),
-    ...(bookmarks.length
-      ? [
-          h("h3", { text: "checkpoints" }),
-          h("div", { class: "checkpoint-list" }, bookmarks.map((bookmark) =>
-            h("div", { class: "checkpoint-row" },
-              h("button", {
-                type: "button",
-                class: "checkpoint-name",
-                title: `@${bookmark.author} · ${bookmark.excerpt}`,
-                text: bookmark.name,
-                onclick: () => void jumpToEvent(bookmark.eventId),
-              }),
-              h("button", {
-                type: "button",
-                class: "checkpoint-remove",
-                title: "remove checkpoint",
-                text: "✕",
-                onclick: () => void deleteRoomBookmark(roomId, bookmark.id),
-              }),
-            ),
-          )),
-        ]
-      : []),
+    ...RoomPluginSections(snapshot),
     h("h3", { text: "agents" }),
     h(
       "div",

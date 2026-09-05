@@ -151,7 +151,7 @@ export interface RoomGoal {
   stoppedReason?: string;
 }
 
-/** A user-named checkpoint pinned to one transcript event. */
+/** Legacy checkpoint shape retained only for rollback-safe plugin seeding. */
 export interface RoomBookmark {
   id: string;
   eventId: string;
@@ -196,7 +196,7 @@ export interface RoomState {
    * a single room value driving the `# Protocols` section's thinking line for
    * ALL agents. Absent/0 = thought blocks disabled. */
   thinkingLevel?: number;
-  /** /berserk tree mode. */
+  /** Legacy /berserk rollback seed; active ownership lives in pluginState. */
   berserk?: true;
   /** /love tree mode. */
   love?: true;
@@ -259,7 +259,7 @@ export interface RoomState {
   favorite?: boolean;
   /** User/agent project label for sidebar grouping. */
   project?: string;
-  /** User-named checkpoints anchored to transcript events. */
+  /** Legacy checkpoint shelf; bookmarks plugin seeds it without mutation. */
   bookmarks?: RoomBookmark[];
   /** Set on rooms created by a history import (scripts/import-claude-export):
    * the original conversation's created_at. The sidebar groups these into a

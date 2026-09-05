@@ -41,9 +41,11 @@ export interface PluginPanelField {
  * flag of its own, so an always-returned panel would never go away. */
 export interface PluginPanel {
   title: string;
+  /** Dialog by default; room panels render in host-owned room chrome. */
+  placement?: "dialog" | "room";
   description?: string;
   forms?: Array<{ action: string; label: string; fields: PluginPanelField[] }>;
-  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean }> }>;
+  items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean; jumpToEvent?: string }> }>;
 }
 
 export interface PluginQueueEntry {
@@ -65,6 +67,8 @@ export interface PluginContext {
   roomId: string;
   workspaceRoot: string;
   state?: Record<string, unknown>;
+  /** Room whose plugin bucket supplied `state` (root for inherited modes). */
+  stateRoomId?: string;
   agents: PluginAgent[];
   queue?: PluginQueueFacade;
   /** The specific command name that triggered this `run()` call, when the
@@ -93,6 +97,35 @@ export interface PluginRenderCap {
   note?: string;
 }
 
+export interface PluginRoomMode {
+  /** Plugin-owned state property whose literal `true` means active. */
+  key: string;
+  /** Resolve state at the cycle-safe root of the room ancestry. */
+  inheritance: "root-tree";
+  /** Data-only theme token; client chrome resolves it without plugin CSS/JS. */
+  chromeToken: string;
+}
+
+export interface PluginEventMetadata {
+  id: string;
+  timestamp: string;
+  author: string;
+  /** Bounded display excerpt; transcript details/attachments are never exposed. */
+  text: string;
+}
+
+export interface PluginEventActionDescriptor {
+  action: string;
+  icon: string;
+  label: string;
+  prompt?: { label: string; placeholder?: string; value?: string };
+}
+
+export interface PluginEventActionContribution {
+  actions(ctx: PluginContext, event: PluginEventMetadata): readonly PluginEventActionDescriptor[] | Promise<readonly PluginEventActionDescriptor[]>;
+  run(action: string, args: string[], ctx: PluginContext, event: PluginEventMetadata): PluginResult | Promise<PluginResult>;
+}
+
 export interface PluginResult {
   steer?: string;
   reply?: string;
@@ -109,7 +142,7 @@ export interface PluginResult {
    * the room's agent generate the actual reply as a REAL turn, never a
    * synthesized string speaking for it. `targets` pins who the turn
    * addresses (defaults to the room's default target when omitted). */
-  rewriteAsMessage?: boolean;
+  rewriteAsMessage?: boolean | string;
   targets?: string[];
 }
 
@@ -147,6 +180,11 @@ export interface CommandPlugin {
    * (see pluginStateKey). Defaults to the first `command` name. */
   id?: string;
   description?: string;
+  /** Optional root-inherited room mode. Core resolves/read-writes the root
+   * plugin bucket and projects the semantic chrome token while `key` is true. */
+  roomMode?: PluginRoomMode;
+  /** Declarative message controls + plugin-bucket-only action mutation. */
+  eventActions?: PluginEventActionContribution;
   run(args: string[], ctx: PluginContext): PluginResult | Promise<PluginResult>;
   /** Optional room-local declarative panel, projected through snapshots. */
   panel?(ctx: PluginContext): PluginPanel | Promise<PluginPanel | undefined>;

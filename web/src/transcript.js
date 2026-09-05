@@ -7,7 +7,7 @@
 // rebuilding the whole transcript. v1's author+text merge heuristic is gone:
 // when the final room-event commits under the same id, the stream entry is
 // dropped and the keyed node swaps to the committed version in place.
-import { deleteQueuedMessage, retryMessage, setRoomBookmark } from "./actions.js";
+import { deleteQueuedMessage, retryMessage, runPluginEventAction } from "./actions.js";
 import { agentGlyph, KIND, STATE, UI } from "./glyphs.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
@@ -62,6 +62,7 @@ export { splitLeadingGaiaThink } from "../shared/gaia-think.js";
  * @property {string} [queuedTaskId] The durable queue task id behind a `queued`
  * @property {boolean} [queuedPaused] Whether this queued message is paused
  *   ghost — the ✕ delete action removes exactly this entry from the queue.
+ * @property {import("../../src/core/types.js").RoomEventPluginAction[]} [pluginActions]
  * @property {Map<string, MessageView>} [steers] Mid-turn steers this reply's
  *   blocks reference, resolved by messageViews (keyed by the steer's event id)
  *   for OrderedBlocks to render inline — their standalone bubbles are
@@ -101,6 +102,7 @@ function viewOfEvent(event) {
     details: agentEvent?.details,
     attachments: isUser ? /** @type {UserRoomEvent} */ (event).attachments : undefined,
     redacted: event.redacted,
+    pluginActions: event.pluginActions,
     streaming: false,
   };
 }
@@ -692,7 +694,6 @@ function Message(view) {
   // rewinds the room there (this failure row + the stale user message move to
   // rewound.jsonl), and re-runs the same text once — never a growing pile.
   const canResendFailedTurn = view.kind === "turn-failed" && !view.streaming && !view.queued;
-  const bookmark = (state.snapshot?.rooms.find((room) => room.isCurrent)?.bookmarks ?? []).find((candidate) => candidate.eventId === view.id);
   // The action row lives at the FOOT of the message (Claude-style), not the meta
   // header — on a long reply the buttons should sit where the reader ends up, not
   // scrolled far above. Built here, appended after the body below.
@@ -725,21 +726,18 @@ function Message(view) {
         })
       : null,
     isAgent && !view.streaming ? ReadAloudButton(view.id) : null,
-    !view.streaming && !view.queued && view.author !== "system"
-      ? h("button", {
-          type: "button",
-          class: `msg-action bookmark${bookmark ? " active" : ""}`,
-          title: bookmark ? `checkpoint: "${bookmark.name}" — click to rename` : "save as named checkpoint",
-          text: "🔖",
-          onclick: async () => {
-            const name = await promptText(bookmark ? "Rename checkpoint" : "Name this checkpoint", {
-              value: bookmark?.name ?? "",
-              placeholder: "e.g. final spec locked",
-            });
-            if (name !== null && state.snapshot) void setRoomBookmark(state.snapshot.room.id, view.id, name);
-          },
-        })
-      : null,
+    ...(view.pluginActions ?? []).map((pluginAction) => h("button", {
+      type: "button", class: "msg-action", title: pluginAction.label, text: pluginAction.icon,
+      onclick: async () => {
+        /** @type {string[]} */
+        let args = [];
+        if (pluginAction.prompt) {
+          const value = await promptText(pluginAction.prompt.label, { value: pluginAction.prompt.value ?? "", placeholder: pluginAction.prompt.placeholder ?? "" });
+          if (value === null) return; args = [value];
+        }
+        void runPluginEventAction(pluginAction.plugin, view.id, pluginAction.action, args);
+      },
+    })),
     // A queued ghost can't be forked, but it CAN be dropped from the queue
     // before it runs — ✕ removes exactly this entry (harness-agnostic).
     view.queued && view.queuedTaskId

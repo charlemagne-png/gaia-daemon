@@ -54,6 +54,14 @@ async function roomRole(ctx: RouteContext): Promise<boolean> {
   await respond(ctx.response, () => ctx.daemon.setAgentRole(params[0], params[1], agentId.trim(), role.trim()));
   return true;
 }
+async function roomPluginEventAction(ctx: RouteContext): Promise<boolean> {
+  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/plugins\/([A-Za-z0-9_-]+)\/events\/([^/]+)\/([a-z][a-z0-9-]{0,31})$/);
+  if (ctx.request.method !== "POST" || !params) return false;
+  const body = await parseBody(ctx.request);
+  const args = Array.isArray((body as { args?: unknown }).args) ? (body as { args: unknown[] }).args.filter((arg): arg is string => typeof arg === "string").slice(0, 16) : [];
+  await respond(ctx.response, () => ctx.daemon.runPluginEventAction(params[0], params[1], params[2], params[3], params[4], args));
+  return true;
+}
 async function roomPlugin(ctx: RouteContext): Promise<boolean> {
   const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/plugins\/([A-Za-z0-9_-]+)$/);
   if (ctx.request.method !== "POST" || !params) return false;
@@ -93,22 +101,6 @@ async function roomProject(ctx: RouteContext): Promise<boolean> {
   if (ctx.request.method !== "POST" || !params) return false;
   const project = stringField(await parseBody(ctx.request), "project") ?? "";
   await respond(ctx.response, () => ctx.daemon.setRoomProject(params[0], params[1], project));
-  return true;
-}
-async function roomBookmarks(ctx: RouteContext): Promise<boolean> {
-  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/bookmarks$/);
-  if (ctx.request.method !== "POST" || !params) return false;
-  const body = await parseBody(ctx.request);
-  const eventId = stringField(body, "eventId")?.trim();
-  const name = stringField(body, "name")?.trim();
-  if (!eventId || !name) { json(ctx.response, 400, { error: "Missing eventId or name" }); return true; }
-  await respond(ctx.response, () => ctx.daemon.setRoomBookmark(params[0], params[1], eventId, name));
-  return true;
-}
-async function roomBookmarkDelete(ctx: RouteContext): Promise<boolean> {
-  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/bookmarks\/([^/]+)$/);
-  if (ctx.request.method !== "DELETE" || !params) return false;
-  await respond(ctx.response, () => ctx.daemon.deleteRoomBookmark(params[0], params[1], params[2]));
   return true;
 }
 // Room-level human membership (RoomState.humans). Absent/empty = today's
@@ -444,13 +436,12 @@ const roomHandlers = [
   createNamedRoom,
   selectNamedRoom,
   roomRole,
+  roomPluginEventAction,
   roomPlugin,
   roomAgentDialogue,
   roomTitle,
   roomFavorite,
   roomProject,
-  roomBookmarks,
-  roomBookmarkDelete,
   roomHumansGet,
   roomHumansPost,
   roomHumansDelete,

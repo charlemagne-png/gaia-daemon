@@ -11,6 +11,7 @@ import type {
   PendingTurn,
   PetProgressStatus,
   RoomGoal,
+  RoomEvent,
   RoomEventKind,
   SanitizeProposal,
   SanitizeStatus,
@@ -55,6 +56,9 @@ export interface RoomTurnLoopPort {
   emitPetProgress(task: Task, agentId: string, status: PetProgressStatus, toolName?: string): void;
   pluginTurnStart(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<void>;
   pluginPrompt(state: Awaited<ReturnType<RoomHandle["state"]>>, agentId: string): Promise<string | undefined>;
+  pluginChromeTokens(state?: Awaited<ReturnType<RoomHandle["state"]>>, roomId?: string): Promise<string[] | undefined>;
+  pluginEventActions(events: RoomEvent[], state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<RoomEvent[]>;
+  runPluginEventAction(pluginKey: string, eventId: string, action: string, args: string[]): Promise<string>;
   pluginRenderCap(state: Awaited<ReturnType<RoomHandle["state"]>>): Promise<RenderCap | undefined>;
   pluginTurnSettled(status: "complete" | "cancelled" | "error", targets: readonly string[]): Promise<void>;
   pluginRoomMetadataPolicy(text: string): Promise<void>;
@@ -108,7 +112,8 @@ export interface RoomCommandsFacadePort {
   emit(event: UiEvent): void;
   emitSnapshot(): Promise<void>;
   distinctPlugins(): Promise<CommandPlugin[]>;
-  pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>, command?: string): PluginContext;
+  pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>, command?: string, stateRoomId?: string): PluginContext;
+  pluginScope(plugin: CommandPlugin, state?: Awaited<ReturnType<RoomHandle["state"]>>, roomId?: string): Promise<{ room: RoomHandle; state: Awaited<ReturnType<RoomHandle["state"]>> }>;
   pluginQueueFacade(owner: string): NonNullable<PluginContext["queue"]>;
   sendMessage(text: string, options?: SendMessageOptions): Promise<Task>;
   drain(onDecided?: () => void): Promise<void>;
@@ -126,15 +131,12 @@ export interface RoomCommandsFacadePort {
   sanitizePreview(): Promise<SanitizeProposal>;
   sanitizeApply(edits: { eventId: string; quote: string; replacement: string }[]): Promise<{ applied: number; skipped: number }>;
   runGaiagoCommand(text?: string): Promise<string>;
-  runBerserkCommand(off?: boolean): Promise<string>;
   runLoveCommand(off?: boolean): Promise<string>;
   runLoveSanitizeCommand(): Promise<string>;
   runLoveSanitizeAutoCommand(): Promise<string>;
   runLoveSanitizeRebirthCommand(): Promise<string>;
   runLoveSanitizeAllCommand(): Promise<string>;
   runTeleportCommand(on?: boolean): Promise<string>;
-  setBookmark(eventId: string, name: string): Promise<import("../../core/types.js").RoomBookmark>;
-  removeBookmark(bookmarkId: string): Promise<void>;
 }
 
 /** Dependencies reached by sanitize review, proposal persistence, and apply. */
