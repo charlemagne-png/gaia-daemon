@@ -102,6 +102,9 @@ function fetchTimeout(ms) {
  * @property {number} calibrationFrames
  * @property {number} lastSpeechAtMs
  * @property {boolean} sawSpeech
+ * @property {string} targetId
+ * @property {(value: string) => void} renderText
+ * @property {() => void} markTarget
  */
 
 /** @type {DictationSession|null} */
@@ -125,10 +128,72 @@ export async function toggleDictation() {
     await stopAndTranscribe();
     return;
   }
-  await startDictation();
+  await startDictation(composerDictationTarget());
 }
 
-async function startDictation() {
+/**
+ * Generic textarea dictation bridge: plugin fields reuse the same recorder,
+ * chunk-upload, live STT, final STT and queue path as composer dictation;
+ * only the render target differs.
+ * @param {string} targetId
+ * @param {HTMLTextAreaElement} textarea
+ */
+export async function toggleTextareaDictation(targetId, textarea) {
+  if (session) {
+    if (session.targetId === targetId) await stopAndTranscribe();
+    else setError(new Error("Finish the current dictation first."));
+    return;
+  }
+  const selectionStart = textarea.selectionStart ?? textarea.value.length;
+  const selectionEnd = textarea.selectionEnd ?? selectionStart;
+  const before = textarea.value.slice(0, selectionStart).replace(/\s+$/, "");
+  const after = textarea.value.slice(selectionEnd);
+  await startDictation({
+    targetId,
+    prefix: before,
+    renderText: (value) => {
+      const target = currentTextareaTarget(targetId, textarea);
+      const joined = after ? `${value}${value && !/^\s/.test(after) ? " " : ""}${after}` : value;
+      target.value = joined;
+      const caret = value.length;
+      target.focus();
+      target.setSelectionRange(caret, caret);
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    markTarget: () => markDirty("plugins"),
+  });
+}
+
+/** @param {string} targetId @param {HTMLTextAreaElement} fallback @returns {HTMLTextAreaElement} */
+function currentTextareaTarget(targetId, fallback) {
+  for (const textarea of document.querySelectorAll("textarea[data-dictation-target]")) {
+    if (textarea instanceof HTMLTextAreaElement && textarea.dataset.dictationTarget === targetId) return textarea;
+  }
+  return fallback;
+}
+
+/** @param {string} targetId @returns {boolean} */
+export function isTextareaDictating(targetId) {
+  return Boolean(session && session.targetId === targetId && state.dictating);
+}
+
+/** @returns {string} */
+export function activeDictationTargetId() {
+  return session?.targetId ?? "";
+}
+
+/** @returns {{targetId:string,prefix:string,renderText:(value:string)=>void,markTarget:()=>void}} */
+function composerDictationTarget() {
+  return {
+    targetId: "composer",
+    prefix: state.composerText.replace(/\s+$/, ""),
+    renderText: renderComposerText,
+    markTarget: () => markDirty("composer"),
+  };
+}
+
+/** @param {{targetId:string,prefix:string,renderText:(value:string)=>void,markTarget:()=>void}} target */
+async function startDictation(target) {
   // A live call already transcribes speech into the composer; a second mic
   // stream would just fight it.
   if (state.voice) {
@@ -172,7 +237,7 @@ async function startDictation() {
     startedAtMs: Date.now(),
     timerId: 0,
     lastMeterMs: 0,
-    prefix: state.composerText.replace(/\s+$/, ""),
+    prefix: target.prefix,
     pendingTail: "",
     liveTail: "",
     commitChain: Promise.resolve(),
@@ -182,6 +247,9 @@ async function startDictation() {
     calibrationFrames: 0,
     lastSpeechAtMs: 0,
     sawSpeech: false,
+    targetId: target.targetId,
+    renderText: target.renderText,
+    markTarget: target.markTarget,
   };
   try {
     current.seg = newSegment(current);
@@ -200,6 +268,7 @@ async function startDictation() {
   current.timerId = window.setTimeout(() => void stopAndTranscribe(), MAX_RECORD_MS);
   void liveLoop(current);
   markDirty("composer");
+  current.markTarget();
 }
 
 /** @param {number} ms @returns {Promise<void>} */
@@ -402,6 +471,7 @@ async function stopAndTranscribe() {
   session = null;
   state.dictating = false;
   markDirty("composer");
+  current.markTarget();
 
   stopMeter(current);
   if (current.timerId) clearTimeout(current.timerId);
@@ -419,7 +489,7 @@ async function stopAndTranscribe() {
   if (!clip || !clip.size) {
     if (current.committedAny) {
       // Everything spoken already landed sentence by sentence.
-      renderComposerText(current.prefix);
+      current.renderText(current.prefix);
       state.dictationBusy = false;
       markDirty("composer");
       return true;
@@ -441,7 +511,7 @@ async function stopAndTranscribe() {
   ]);
   // Final pass replaces only the CURRENT sentence — the canonical prefix
   // (earlier committed sentences) stands untouched.
-  const render = (/** @type {string} */ text) => renderComposerText(joinText(current.prefix, text));
+  const render = (/** @type {string} */ text) => current.renderText(joinText(current.prefix, text));
   const ok = await transcribe(clip, seg.clipId, clipFileComplete, render);
   if (!ok && (seg.liveRendered || current.committedAny)) {
     // The composer already holds canonical text + the last live tail —
@@ -835,7 +905,7 @@ function joinText(a, b) {
 function renderLive(current) {
   const line = joinText(joinText(current.prefix, current.pendingTail), current.liveTail);
   if (!line) return;
-  renderComposerText(line);
+  current.renderText(line);
 }
 
 /** @param {string} value */

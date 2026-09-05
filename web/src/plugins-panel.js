@@ -2,6 +2,7 @@
 // transient overlay popup; placement:"corner" uses the same declarative
 // forms/items data in a minimizable corner dock. No iframe/embed surface.
 import { runPluginAction } from "./actions.js";
+import { activeDictationTargetId, isTextareaDictating, toggleTextareaDictation } from "./dictation.js";
 import { $, h } from "./dom.js";
 import { registerRegion } from "./render.js";
 import { state } from "./state.js";
@@ -33,10 +34,14 @@ export function pluginPanelCorner(panel) {
 }
 
 /**
+ * @param {string} command
+ * @param {string} action
  * @param {PluginPanelField} field
  * @param {Record<string, HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement>} refs
+ * @param {boolean} corner
  */
-function Field(field, refs) {
+function Field(command, action, field, refs, corner) {
+  const targetId = `plugin:${command}:${action}:${field.name}`;
   const control = field.type === "select"
     ? h(
         "select",
@@ -44,14 +49,29 @@ function Field(field, refs) {
         (field.options ?? []).map((opt) => h("option", { value: opt.value, text: opt.label, selected: opt.value === field.value })),
       )
     : field.type === "textarea"
-      ? h("textarea", { class: "prompt-input plugin-textarea", rows: "4", ...(field.value ? { value: field.value } : {}) })
+      ? h("textarea", { class: "prompt-input plugin-textarea", rows: "4", ...(corner ? { "data-dictation-target": targetId } : {}), ...(field.value ? { value: field.value } : {}) })
       : h("input", { type: "text", class: "prompt-input", ...(field.value ? { value: field.value } : {}) });
   refs[field.name] = /** @type {HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement} */ (control);
-  return h("label", { class: "plugin-field" }, h("span", { class: "plugin-field-label", text: field.label }), control);
+  const fieldControl = corner && field.type === "textarea" && control instanceof HTMLTextAreaElement
+    ? h(
+        "div",
+        { class: "plugin-textarea-shell" },
+        control,
+        h("button", {
+          class: `plugin-textarea-dictate${isTextareaDictating(targetId) ? " listening" : ""}`,
+          type: "button",
+          title: isTextareaDictating(targetId) ? "Stop transcribing" : "Transcribe",
+          "aria-label": isTextareaDictating(targetId) ? "Stop transcribing" : "Transcribe",
+          "aria-pressed": isTextareaDictating(targetId) ? "true" : "false",
+          onclick: () => void toggleTextareaDictation(targetId, control),
+        }, "🎙"),
+      )
+    : control;
+  return h("label", { class: "plugin-field" }, h("span", { class: "plugin-field-label", text: field.label }), fieldControl);
 }
 
-/** @param {string} command @param {{action:string,label:string,fields:PluginPanelField[]}} form */
-function Form(command, form) {
+/** @param {string} command @param {{action:string,label:string,fields:PluginPanelField[]}} form @param {boolean} [corner] */
+function Form(command, form, corner = false) {
   /** @type {Record<string, HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement>} */
   const refs = {};
   const run = () => submit(command, [form.action, ...form.fields.map((field) => refs[field.name]?.value ?? "")]);
@@ -59,7 +79,7 @@ function Form(command, form) {
     "form",
     { class: "plugin-form", onsubmit: (/** @type {SubmitEvent} */ event) => { event.preventDefault(); run(); } },
     h("div", { class: "plugin-form-label", text: form.label }),
-    form.fields.map((field) => Field(field, refs)),
+    form.fields.map((field) => Field(command, form.action, field, refs, corner)),
     h("button", { class: "prompt-btn primary", type: "submit", text: form.label }),
   );
 }
@@ -101,7 +121,7 @@ function PluginModal(command, panel) {
       { class: "modal prompt-modal plugin-dialog" },
       h("div", { class: "panel-head" }, h("h2", { text: panel.title })),
       panel.description ? h("p", { class: "prompt-detail", text: panel.description }) : null,
-      (panel.forms ?? []).map((form) => Form(command, form)),
+      (panel.forms ?? []).map((form) => Form(command, form, false)),
       (panel.items ?? []).map((item) => Item(command, item)),
       h("div", { class: "prompt-actions" }, h("button", { class: "prompt-btn", onclick: close, text: "Close" })),
     ),
@@ -162,7 +182,7 @@ function CornerPanel(command, panel) {
     h(
       "div",
       { class: "plugin-corner-body" },
-      (panel.forms ?? []).map((form) => Form(command, form)),
+      (panel.forms ?? []).map((form) => Form(command, form, true)),
       (panel.items ?? []).map((item) => Item(command, item)),
     ),
   );
@@ -185,18 +205,25 @@ function onEscape(event) {
   submit(command, ["close"]);
 }
 
+/** @param {PluginPanel} panel */
+function panelHasContent(panel) {
+  return (panel.forms?.length ?? 0) > 0 || (panel.items?.length ?? 0) > 0;
+}
+
 /** @returns {PanelEntry[]} */
 function openPanels() {
-  return /** @type {PanelEntry[]} */ (Object.entries(state.snapshot?.room.pluginPanels ?? {})).filter(([, panel]) => (panel.forms?.length ?? 0) > 0 || (panel.items?.length ?? 0) > 0);
+  return /** @type {PanelEntry[]} */ (Object.entries(state.snapshot?.room.pluginPanels ?? {})).filter(
+    ([, panel]) => pluginPanelPlacement(panel) === "corner" || panelHasContent(panel),
+  );
 }
 
 /** @param {string} command */
 function cornerExpanded(command) {
   try {
     const value = localStorage.getItem(cornerStorageKey(command));
-    return value === null ? true : value === "true";
+    return value === null ? false : value === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -228,11 +255,23 @@ function cornerStackIndexes(panels) {
 }
 
 let escBound = false;
+let renderedSignature = "";
+
+/** @param {PanelEntry[]} panels */
+function pluginPanelsSignature(panels) {
+  return JSON.stringify({
+    panels: panels.map(([command, panel]) => [command, panel, pluginPanelPlacement(panel) === "corner" ? cornerExpanded(command) : null]),
+    dictation: activeDictationTargetId(),
+  });
+}
 
 function renderPluginPanels() {
   const slot = $("#overlay-plugins");
   if (!slot) return;
   const panels = openPanels();
+  const signature = pluginPanelsSignature(panels);
+  if (signature === renderedSignature) return;
+  renderedSignature = signature;
   if (panels.length === 0) {
     slot.replaceChildren();
     if (escBound) { window.removeEventListener("keydown", onEscape, true); escBound = false; }

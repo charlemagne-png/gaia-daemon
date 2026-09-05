@@ -1449,6 +1449,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 .plugin-item-actions { display: flex; gap: calc(var(--sp-1) * 1.5); flex-wrap: wrap; margin-top: calc(var(--sp-1) * 1.5); }
 .plugin-dialog .prompt-input { margin: calc(var(--sp-1) * 0.5) 0; }
 .plugin-textarea { flex: 0 0 auto; height: calc(var(--sp-6) * 3); min-height: calc(var(--sp-6) * 2); line-height: var(--lh-base); resize: vertical; overflow: auto; }
+.plugin-textarea-shell { position: relative; display: grid; }
+.plugin-textarea-shell .plugin-textarea { padding-right: calc(var(--sp-6) + var(--sp-2)); }
+.plugin-textarea-dictate { position: absolute; right: var(--sp-2); bottom: var(--sp-2); width: var(--sp-6); height: var(--sp-6); padding: 0; display: grid; place-items: center; border-radius: var(--r-full); color: var(--accent); background: color-mix(in srgb, var(--surface-2) 86%, transparent); }
+.plugin-textarea-dictate.listening { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 60%, transparent); animation: plugin-dictation-pulse 1.2s ease-in-out infinite; }
 .plugin-corner { position: fixed; z-index: 19; display: grid; width: max-content; max-width: calc(100vw - var(--plugin-corner-gap) - var(--plugin-corner-gap)); max-height: calc(100vh - var(--plugin-corner-gap) - var(--plugin-corner-gap)); pointer-events: none; --plugin-corner-gap: calc(var(--sp-4) + var(--plugin-corner-offset, 0px)); }
 .plugin-corner > * { pointer-events: auto; }
 .plugin-corner--br { right: var(--plugin-corner-gap); bottom: var(--plugin-corner-gap); }
@@ -1471,7 +1475,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .plugin-corner .plugin-item strong, .plugin-corner .prompt-detail { white-space: pre-wrap; overflow-wrap: anywhere; }
 .plugin-corner .prompt-actions { margin-top: auto; }
 @keyframes plugin-corner-in { from { opacity: 0; transform: scale(0.96) translateY(var(--sp-2)); } to { opacity: 1; transform: scale(1) translateY(0); } }
-@media (prefers-reduced-motion: reduce) { .plugin-corner-panel { animation: none; } .plugin-corner-fab:hover { transform: none; } }
+@keyframes plugin-dictation-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent); } 50% { box-shadow: 0 0 0 4px transparent; } }
+@media (prefers-reduced-motion: reduce) { .plugin-corner-panel, .plugin-textarea-dictate.listening { animation: none; } .plugin-corner-fab:hover { transform: none; } }
 .panel-head { border-bottom: 1px solid var(--border); padding-bottom: var(--sp-2); margin-bottom: calc(var(--sp-1) * 2.5); }
 
 /* Keep the room-panel header path to a single line so the panel title stays
