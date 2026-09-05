@@ -57,6 +57,30 @@ export const STATE = {
 
 /** Chrome + control glyphs. v2 where v2 has one; same monochrome family
  * where the element exists only in v1 (attachments, incognito, calls). */
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** @returns {SVGSVGElement} */
+export function micIcon() {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.setAttribute("style", "vertical-align:-2px");
+  for (const d of ["M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z", "M5 10v1a7 7 0 0 0 14 0v-1", "M12 18v3", "M8 21h8"]) {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
+}
+
 export const UI = {
   brand: "◆",
   theme: "◈",

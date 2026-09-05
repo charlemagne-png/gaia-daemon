@@ -7,7 +7,7 @@
 // control (◌ #level: click toggles off, right-click menu), queueing while
 // busy, panic stop, and bare-key routing (typing anywhere lands here).
 import { editMessage, selectRoom, sendMessage, stopActiveRoom, stopAll, uploadAttachment } from "./actions.js";
-import { agentGlyph, KIND, UI } from "./glyphs.js";
+import { agentGlyph, KIND, micIcon, UI } from "./glyphs.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
 import { CompactBar, compactDetail } from "./compactprogress.js";
@@ -1189,22 +1189,25 @@ function VoiceButtons() {
   const voiceControlPhase = state.voiceControl.phase;
   const voiceControlOn = state.voiceControl.enabled;
   return [
-    h("button", {
-      type: "button",
-      class: `mic-button voice-button dictation${recording ? " recording" : ""}${busy ? " busy" : ""}`,
-      title: busy
-        ? "transcribing…"
-        : recording
-          ? "stop & transcribe (right-click or Esc to discard)"
-          : "voice input — click to dictate a message",
-      disabled: busy,
-      onclick: () => void toggleDictation(),
-      oncontextmenu: (event) => {
-        event.preventDefault();
-        if (recording) cancelDictation();
+    h(
+      "button",
+      {
+        type: "button",
+        class: `mic-button voice-button dictation${recording ? " recording" : ""}${busy ? " busy" : ""}`,
+        title: busy
+          ? "transcribing…"
+          : recording
+            ? "stop & transcribe (right-click or Esc to discard)"
+            : "voice input — click to dictate a message",
+        disabled: busy,
+        onclick: () => void toggleDictation(),
+        oncontextmenu: (event) => {
+          event.preventDefault();
+          if (recording) cancelDictation();
+        },
       },
-      text: busy ? "…" : recording ? UI.recording : UI.mic,
-    }),
+      busy ? "…" : recording ? UI.recording : micIcon(),
+    ),
     h("button", {
       type: "button",
       class: `voice-button voice-control${voiceControlOn ? " on" : ""} ${voiceControlPhase}`,
