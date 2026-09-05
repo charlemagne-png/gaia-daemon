@@ -53,6 +53,7 @@ export interface RouteContext {
   broadcast(event: import("../core/types.js").UiEvent): void;
   bootId: string;
   registerSse(workspaceId?: string, roomId?: string): void;
+  pluginHttpRoutes: Promise<readonly import("./routes/plugins.js").RegisteredPluginHttpRoute[]>;
 }
 export async function respond(response: ServerResponse, run: () => Promise<unknown>): Promise<void> {
   try {

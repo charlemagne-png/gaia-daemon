@@ -169,6 +169,26 @@ export interface RoomMetadataPolicyContext {
   llm?(input: ConsolidateLlmInput): Promise<string>;
 }
 
+export interface PluginHttpResult {
+  status?: number;
+  body?: unknown;
+  events?: readonly unknown[];
+}
+export interface PluginHttpRoomFacade {
+  listWorkspaces(): Promise<readonly { id: string; path: string; isInitialized: boolean }[]>;
+  sendMessage(workspaceId: string, roomId: string, text: string, options?: { recordUserMessage?: boolean }): Promise<unknown>;
+}
+export interface PluginHttpRouteContext {
+  url: URL;
+  body(): Promise<unknown>;
+  rooms: PluginHttpRoomFacade;
+}
+export interface PluginHttpRoute {
+  method: string;
+  path: string;
+  handle(ctx: PluginHttpRouteContext): PluginHttpResult | Promise<PluginHttpResult>;
+}
+
 export interface CommandPlugin {
   /** One command name, or several aliases/verbs this SAME plugin owns (e.g. a
    * persona-register plugin with a master toggle plus a handful of discipline
@@ -201,6 +221,8 @@ export interface CommandPlugin {
   /** Awaited after a durable turn outcome, before queued work is admitted. */
   turnSettled?(ctx: PluginTurnSettledContext): void | Promise<void>;
   roomMetadataPolicy?(ctx: RoomMetadataPolicyContext & { event: "post-user-commit"; text: string }): Record<string, unknown> | void | Promise<Record<string, unknown> | void>;
+  /** Exact API routes; host retains response serialization + SSE fan-out. */
+  httpRoutes?: readonly PluginHttpRoute[];
 }
 
 /** RoomState.pluginState / panel-prompt-renderCap-turnStart dedup key for a
@@ -263,8 +285,13 @@ export async function loadCommandPlugins(): Promise<Map<string, CommandPlugin>> 
           candidate?.command === undefined ||
           typeof candidate?.command === "string" ||
           (Array.isArray(candidate?.command) && candidate.command.length > 0 && candidate.command.every((c: unknown) => typeof c === "string" && c));
-        const hookOk = typeof candidate?.run === "function" || typeof candidate?.panel === "function" || typeof candidate?.prompt === "function" || typeof candidate?.renderCap === "function" || typeof candidate?.turnStart === "function" || typeof candidate?.turnSettled === "function" || typeof candidate?.roomMetadataPolicy === "function";
-        if (!candidate || !commandOk || !hookOk) {
+        const routesOk = candidate?.httpRoutes === undefined || (Array.isArray(candidate.httpRoutes) && candidate.httpRoutes.every((route: unknown) => {
+          if (!route || typeof route !== "object") return false;
+          const value = route as Record<string, unknown>;
+          return typeof value.method === "string" && typeof value.path === "string" && value.path.startsWith("/api/") && typeof value.handle === "function";
+        }));
+        const hookOk = typeof candidate?.run === "function" || typeof candidate?.panel === "function" || typeof candidate?.prompt === "function" || typeof candidate?.renderCap === "function" || typeof candidate?.turnStart === "function" || typeof candidate?.turnSettled === "function" || typeof candidate?.roomMetadataPolicy === "function" || (Array.isArray(candidate?.httpRoutes) && candidate.httpRoutes.length > 0);
+        if (!candidate || !commandOk || !routesOk || !hookOk) {
           console.warn(`[plugins] skipped ${file}: invalid plugin (needs a default export with a command hook or room hook)`);
           continue;
         }

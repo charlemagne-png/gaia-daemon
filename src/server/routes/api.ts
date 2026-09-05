@@ -21,6 +21,7 @@ import { handleMemory } from "./memory.js";
 import { handleArtifacts } from "./artifacts.js";
 import { handleUsage } from "./usage.js";
 import { handleEditRetry } from "./edit-retry.js";
+import { handlePluginHttpRoute } from "./plugins.js";
 import { numberField } from "./memory.js";
 import { summonCensusText } from "./usage.js";
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp", ".wasm": "application/wasm" };
@@ -52,6 +53,7 @@ export async function handleApi(ctx: RouteContext): Promise<void> {
   let params: string[] | null;
   if (await handleAgents(ctx)) return;
   if (await handleUsage(ctx)) return;
+  if (await handlePluginHttpRoute(ctx)) return;
     if (method === "GET" && path === "/api/app") {
       const owned = human?.workspace ? await daemon.addWorkspace(human.workspace, human.id) : undefined;
       json(response, 200, await daemon.appPayload(owned?.id, humanScope));

@@ -41,6 +41,7 @@ import { numberField } from "./routes/memory.js";
 import { summonCensusText } from "./routes/usage.js";
 import { artifactRoutePrefix } from "./routes/artifacts.js";
 import { handleApi } from "./routes/api.js";
+import { loadPluginHttpRoutes } from "./routes/plugins.js";
 export interface WebServerOptions {
   cwd: string;
   host?: string;
@@ -355,6 +356,7 @@ async function reloadNow(close: () => Promise<void>): Promise<void> {
 export class GaiaWebServer {
   private readonly daemon: Daemon;
   private readonly clients = new Set<SseClient>();
+  private readonly pluginHttpRoutes = loadPluginHttpRoutes();
   private boundUrl = "";
   private server: HttpServer | undefined;
   constructor(private readonly options: WebServerOptions) {
@@ -464,7 +466,7 @@ export class GaiaWebServer {
     if (url.pathname.startsWith("/api/")) {
       if (url.pathname === LLM_PROXY_MOUNT || url.pathname.startsWith(`${LLM_PROXY_MOUNT}/`)) return this.handleLlmProxy(request, response, url);
       const human = requestingHuman(request);
-      return handleApi({ request, response, url, daemon: this.daemon, human, humanScope: human?.workspace ? human.id : undefined, boundUrl: this.boundUrl, cwd: this.options.cwd, bootId, broadcast: (event) => this.broadcast(event), registerSse: (workspaceId, roomId) => this.registerSse(response, workspaceId, roomId, human?.id) });
+      return handleApi({ request, response, url, daemon: this.daemon, human, humanScope: human?.workspace ? human.id : undefined, boundUrl: this.boundUrl, cwd: this.options.cwd, bootId, broadcast: (event) => this.broadcast(event), registerSse: (workspaceId, roomId) => this.registerSse(response, workspaceId, roomId, human?.id), pluginHttpRoutes: this.pluginHttpRoutes });
     }
     if (url.pathname.startsWith("/v1/")) return this.handleOpenAi(request, response, url);
     await this.serveStatic(response, url.pathname);
