@@ -9,6 +9,7 @@ import { maybeAutoDario, syncDarioFromSnapshot } from "./dario.js";
 import { forwardNativePetProgress, syncNativePets } from "./pet.js";
 import { markDirty, setError } from "./render.js";
 import { state, syncReadMarks } from "./state.js";
+import { openTab } from "./tabs.js";
 import { isStallNotice, syncOlderFromSnapshot } from "./transcript.js";
 import { applyVoiceStatus, voiceTurnCommitted } from "./voice.js";
 import { canvas } from "./canvas.js";
@@ -152,7 +153,14 @@ export function connectEvents(resyncOnReady = false) {
   // also refresh the room list that drives the rooms tree + tab strip.
   listen("room-redirect", (event) => {
     const payload = /** @type {Ev<"room-redirect">} */ (JSON.parse(event.data));
-    void import("./actions.js").then(({ selectRoom }) => selectRoom(payload.workspaceId, payload.roomId));
+    // Workspace-scoped voice navigation is explicit transport; ordinary
+    // source-room redirects (home-agent handoff, rebirth, artifact lane return)
+    // must only stage the target as a background tab.
+    if (payload.scope === "workspace") {
+      void import("./actions.js").then(({ selectRoom }) => selectRoom(payload.workspaceId, payload.roomId));
+      return;
+    }
+    if (state.snapshot?.workspace.id === payload.workspaceId && openTab(payload.roomId, payload.workspaceId)) markDirty("tabs", "sidebar");
   });
 
   listen("rooms", (event) => {

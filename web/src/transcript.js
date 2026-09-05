@@ -19,6 +19,7 @@ import { promptText } from "./prompt.js";
 import { toggleReadAloud } from "./readaloud.js";
 import { markDirty, registerRegion, setError } from "./render.js";
 import { state } from "./state.js";
+import { openTab } from "./tabs.js";
 
 /** @typedef {import("./types.js").RoomEvent} RoomEvent */
 /** @typedef {import("./types.js").UserRoomEvent} UserRoomEvent */
@@ -581,20 +582,22 @@ registerRegion("transcript", renderTranscript);
 
 /** @param {MessageView} view @returns {HTMLElement} */
 function Message(view) {
-  // Fence detection is intentionally here, at the keyed message boundary: it
-  // sees both committed replies and their streaming updates without changing
-  // markdown rendering or event transport. detectArtifacts is idempotent.
-  if (view.author !== "user" && view.author !== "system") detectArtifacts(view.text, view.details);
-  if (view.kind === "compact-complete") return CompactBoundary(view);
   const isUser = view.author === "user";
   const isAgent = !isUser && view.author !== "system";
+  const summon = isAgent && !view.redacted ? summonView(view) : null;
+  if (summon && state.snapshot?.workspace.id && openTab(summon.childRoomId, state.snapshot.workspace.id)) markDirty("tabs", "sidebar");
+  // Fence detection is intentionally here, at the keyed message boundary: it
+  // sees both committed replies and their streaming updates without changing
+  // markdown rendering or event transport. Summon notes live in their own
+  // subroom tab, so their artifact fences must not pop a surface over this tab.
+  if (isAgent && !summon) detectArtifacts(view.text, view.details);
+  if (view.kind === "compact-complete") return CompactBoundary(view);
   const label = isUser ? `user -> ${view.targets.map((target) => `@${target}`).join(", ")}` : `@${view.author}`;
   const text = isUser ? stripLeadingRouteMentions(view.text, view.targets) : view.text;
   const details = view.details ?? {};
   // A summon worker's result lands as a collapsed, summon-labeled block (reusing
   // the thinking/tool expander) rather than a wall of agent prose — click to
   // reveal the full run. Redacted results fall back to the plain text path.
-  const summon = isAgent && !view.redacted ? summonView(view) : null;
   const showThinking = details.thinkingStarted || details.thinking;
   // Preferred layout: replay the turn's segments in the exact order they
   // streamed (text ↔ thinking ↔ tool), so a reply reads like it did live
