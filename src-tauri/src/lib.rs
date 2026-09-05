@@ -231,12 +231,22 @@ mod webkit {
             // Required so the web UI's HTML5 drag-and-drop (tab reorder + tear-off)
             // fires: with Tauri's OS drag-drop handler on, the webview swallows it.
             .disable_drag_drop_handler()
-            .resizable(true);
+            .resizable(true)
+            .focused(false);
         if let (Some(px), Some(py)) = (x, y) {
             builder = builder.position(px, py);
         }
-        let _window = builder.build().map_err(|e| e.to_string())?;
+        let window = builder.build().map_err(|e| e.to_string())?;
+        disable_window_restoration(&window);
         Ok(label)
+    }
+
+    fn close_secondary_windows(app: &tauri::AppHandle) {
+        for (label, window) in app.webview_windows() {
+            if label != "main" {
+                let _ = window.close();
+            }
+        }
     }
 
     fn close_disposable_windows(app: &tauri::AppHandle) {
@@ -365,7 +375,7 @@ mod webkit {
                 continue;
             }
             let url = pet_window_url(&binding)?;
-            WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
+            let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
                 .title(format!("GAIA Pet — @{}", binding.agent_id))
                 .inner_size(240.0, 190.0)
                 .position(
@@ -382,6 +392,7 @@ mod webkit {
                 .initialization_script(&crate::debug_server::init_script())
                 .build()
                 .map_err(|e| e.to_string())?;
+            disable_window_restoration(&window);
             live.insert(label, binding);
         }
         Ok(true)
@@ -636,9 +647,9 @@ mod webkit {
 
         builder
             .setup(|app| {
-                // External previews are per-gesture surfaces, never launch state.
-                // This also removes windows restored from an older shell build.
-                close_disposable_windows(app.handle());
+                // Only the main window survives launch. Remove every secondary
+                // window restored by this or an older shell build.
+                close_secondary_windows(app.handle());
 
                 let port = resolve_port();
                 let url = resolve_url();

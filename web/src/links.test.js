@@ -37,7 +37,7 @@ test("modified real anchors are captured only in the native shell", () => {
   expect(linksSource).toContain("    true,\n  );");
 });
 
-test("Rust command creates a disposable, non-focusing external WebviewWindow", () => {
+test("Rust secondary windows never focus or restore over main", () => {
   expect(shellSource).toContain("fn open_web_window(app: tauri::AppHandle, url: String)");
   expect(shellSource).toContain('format!("web-{}", WINDOW_SEQ.fetch_add(1, Ordering::Relaxed))');
   expect(shellSource).toContain("WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))");
@@ -45,5 +45,14 @@ test("Rust command creates a disposable, non-focusing external WebviewWindow", (
   expect(shellSource).toContain(".focused(false)");
   expect(shellSource).toContain("disable_window_restoration(&window)");
   expect(shellSource).toContain("setRestorable: false");
-  expect(shellSource.match(/close_disposable_windows\([^)]*\)/g)?.length).toBeGreaterThanOrEqual(3);
+  expect(shellSource).toContain("fn close_secondary_windows(app: &tauri::AppHandle)");
+  expect(shellSource).toContain('if label != "main"');
+  expect(shellSource.match(/close_secondary_windows\([^)]*\)/g)?.length).toBeGreaterThanOrEqual(2);
+
+  const gaiaWindow = shellSource.slice(
+    shellSource.indexOf("fn open_window("),
+    shellSource.indexOf("fn close_secondary_windows"),
+  );
+  expect(gaiaWindow).toContain(".focused(false)");
+  expect(gaiaWindow).toContain("disable_window_restoration(&window)");
 });
