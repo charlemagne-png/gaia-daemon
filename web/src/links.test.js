@@ -37,9 +37,13 @@ test("modified real anchors are captured only in the native shell", () => {
   expect(linksSource).toContain("    true,\n  );");
 });
 
-test("Rust command creates a distinct external WebviewWindow and rejects non-web schemes", () => {
+test("Rust command creates a disposable, non-focusing external WebviewWindow", () => {
   expect(shellSource).toContain("fn open_web_window(app: tauri::AppHandle, url: String)");
   expect(shellSource).toContain('format!("web-{}", WINDOW_SEQ.fetch_add(1, Ordering::Relaxed))');
   expect(shellSource).toContain("WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))");
   expect(shellSource).toContain('matches!(parsed.scheme(), "http" | "https")');
+  expect(shellSource).toContain(".focused(false)");
+  expect(shellSource).toContain("disable_window_restoration(&window)");
+  expect(shellSource).toContain("setRestorable: false");
+  expect(shellSource.match(/close_disposable_windows\([^)]*\)/g)?.length).toBeGreaterThanOrEqual(3);
 });
