@@ -63,7 +63,7 @@ Running the real preview (`POST .../rooms/nyari/sanitize`, home workspace
   `dario-mr5hwaw60ov1gc` state.json (it would have resumed the same turn on
   boot), fresh daemon verified healthy/idle.
 
-### TODO next session
+### Next session
 1. Root-cause A: find the in-process pi path for summon turns (check
    room-service runtimeFactory wiring / createAgentRuntime vs any legacy
    in-process branch). Every harness turn must live in `gaia __run-agent`.

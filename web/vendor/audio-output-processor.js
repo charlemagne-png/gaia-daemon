@@ -1,4 +1,4 @@
-// TODO: is there a way to get type-checking on this?
+// AudioWorklet globals are supplied by the browser runtime.
 
 function asMs(samples) {
   return ((samples * 1000) / sampleRate).toFixed(1);
