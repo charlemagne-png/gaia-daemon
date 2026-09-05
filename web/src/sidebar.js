@@ -336,6 +336,23 @@ function descendantActivity(room, childrenOf) {
   return { running };
 }
 
+/** Agent + model chip for the room card — titles carry purpose; operator info
+ * lives beside the status dot. Model comes from AgentStatus.modelLabel so it
+ * tracks what turns actually run.
+ * @param {RoomSummary} room
+ * @returns {HTMLElement|null}
+ */
+function RoomAgentChip(room) {
+  if (!room.agent) return null;
+  const info = state.snapshot?.agents?.find((agent) => agent.id === room.agent);
+  const model = info?.modelLabel ?? "";
+  return h("span", {
+    class: "room-agent",
+    title: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
+    text: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
+  });
+}
+
 /**
  * @param {RoomSummary} room
  * @param {Map<string|null, RoomSummary[]>} childrenOf
@@ -406,6 +423,7 @@ function RoomNode(room, childrenOf, depth) {
           "span",
           { class: "room-label" },
           ...StatusIcons({ favorite: room.favorite, running: room.running, unread: roomUnread(room), incognito: room.incognito, runningTitle }),
+          RoomAgentChip(room),
           h("span", { class: roomUnread(room) && !room.running ? "room-name unread" : "room-name", text: label }),
           depth && room.running && since ? h("small", { class: "room-running-since", text: `· since ${since}` }) : null,
         ),

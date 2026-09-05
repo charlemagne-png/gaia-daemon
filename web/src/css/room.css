@@ -78,6 +78,7 @@
 .roster-agent:hover,
 .roster-agent.active-agent { background: var(--bg3); }
 .roster-agent > i { grid-column: 1; grid-row: 1 / 3; color: var(--muted); font-style: normal; }
+.roster-agent > .agent-avatar { grid-column: 1; grid-row: 1 / 3; width: 20px; height: 20px; align-self: center; justify-self: center; object-fit: cover; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 999px; background: var(--bg3); }
 .roster-agent.running > i { color: var(--warn); }
 .roster-agent .agent-cell { display: contents; }
 .roster-agent .agent-main { display: grid; grid-column: 2; grid-row: 1 / 3; grid-template-rows: 19px 17px; min-width: 0; width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--fg); text-align: left; }

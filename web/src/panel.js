@@ -10,6 +10,7 @@ import { markDirty, registerRegion } from "./render.js";
 import { openAgentSettings } from "./settings.js";
 import { activeTask, state } from "./state.js";
 import { toggleCall } from "./voice.js";
+import { VoiceControlConsole, VoiceControlOrb } from "./voice-control.js";
 
 /** Draft text for the todo-section's quick-add row. Module-level (like
  * accountsCatalogValue above) so it survives the full-subtree replace every
@@ -60,12 +61,28 @@ function agentSubtitle(agent, activeAgent) {
     .join(" / ");
 }
 
+/** @param {import("./types.js").AgentStatus} agent @returns {HTMLElement} */
+function AgentRosterMark(agent) {
+  if (agent.avatarUrl) {
+    return h("img", {
+      class: "agent-avatar roster-agent-avatar",
+      src: agent.avatarUrl,
+      alt: agent.displayName || agent.id,
+      title: agent.displayName || agent.id,
+      loading: "lazy",
+    });
+  }
+  return h("i", { text: agentGlyph(agent.id), "aria-hidden": "true" });
+}
+
 function renderPanel() {
   const panel = $("#room-panel");
   if (!panel) return;
   ensureAccountsCatalog();
   const snapshot = state.snapshot;
   const agents = snapshot?.agents ?? [];
+  const voiceControlOrb = VoiceControlOrb();
+  const voiceControlConsole = VoiceControlConsole();
   // The agent this room is currently addressing: its remembered active agent,
   // or the workspace default when it has none yet. Marks the "active" row and
   // is who a bare next message goes to.
@@ -73,6 +90,8 @@ function renderPanel() {
   const agentMenu = AgentContextMenu();
   const swarmSection = SwarmSection(snapshot);
   panel.replaceChildren(
+    ...(voiceControlOrb ? [voiceControlOrb] : []),
+    ...(voiceControlConsole ? [voiceControlConsole] : []),
     h(
       "div",
       { class: "panel-head" },
@@ -124,7 +143,7 @@ function renderPanel() {
               markDirty("panel");
             },
           },
-          h("i", { text: agentGlyph(agent.id), "aria-hidden": "true" }),
+          AgentRosterMark(agent),
           h(
             "div",
             // The role-select is pinned to this cell's bottom-right (the model

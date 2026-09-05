@@ -181,10 +181,11 @@ body.macos-titlebar-overlay .tabbar { height: 30px; padding-left: var(--titlebar
 .tab-drop-indicator { position: absolute; top: 4px; bottom: 4px; width: 2px; background: var(--accent); pointer-events: none; z-index: 2; }
 .tab-num { padding: 0; border: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .tab.active .tab-num { color: var(--fg); }
-.tab-dot, .room-dot { flex: 0 0 6px; width: 6px; height: 6px; background: var(--dim, var(--muted)); }
-.tab-dot, .room-dot.running { background: var(--accent); }
-.room-dot.unread { background: var(--accent); animation: none; }
+.tab-dot, .room-dot { flex: 0 0 6px; width: 6px; height: 6px; background: var(--good); }
+.tab-dot, .room-dot.running { box-shadow: 0 0 7px var(--good); animation: dot-pulse 1.2s ease-in-out infinite; }
+.room-dot.unread { background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: none; }
 .room-name.unread { color: var(--fg); font-weight: 600; }
+@keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .tab-name { overflow: hidden; padding-left: 1ch; border-left: 1px solid var(--border); text-overflow: ellipsis; }
 .tab-close { border: 0; background: transparent; color: var(--muted); padding: 0 1px; font-size: 1.15em; line-height: 1; opacity: 0; }
 .tab:hover .tab-close, .tab.active .tab-close { opacity: .65; }
@@ -195,6 +196,39 @@ body.macos-titlebar-overlay .tabbar { height: 30px; padding-left: var(--titlebar
 .theme-btn { margin-left: auto; border-left: 1px solid var(--border); border-right: 0; color: var(--muted); }
 .dictation-chip { display: flex; flex: 0 0 auto; align-items: center; margin-right: 8px; padding: 0 8px; border: 1px solid var(--warn); background: transparent; color: var(--warn); font-size: 10px; white-space: nowrap; }
 .dictation-chip:hover { background: var(--sel); color: var(--warn); }
+
+/* GaiaVoice: composer chip + right-panel orb/console. */
+.voice-wrap .voice-button.voice-control { justify-content: center; min-width: 38px; height: 30px; padding: 2px 8px; color: var(--muted); }
+.voice-control-icon { display: block; width: 30px; height: 30px; image-rendering: pixelated; filter: grayscale(0.55) brightness(0.8); }
+.voice-button.voice-control.on .voice-control-icon { filter: none; }
+.voice-button.voice-control.on { border-color: color-mix(in srgb, #ff3b30 70%, transparent); background: color-mix(in srgb, var(--ink) 72%, #ff3b30 12%); animation: voice-control-pulse 1.45s ease-in-out infinite; }
+.voice-button.voice-control.processing .voice-control-icon { filter: saturate(0.4) brightness(1.25); }
+.voice-button.dictation.recording { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 60%, transparent); animation: dictation-pulse 1.2s ease-in-out infinite; }
+.voice-button.dictation.busy { opacity: 0.6; }
+@keyframes dictation-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent); } 50% { box-shadow: 0 0 0 4px transparent; } }
+@keyframes voice-control-pulse { 0%, 100% { box-shadow: 0 0 6px 1px rgba(255, 59, 48, 0.35); } 50% { box-shadow: 0 0 16px 5px rgba(255, 59, 48, 0.75); } }
+.voice-control-orb { position: relative; height: 168px; margin-bottom: 8px; overflow: hidden; border: 0; background: transparent; box-shadow: none; }
+.voice-control-orb.processing { border-color: transparent; }
+.voice-control-orb-canvas { display: block; width: 100%; height: 100%; }
+.voice-control-orb-label { position: absolute; left: 10px; right: 10px; bottom: 8px; display: flex; justify-content: space-between; gap: 10px; color: var(--muted); pointer-events: none; text-shadow: 0 1px 3px var(--bg); }
+.voice-control-orb-label strong { color: var(--fg); font-weight: 600; }
+.voice-control-orb-label span { color: var(--accent); }
+.voice-control-orb.processing .voice-control-orb-label span { color: var(--warn); }
+.voice-control-console { display: flex; flex-direction: column; gap: 3px; max-height: 190px; margin: 0 0 12px; padding: 2px 0 0; overflow-y: auto; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-family: var(--mono, ui-monospace, monospace); font-size: 11px; line-height: 1.42; scrollbar-width: thin; }
+.voice-console-row { display: flex; align-items: baseline; gap: 7px; color: var(--muted); }
+.voice-console-row.heard, .voice-console-row.reply { color: var(--fg); }
+.voice-console-row.ask { color: var(--warn); font-weight: 600; }
+.voice-console-row.error { color: var(--danger, #ff5c57); }
+.voice-console-row.empty { color: var(--muted); font-style: italic; }
+.voice-console-kind { flex: none; width: 24px; text-align: right; opacity: 0.82; color: var(--accent); }
+.voice-console-author { flex: none; max-width: 72px; overflow: hidden; text-overflow: ellipsis; color: var(--accent2); }
+.voice-console-text { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.voice-console-draft { display: grid; gap: 4px; margin-bottom: 4px; padding: 6px; border: 1px solid var(--border); color: var(--muted); }
+.voice-console-draft.has-draft { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.voice-console-draft-actions { display: flex; gap: 4px; }
+.voice-console-draft-actions button { width: auto; height: 20px; padding: 0 6px; font-size: 10px; }
+.voice-console-header { display: flex; gap: 4px; color: var(--muted); }
+.voice-console-header strong { color: var(--accent); }
 /* ============================================================
 sidebar: workspaces + rooms tree
 ============================================================ */
@@ -223,7 +257,8 @@ sidebar: workspaces + rooms tree
 .room-item { flex: 1 1 auto; min-width: 0; }
 .room-children { padding-left: 3ch; }
 .room-subdot { flex: 0 0 6px; align-self: center; width: 6px; height: 6px; background: var(--accent); }
-.room-subdot.running { }
+.room-subdot.running { box-shadow: 0 0 6px var(--good); animation: dot-pulse 1.2s ease-in-out infinite; }
+.room-agent { flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 0.72em; line-height: 1; opacity: 0.72; }
 .nav-item .room-label { display: flex; align-items: center; gap: 6px; }
 .nav-item .room-icon-slot { display: flex; flex: 0 0 14px; align-items: center; justify-content: center; }
 .room-star, .room-incognito { color: var(--dim, var(--muted)); font-size: .9em; line-height: 1; }
@@ -440,6 +475,7 @@ sidebar: workspaces + rooms tree
    ◇ system). Fixed 2ch slot so every label starts at the same x. User's ❯ and
    agent's mark both read accent; system's ◇ stays dim. */
 .message-meta .speaker-glyph { flex: 0 0 2ch; width: 2ch; text-align: center; color: var(--muted); }
+.message-meta img.speaker-glyph { flex-basis: 20px; width: 20px; height: 20px; align-self: center; object-fit: cover; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 999px; background: var(--bg3); }
 .message-meta .speaker-glyph.agent { color: var(--accent); }
 .message.user .message-meta .speaker-glyph { color: var(--accent); }
 

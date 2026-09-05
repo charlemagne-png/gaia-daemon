@@ -549,6 +549,7 @@ function renderTranscript() {
     // stamp, so exactly the affected message re-renders when either toggles.
     const version =
       view.version +
+      avatarSignature(view) +
       (state.readAloud?.eventId === view.id ? `:ra-${state.readAloud.phase}` : "") +
       (state.search.highlightEventId === view.id ? ":search-hit" : "");
     const current = existing.get(view.id);
@@ -608,6 +609,31 @@ function renderTranscript() {
 }
 
 registerRegion("transcript", renderTranscript);
+
+/** @param {string} author */
+function agentStatus(author) {
+  return state.snapshot?.agents?.find((agent) => agent.id === author);
+}
+
+/** @param {MessageView} view @returns {string} */
+function avatarSignature(view) {
+  if (view.author === "user") return ":av-user";
+  if (view.author === "system") return ":av-system";
+  const agent = agentStatus(view.author);
+  return `:av-${agent?.avatarUrl ?? view.author}`;
+}
+
+/** @param {MessageView} view @returns {HTMLElement} */
+function SpeakerMark(view) {
+  if (view.author === "user") return h("span", { class: "speaker-glyph", "aria-hidden": "true", text: UI.human });
+  if (view.author === "system") return h("span", { class: "speaker-glyph", "aria-hidden": "true", text: UI.system });
+  const agent = agentStatus(view.author);
+  if (agent?.avatarUrl) {
+    const label = agent.displayName || view.author;
+    return h("img", { class: "speaker-glyph agent message-avatar agent-message-avatar", src: agent.avatarUrl, alt: label, title: label, loading: "lazy" });
+  }
+  return h("span", { class: "speaker-glyph agent", "aria-hidden": "true", text: agentGlyph(view.author) });
+}
 
 /** @param {MessageView} view @returns {HTMLElement} */
 function Message(view) {
@@ -715,13 +741,9 @@ function Message(view) {
     h(
       "div",
       { class: "message-meta" },
-      // Speaker mark (v2 parity): ❯ for the human, the agent's own identity
-      // glyph otherwise. Theme-coloured via .speaker-glyph, never emoji.
-      h("span", {
-        class: `speaker-glyph${isAgent ? " agent" : ""}`,
-        "aria-hidden": "true",
-        text: isUser ? UI.human : isAgent ? agentGlyph(view.author) : UI.system,
-      }),
+      // Speaker mark (v2 parity): ❯ for the human, the agent's picture when
+      // configured, otherwise the agent's own identity glyph.
+      SpeakerMark(view),
       h("span", { class: "who", text: speakerName }),
       targetLabel ? h("span", { class: "to", text: targetLabel }) : null,
       view.queued ? h("small", { class: "channel-tag", title: "queued — runs after the current turn", text: "queued" }) : null,

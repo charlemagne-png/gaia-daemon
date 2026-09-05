@@ -39,6 +39,8 @@ export interface Task {
 export interface AgentStatus {
   id: string;
   displayName: string;
+  /** Optional agent portrait surfaced to the web roster/transcript. */
+  avatarUrl?: string;
   icon: string;
   modelLabel: string;
   /** The model agent.json asks for, e.g. `anthropic/fable`. `modelLabel`

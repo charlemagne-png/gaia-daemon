@@ -135,6 +135,7 @@ export class RoomSnapshotMixin {
         ((Object.values(this.workspace.agents) as AgentDef[])).map(async (agent) => ({
           id: agent.id,
           displayName: agent.displayName,
+          ...(agent.avatarUrl ? { avatarUrl: agent.avatarUrl } : {}),
           icon: agent.icon,
           modelLabel: this.runtimes[agent.id]?.modelLabel ?? "unknown",
           configuredModel: configuredModelLabel(agent.model, "default"),
