@@ -175,7 +175,6 @@ export class SchedulerService {
       });
 
       const reply = (await done).trim();
-      if (job.isolated && reply) await room.postAgentNote(agentId, `⏰ \`${job.id}\`\n\n${reply}`);
 
       await this.updateState(path, (state) => {
         const { lastError: _lastError, ...record } = state[job.id] ?? { lastRunAt: this.now().toISOString() };
@@ -251,7 +250,8 @@ export class SchedulerService {
   // --- crash recovery ----------------------------------------------------------------
 
   /** Runs marked "running" by a prior process: reopen the run room (the WAL
-   * protocol resumes any interrupted turn), wait, and deliver what exists. */
+   * protocol resumes any interrupted turn). Isolated result delivery belongs
+   * exclusively to the child contract + settleChildTurn boot sweep. */
   private async recoverInterrupted(workspaceId: string, path: string): Promise<void> {
     const state = parseScheduleState(await readJson(workspacePaths.scheduleState(path)));
     for (const [jobId, record] of Object.entries(state)) {
@@ -266,13 +266,8 @@ export class SchedulerService {
         this.log(`scheduler: recovering interrupted job ${jobId} (room ${record.runRoomId})`);
         // Opening the room resumes its pendingTurn; idle means it settled.
         const runRoom = await this.options.serviceFor(workspaceId, record.runRoomId);
-        await runRoom.waitForIdle(SUMMON_TIMEOUT_MS);
+        await runRoom.waitForSettled();
         const reply = (await runRoom.latestReplyFrom(record.agentId)).trim();
-        const isolated = Boolean(record.deliverRoomId && record.deliverRoomId !== record.runRoomId);
-        if (isolated && reply && record.deliverRoomId) {
-          const deliverRoom = await this.options.serviceFor(workspaceId, record.deliverRoomId);
-          await deliverRoom.postAgentNote(record.agentId, `⏰ \`${jobId}\` (recovered after restart)\n\n${reply}`);
-        }
         await this.updateState(path, (current) => {
           const entry = current[jobId] ?? { lastRunAt: this.now().toISOString() };
           current[jobId] = {

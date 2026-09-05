@@ -693,9 +693,13 @@ export class RoomHandle {
     return event;
   }
 
-  /** Wipe the transcript (backs /clear). State is the caller's to reset. */
+  /** Wipe transcript + its result receipts. A deliberate clear may later
+   * replay the same child delivery; stale receipts must not suppress it. */
   async clearTranscript(): Promise<void> {
     await writeText(this.transcriptPath, "");
+    await this.updateState((state) => {
+      delete state.summonDeliveryReceipts;
+    });
   }
 
   /** Rewind: drop the last `userTurns` user messages and every event after
@@ -740,6 +744,18 @@ export class RoomHandle {
     // Atomic: the kept head has no other copy — a torn rewrite would be
     // permanent loss of committed history.
     await writeTextAtomic(this.transcriptPath, kept.map((event) => JSON.stringify(event)).join("\n") + (kept.length ? "\n" : ""));
+    const droppedReceipts = new Set(
+      dropped
+        .map((event) => event.id.startsWith("summon-result:") ? event.id.slice("summon-result:".length) : undefined)
+        .filter((id): id is string => id !== undefined),
+    );
+    if (droppedReceipts.size > 0) {
+      await this.updateState((state) => {
+        const receipts = state.summonDeliveryReceipts?.filter((id) => !droppedReceipts.has(id));
+        if (receipts?.length) state.summonDeliveryReceipts = receipts;
+        else delete state.summonDeliveryReceipts;
+      });
+    }
     return dropped;
   }
 

@@ -28,7 +28,7 @@
 // summoning. Nested summons are default-deny. No approval gates anywhere —
 // summons run autonomously; the trust tier IS the boundary.
 
-import { appendFile, mkdir, readdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentDef, SummonDelivery, Workspace } from "../core/types.js";
 
@@ -123,6 +123,37 @@ interface SettledOutcome {
   reply: string;
   failed: boolean;
   cancelled: boolean;
+}
+
+/** Atomic file written by detached work that may intentionally stop GAIA.
+ * Boot turns it into the same child contract/funnel as ordinary completion. */
+export interface CompletionMarker {
+  version: 1;
+  id: string;
+  childRoomId: string;
+  parentRoomId: string;
+  agentId: string;
+  deliver: "note" | "turn";
+  callerAgentId?: string;
+  reply: string;
+  failed?: boolean;
+  completedAt: string;
+}
+
+function completionMarkerFrom(value: unknown): CompletionMarker | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const marker = value as Partial<CompletionMarker>;
+  if (
+    marker.version !== 1 ||
+    typeof marker.id !== "string" || !/^[A-Za-z0-9_-]{1,96}$/.test(marker.id) ||
+    typeof marker.childRoomId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(marker.childRoomId) ||
+    typeof marker.parentRoomId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(marker.parentRoomId) ||
+    typeof marker.agentId !== "string" ||
+    (marker.deliver !== "note" && marker.deliver !== "turn") ||
+    typeof marker.reply !== "string" || marker.reply.length > 100_000 ||
+    typeof marker.completedAt !== "string"
+  ) return undefined;
+  return marker as CompletionMarker;
 }
 
 /** What the coordinator needs from a room service (narrow, injectable). */
@@ -251,8 +282,8 @@ export interface SummonOptions {
    *  "note" — result note PLUS a queued turn for the parent's active agent;
    *  "turn" — result note PLUS a queued turn for callerAgentId (falling back
    *  to the parent's active agent when that caller is unavailable).
-   *  Omitted → no delivery; the caller consumes the settled promise itself
-   *  (summonAndWait: monad steps, the sanitize reviewer, scheduled runs). */
+   *  Omitted → "note". Every child room owns a parent-delivery contract;
+   *  awaited callers may also consume the settled promise. */
   deliver?: "note" | "turn";
   /** The parent-room agent on whose behalf this summon runs. Two uses, both
    * uniform across harnesses: a "turn" delivery triggers this agent's turn
@@ -417,7 +448,7 @@ export class SummonCoordinator implements SummonHost {
   }
 
   async summonAndWait(parentRoomId: string, agentId: string, task: string): Promise<string> {
-    const { done } = await this.launch(parentRoomId, agentId, task);
+    const { done } = await this.launch(parentRoomId, agentId, task, { deliver: "note" });
     return done;
   }
 
@@ -473,16 +504,14 @@ export class SummonCoordinator implements SummonHost {
     }
     workDir ??= await resolveRoomWorkDir(this.workspace.rootDir, this.workspace.config.collab, state, childRoomId);
     if (workDir) state.workDir = workDir;
-    if (options.deliver) {
-      state.summon = {
-        agentId,
-        deliver: options.deliver,
-        ...(options.callerAgentId ? { callerAgentId: options.callerAgentId } : {}),
-        status: "running",
-        deliveryId: "initial",
-        launchedAt: new Date().toISOString(),
-      };
-    }
+    state.summon = {
+      agentId,
+      deliver: options.deliver ?? "note",
+      ...(options.callerAgentId ? { callerAgentId: options.callerAgentId } : {}),
+      status: "running",
+      deliveryId: "initial",
+      launchedAt: new Date().toISOString(),
+    };
     await writeJsonAtomic(statePath, state);
 
     const child = await this.serviceForRoom(childRoomId);
@@ -532,8 +561,6 @@ export class SummonCoordinator implements SummonHost {
   /** Run the worker, then enter the same settlement funnel used by resumed,
    * recovered, and watchdog-requeued turns. */
   private async runChild(child: SummonRoomAccess, info: SummonChild, task: string, options: SummonOptions): Promise<string> {
-    if (!options.deliver) return this.runFirstTurn(child, info.agentId, task, info.roomId);
-
     let reply = "";
     let failure: unknown;
     try {
@@ -686,14 +713,62 @@ export class SummonCoordinator implements SummonHost {
     }
   }
 
-  /** Boot → replay every undelivered child settlement through settleChildTurn. */
+  /** Import durable detached completions before the ordinary pending-contract
+   * scan. Marker removal follows parent receipt + child close, never precedes it. */
+  private async armCompletionMarkers(): Promise<Map<string, string>> {
+    const armed = new Map<string, string>();
+    const dir = workspacePaths.completionMarkersDir(this.workspace.rootDir);
+    let files: string[];
+    try {
+      files = await readdir(dir);
+    } catch {
+      return armed;
+    }
+    for (const file of files.filter((name) => name.endsWith(".json"))) {
+      const path = join(dir, file);
+      try {
+        const marker = completionMarkerFrom(await readJson(path));
+        if (!marker) throw new Error("invalid completion marker");
+        if (!this.workspace.agents[marker.agentId]) throw new Error(`unknown marker agent '${marker.agentId}'`);
+        await ensureWorkspaceRoom(this.workspacePath, marker.childRoomId, { incognito: true });
+        const handle = await RoomHandle.open(this.workspace.rootDir, marker.childRoomId);
+        const deliveryId = `marker_${marker.id}`;
+        await handle.updateState((state) => {
+          state.parentRoomId = marker.parentRoomId;
+          state.incognito = true;
+          state.summon = {
+            agentId: marker.agentId,
+            deliver: marker.deliver,
+            ...(marker.callerAgentId ? { callerAgentId: marker.callerAgentId } : {}),
+            status: "running",
+            deliveryId,
+            launchedAt: marker.completedAt,
+          };
+        });
+        const eventId = `completion-marker:${marker.id}`;
+        if (!(await handle.hasEvent(eventId))) {
+          await handle.appendEvent({ id: eventId, timestamp: marker.completedAt, author: marker.agentId, text: marker.reply });
+        }
+        armed.set(marker.childRoomId, path);
+      } catch (error) {
+        this.log(`completion marker '${file}' remains pending: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return armed;
+  }
+
+  /** Boot → replay every durable completion marker and undelivered child
+   * settlement through settleChildTurn. Registers the full pending tree before
+   * starting delivery so parent waits cannot race an undiscovered descendant. */
   async recoverUndelivered(): Promise<void> {
+    const markerPaths = await this.armCompletionMarkers();
     let roomIds: string[];
     try {
       roomIds = await readdir(this.workspace.roomsDir);
     } catch {
       return;
     }
+    const pending: Array<{ info: SummonChild }> = [];
     for (const roomId of roomIds) {
       try {
         const state = normalizeRoomState(await readJson(workspacePaths.roomState(this.workspace.rootDir, roomId)));
@@ -706,17 +781,25 @@ export class SummonCoordinator implements SummonHost {
           untrusted: state.summonUntrusted === true,
         };
         this.running.set(roomId, info);
-        const work = this.settleChildTurn(roomId)
-          .catch((error) => this.log(`settlement recovery for '${roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
-          .finally(() => {
-            if (this.running.get(roomId) === info) this.running.delete(roomId);
-            if (this.completions.get(roomId) === work) this.completions.delete(roomId);
-            this.notifyParentRoomsChanged(info.parentRoomId);
-          });
-        this.completions.set(roomId, work);
+        pending.push({ info });
       } catch (error) {
         this.log(`settlement recovery skipped unsafe '${roomId}': ${error instanceof Error ? error.message : String(error)}`);
       }
+    }
+    for (const { info } of pending) {
+      const work = this.settleChildTurn(info.roomId)
+        .catch((error) => this.log(`settlement recovery for '${info.roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(async () => {
+          if (this.running.get(info.roomId) === info) this.running.delete(info.roomId);
+          if (this.completions.get(info.roomId) === work) this.completions.delete(info.roomId);
+          const markerPath = markerPaths.get(info.roomId);
+          if (markerPath) {
+            const state = await (await RoomHandle.open(this.workspace.rootDir, info.roomId)).state();
+            if (state.summon?.status === "delivered") await unlink(markerPath).catch(() => {});
+          }
+          this.notifyParentRoomsChanged(info.parentRoomId);
+        });
+      this.completions.set(info.roomId, work);
     }
   }
 

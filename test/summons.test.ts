@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -166,7 +166,7 @@ test("summonAndWait creates a linked child room and returns the worker's reply",
   const reply = await pending;
   assert.equal(reply, "worker says done");
   assert.equal(room.sent[0], "do a thing");
-  assert.equal(room.delivered.length, 0); // deliver-less mode: caller consumed the promise
+  assert.equal(room.delivered.length, 1); // awaited + automatic parent report share one contract
   assert.equal(coordinator.runningChildren().length, 0); // settled
 
   // The child room exists on disk, stamped with its parent BEFORE first turn.
@@ -497,6 +497,45 @@ test("boot recovery replays an undelivered child-turn result", async () => {
   assert.equal(parent.delivered.length, 1);
   assert.match(parent.delivered[0].reply, /survived restart/);
   assert.deepEqual(child.markedDeliveryIds, ["delivery-recovered"]);
+});
+
+test("boot replays a detached completion marker into the parent funnel", async () => {
+  const { workspace, path } = await makeWorkspace();
+  const markerId = "detached-success";
+  const childRoomId = "terry-detached";
+  const markerPath = workspacePaths.completionMarker(path, markerId);
+  await mkdir(workspacePaths.completionMarkersDir(path), { recursive: true });
+  await writeJsonAtomic(markerPath, {
+    version: 1,
+    id: markerId,
+    childRoomId,
+    parentRoomId: "default",
+    agentId: "terry",
+    deliver: "note",
+    reply: "daemon-killing operation completed safely",
+    completedAt: new Date().toISOString(),
+  });
+  const child = fakeRoom("daemon-killing operation completed safely");
+  const parent = fakeRoom("");
+  child.markSummonDeliverySettled = async (deliveryId) => {
+    const handle = await RoomHandle.open(path, childRoomId);
+    await handle.updateState((state) => {
+      if (state.summon?.deliveryId === deliveryId) state.summon.status = "delivered";
+    });
+  };
+  const coordinator = new SummonCoordinator(workspace, path, async (roomId) => roomId === "default" ? parent : child, async () => 8, () => {});
+
+  await coordinator.recoverUndelivered();
+  for (let i = 0; i < 100 && parent.delivered.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let i = 0; i < 100; i++) {
+    try { await access(markerPath); } catch { break; }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(parent.delivered.length, 1);
+  assert.match(parent.delivered[0].reply, /completed safely/);
+  assert.equal(parent.delivered[0].delivery.deliveryId, `marker_${markerId}`);
+  await assert.rejects(access(markerPath));
 });
 
 test("recoverUndelivered skips delivered records and non-summon rooms", async () => {

@@ -340,6 +340,17 @@ test("clearTranscript empties the log; state survives", async () => {
   assert.equal((await room.state()).activeRoles.gaia, "planner");
 });
 
+test("clear and rewind retire only removed summon delivery receipts", async () => {
+  const room = await openRoom();
+  await room.addUserMessage("before child", ["gaia"]);
+  await room.appendEvent({ id: "summon-result:child:delivery-1", timestamp: "t", author: "terry", text: "done" });
+  assert.equal(await room.acceptSummonDelivery("child:delivery-1"), true);
+  await room.rewindTranscript(1);
+  assert.equal(await room.acceptSummonDelivery("child:delivery-1"), true, "rewound result may be delivered again");
+  await room.clearTranscript();
+  assert.equal(await room.acceptSummonDelivery("child:delivery-1"), true, "cleared result may be delivered again");
+});
+
 test("single-writer: concurrent state updates serialize", async () => {
   const room = await openRoom();
   await Promise.all(

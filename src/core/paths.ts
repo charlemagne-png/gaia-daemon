@@ -87,6 +87,11 @@ export const workspacePaths = {
   applicationsRegistry: (rootDir: string) => join(rootDir, ".gaia", "applications.json"),
   schedules: (rootDir: string) => join(rootDir, ".gaia", "schedules.json"),
   scheduleState: (rootDir: string) => join(rootDir, ".gaia", "schedule-state.json"),
+  /** External daemon-killing work drops atomic JSON completion markers here;
+   * boot converts each into a child delivery contract, then removes it only
+   * after the parent receipt lands. */
+  completionMarkersDir: (rootDir: string) => join(rootDir, ".gaia", "completion-markers"),
+  completionMarker: (rootDir: string, id: string) => join(rootDir, ".gaia", "completion-markers", `${id}.json`),
   roomsDir: (rootDir: string) => join(rootDir, ".gaia", "rooms"),
   roomDir: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId),
   /** Reversible room deletion moves the whole room dir here rather than rm -rf,
