@@ -1461,7 +1461,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 
 .agent-row, .task { border: 1px solid var(--border-subtle); border-radius: var(--r-md); padding: var(--sp-2); background: var(--ink); }
-.agent-row { display: flex; align-items: stretch; width: 100%; padding: 0; }
+.agent-row { display: flex; align-items: stretch; width: 100%; padding: 0; transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.agent-row:hover { background: var(--interactive-hover); }
 .agent-row.on-call { border-color: var(--accent); box-shadow: 0 0 10px var(--glow); }
 .agent-row.running { border-color: var(--accent); animation: agent-pulse 1.2s ease-in-out infinite; }
 .agent-row.has-role { border-left: 3px solid var(--warn); }
@@ -1514,7 +1515,18 @@ body.resizing { cursor: col-resize; user-select: none; }
 .agent-cell.with-role.with-account .agent-main small { padding-right: calc(var(--sp-1) * 37.5); }
 
 .agent-main small { grid-column: 2; }
-.agent-main .agent-description { color: var(--muted); font-style: italic; opacity: 0.86; }
+.agent-main .agent-description {
+  color: var(--muted);
+  font-style: italic;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+.agent-row:hover .agent-description {
+  max-height: 60px;
+  opacity: 0.75;
+}
 .agent-main strong { display: flex; align-items: center; gap: calc(var(--sp-1) * 1.5); }
 .agent-avatar { width: 22px; height: 22px; border-radius: var(--r-md); object-fit: contain; flex: 0 0 auto; background: transparent; }
 .agent-icon { flex: 0 0 auto; }
@@ -1582,7 +1594,17 @@ body.resizing { cursor: col-resize; user-select: none; }
   display: flex;
   align-items: center;
   gap: calc(var(--sp-1) * 1.25);
-  padding: 0 var(--sp-2) calc(var(--sp-1) * 1.75) calc(var(--sp-1) * 6.25);
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0 var(--sp-2) 0 calc(var(--sp-1) * 6.25);
+  transition: max-height var(--dur-base) var(--ease-inout), opacity var(--dur-base) var(--ease-inout), padding var(--dur-base) var(--ease-inout);
+}
+.agent-row:hover .agent-config-row,
+.agent-row.active-agent .agent-config-row {
+  max-height: 120px;
+  opacity: 1;
+  padding-bottom: calc(var(--sp-1) * 1.75);
 }
 .agent-config-row .model-select,
 .agent-config-row .account-select,
@@ -1610,6 +1632,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .main-button.active { color: var(--warn); text-shadow: 0 0 8px var(--warn); cursor: default; }
 
 .task { display: flex; gap: var(--sp-2); align-items: baseline; }
+.task-list .task:not(.queued):not(.paused):has(~ .task:not(.queued):not(.paused) ~ .task:not(.queued):not(.paused)) { display: none; }
 .task span { color: var(--accent); }
 .task small { overflow-wrap: anywhere; }
 .task.cancelled span { color: var(--muted); }
