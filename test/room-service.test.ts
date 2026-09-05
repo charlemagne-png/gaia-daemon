@@ -1675,13 +1675,16 @@ test("auto-compact: a turn ending above the context threshold queues a /compact 
   assert.equal(compactCalls, 1, "no auto-compact loop after the pass");
 });
 
-test("deliver:note wakes the parent's active steward once through the durable callback queue", async () => {
+test("deliver:note queues one durable wake behind an active parent turn", async () => {
   let release!: () => void;
+  let started!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
+  const began = new Promise<void>((resolve) => { started = resolve; });
   const factory = (agent: AgentDef): AgentRuntime => {
     const runtime = scriptedRuntime(agent, () => []);
     runtime.send = async function* () {
       runtime.sends += 1;
+      started();
       await gate;
       yield { type: "text-delta", delta: "triaged" } as AgentEvent;
     };
@@ -1691,14 +1694,23 @@ test("deliver:note wakes the parent's active steward once through the durable ca
   const { service, root } = await makeService({ runtimeFactory: factory });
   const room = service.room;
   await room.updateState((state) => { state.activeAgent = "gaia"; });
+  await service.sendMessage("parent work already running");
+  await began;
 
   const delivery = { childRoomId: "child-lane-1", failed: false };
   await service.deliverAgentResult("terry", "worker result", delivery);
   await service.deliverAgentResult("terry", "worker result retry", delivery);
 
-  const state = await room.state();
-  assert.ok(state.pendingTurn?.agentId === "gaia" || state.queue?.some((entry) => entry.targets.includes("gaia")), "active steward turn is durable");
+  // Fresh handle = restart-visible disk truth, not RoomService memory. The
+  // running parent cannot see the newly appended note, so custody must be in
+  // exactly one durable queue entry behind its pending turn.
+  const persisted = await (await RoomHandle.open(root, "default")).state();
+  assert.equal(persisted.pendingTurn?.prompt, "parent work already running");
+  const wakes = persisted.queue?.filter((entry) => entry.fromAgentDialogue && entry.text.includes("child-lane-1")) ?? [];
+  assert.equal(wakes.length, 1);
+  assert.deepEqual(persisted.summonDeliveryReceipts, ["child-lane-1:initial"]);
   const { events } = await room.eventsFrom(0);
+  assert.equal(events.filter((event) => event.author === "terry" && event.details?.summonResult?.childRoomId === "child-lane-1").length, 1);
   assert.equal(events.filter((event) => event.author === "system" && event.text.includes("child-lane wake:")).length, 1);
   release();
   await service.waitForIdle();

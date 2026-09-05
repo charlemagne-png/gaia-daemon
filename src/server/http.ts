@@ -1756,8 +1756,12 @@ export class GaiaWebServer {
       if (!room || !message) return json(response, 400, { error: "Missing room or message" });
       try {
         const service = await this.daemon.serviceFor(claims.workspaceId, room);
-        await service.sendMessage(message, { recordUserMessage: true });
-        json(response, 200, { roomId: room, result: `Resumed room '${room}' with a follow-up message.` });
+        const coordinator = await this.daemon.coordinatorFor(claims.workspaceId);
+        const { tracked } = await coordinator.resume(room, service, message);
+        json(response, 200, {
+          roomId: room,
+          result: `Resumed room '${room}' with a follow-up message.${tracked ? " Its result will post back to the parent room when the turn settles." : ""}`,
+        });
       } catch (error) {
         json(response, 400, { error: error instanceof Error ? error.message : String(error) });
       }

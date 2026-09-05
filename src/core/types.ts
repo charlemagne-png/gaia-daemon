@@ -247,6 +247,10 @@ export interface SummonDelivery {
   callerAgentId?: string;
   status: "running" | "delivered";
   launchedAt: string;
+  /** Most recent resumed turn's durable parent-delivery contract. */
+  resumeStatus?: "running" | "delivered";
+  /** Unique epoch for the resumed turn; stale watchers cannot close newer work. */
+  resumeStartedAt?: string;
 }
 
 /** A user-named checkpoint pinned to one transcript event — a durable
@@ -347,6 +351,9 @@ export interface RoomState {
   /** Present on summon child rooms whose result must reach the parent room;
    * see SummonDelivery. */
   summon?: SummonDelivery;
+  /** Parent-side delivery receipts; callback queue insertion + receipt commit
+   * atomically so child retries cannot drop or double-run a result. */
+  summonDeliveryReceipts?: string[];
   /** This summon child room runs under the untrusted tier: its launching caller
    * was untrusted (or its parent room already carried the tier), so every turn
    * here resolves its sandbox with effectiveTrust(agent, true) — forced real
