@@ -17,7 +17,7 @@ import { BridgeMemoryStore, bridgeContextDiet, bridgeEndConversation, bridgeReca
 // an empty registry.
 import "./index.js";
 import { encodeFrame, RUNNER_ENV, type RunnerCommand, type RunnerMessage } from "./protocol.js";
-import { installRunnerPlugins } from "./runner-plugins.js";
+import { installRunnerPlugins, runnerTransformContext, transformRunnerEvent, transformRunnerInput } from "./runner-plugins.js";
 import { type AgentRuntime, harnessIdFor, harnessSpecFor } from "./spec.js";
 import { stripIncognitoTools } from "./tools.js";
 
@@ -121,7 +121,9 @@ export async function runAgentRunner(): Promise<void> {
 
   const runTurn = async (input: Parameters<AgentRuntime["send"]>[0]): Promise<void> => {
     turnActive = true;
+    const transformCtx = runnerTransformContext();
     try {
+      input = await transformRunnerInput(input, transformCtx);
       // Role defaults are turn-scoped. Recreate the harness runtime only when
       // its enforced surface changes, so every harness gets the exact same
       // tool/skill transition without shared code learning a harness id.
@@ -137,7 +139,10 @@ export async function runAgentRunner(): Promise<void> {
         runtime = createRuntime(enforcedAgent);
         runtimeKey = nextKey;
       }
-      for await (const event of runtime.send(input)) send({ type: "event", event });
+      for await (const rawEvent of runtime.send(input)) {
+        const event = await transformRunnerEvent(rawEvent, transformCtx);
+        send({ type: "event", event });
+      }
       send({ type: "model-label", modelLabel: runtime.modelLabel });
       send({ type: "turn-end" });
     } catch (error) {
