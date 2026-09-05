@@ -10,11 +10,10 @@
 
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { readJson } from "../core/store.js";
 import { DEFAULTS } from "../core/config.js";
 import { workspacePaths } from "../core/paths.js";
-import type { RoomState, Workspace } from "../core/types.js";
-import { normalizeRoomState } from "../domain/rooms.js";
+import { recoverPendingTurns as runPendingTurnRecovery } from "../services/fenced/auto-wake-watchdog.js";
+import type { Workspace } from "../core/types.js";
 import { ensureWorkspaceRoom, liveMaxSummonsPerRoom, loadWorkspace } from "../domain/workspace.js";
 import { workspaceRoomRefs, type RoomRef } from "../domain/workspace-index.js";
 import { MemoryStore } from "../domain/memory.js";
@@ -300,24 +299,7 @@ export async function recoverSummons(host: WiringHost): Promise<void> {
  * concurrent client reconnect for the same room). Failures are logged,
  * never thrown — recovery must not take the daemon down. */
 export async function recoverPendingTurns(host: WiringHost): Promise<void> {
-  for (const record of await host.registry.list()) {
-    if (!record.isInitialized) continue;
-    for (const roomId of roomIdsOnDisk(record.path)) {
-      let state: RoomState;
-      try {
-        state = normalizeRoomState(await readJson(workspacePaths.roomState(record.path, roomId)));
-      } catch {
-        continue; // Unreadable/corrupt state — leave it for the room's own on-open recovery.
-      }
-      if (!state.pendingTurn && !state.queue?.length) continue;
-      host.log(`turn recovery: waking ${record.id}::${roomId} (pending=${Boolean(state.pendingTurn)}, queued=${state.queue?.length ?? 0})`);
-      try {
-        await serviceFor(host, record.id, roomId);
-      } catch (error) {
-        host.log(`turn recovery failed for ${record.id}::${roomId}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
+  await runPendingTurnRecovery(host, roomIdsOnDisk, (workspaceId, roomId) => serviceFor(host, workspaceId, roomId));
 }
 
 export function roomIdsOnDisk(workspaceRoot: string): string[] {

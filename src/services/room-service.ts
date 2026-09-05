@@ -94,6 +94,7 @@ import { installRoomUi, RoomUiMixin } from "./room/ui.js";
 import { installRoomSnapshot, RoomSnapshotMixin } from "./room/snapshot.js";
 export { readAmbientWatchdog, scanRoomActivity } from "./room/snapshot.js";
 import { readVoiceSettings } from "./voice.js";
+import { maybeRequeueStall as runStuckTurnWatchdog } from "./fenced/auto-wake-watchdog.js";
 
 export interface RoomServiceOptions {
   workspaceId: string;
@@ -1565,31 +1566,7 @@ export class RoomService {
     attachments: MessageAttachment[] | undefined,
     options: SendMessageOptions,
   ): Promise<boolean> {
-    const isStall = error instanceof Error && error.name === "UpstreamStallError";
-    if (!isStall || partialReply.trim() || options.queued?.stallRetried) return false;
-    const event: RoomEvent = {
-      id: newId("system_stallretry"),
-      timestamp: new Date().toISOString(),
-      author: "system",
-      text: `⚠ turn aborted after upstream stall (@${agentId}) — message requeued, retrying once`,
-    };
-    await this.room.appendEvent(event);
-    this.emit({ type: "room-event", workspaceId: this.workspaceId, roomId: this.roomId, event });
-    const retryTask = this.createTask(text, targets);
-    retryTask.status = "queued";
-    await this.room.enqueue({
-      taskId: retryTask.id,
-      text,
-      targets,
-      ...(channel ? { channel } : {}),
-      ...(attachments?.length ? { attachments } : {}),
-      stallRetried: true,
-      queuedAt: retryTask.startedAt,
-    });
-    this.queuedTasks.push(retryTask);
-    this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task: retryTask });
-    void this.emitSnapshot();
-    return true;
+    return runStuckTurnWatchdog(this, targets, agentId, text, error, partialReply, channel, attachments, options.queued);
   }
 
   async maybeRequeueAuth(
