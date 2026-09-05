@@ -627,7 +627,7 @@ export class RoomService {
           roomId: this.roomId,
           text: message.text,
           targets: message.targets,
-          status: "queued" as const,
+          status: message.paused ? ("paused" as const) : ("queued" as const),
           startedAt: message.queuedAt,
           ...(message.attachments?.length ? { attachments: message.attachments } : {}),
           // Agent-authored hand-offs/summon callbacks aren't "user →" ghosts.
@@ -1395,6 +1395,23 @@ export class RoomService {
     this.recentTasks = [...this.recentTasks.slice(-9), task];
     this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
     return task;
+  }
+
+  async setQueuedPaused(taskId: string, paused: boolean): Promise<Task | undefined> {
+    await this.init();
+    const task = this.queuedTasks.find((candidate) => candidate.id === taskId);
+    if (!task) return undefined;
+    await this.room.setQueuedPaused(taskId, paused);
+    task.status = paused ? "paused" : "queued";
+    this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    if (!paused && !this.activeTask) void this.drain();
+    return task;
+  }
+
+  async removeNote(noteId: string): Promise<void> {
+    await this.init();
+    await this.room.removeNote(noteId);
+    await this.emitSnapshot();
   }
 
   /** Resolves when no task is running; rejects after timeoutMs (when given). */

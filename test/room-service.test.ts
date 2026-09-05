@@ -3481,3 +3481,37 @@ test("/stt and /tts switch the global dictation engine without erasing voice set
   assert.match(await service.runSttCommand("openai"), /voice\.json is malformed/);
   assert.equal(await readFileText(voicePath, "utf8"), "{malformed", "malformed settings remain untouched");
 });
+
+test("queued task can pause durably and resume", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let first = true;
+  const { service, root } = await makeService({
+    roomId: "queue-pause-room",
+    runtimeFactory: (agent) => ({
+      agent,
+      modelLabel: "test/model",
+      capabilities: { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsSteer: false },
+      async *send(): AsyncIterable<AgentEvent> {
+        if (first) { first = false; await gate; }
+        yield { type: "text-delta", delta: "done" };
+      },
+      async abort() {},
+      dispose() {},
+    } as AgentRuntime),
+  });
+  const running = service.sendMessage("running");
+  await sleep(20);
+  const queued = await service.sendMessage("later", { queue: true });
+  assert.equal((await service.setQueuedPaused(queued.id, true))?.status, "paused");
+  release();
+  await running;
+  await service.waitForIdle();
+  const room = await RoomHandle.open(root, "queue-pause-room");
+  assert.equal((await room.state()).queue?.[0]?.paused, true);
+  assert.ok(await service.setQueuedPaused(queued.id, false));
+  await sleep(30);
+  await service.waitForIdle();
+  room.invalidate();
+  assert.equal((await room.state()).queue, undefined);
+});

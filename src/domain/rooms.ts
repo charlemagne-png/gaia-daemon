@@ -1179,7 +1179,16 @@ export class RoomHandle {
    * two-phase hand-off that makes a crash re-drain instead of losing the
    * message (the old dequeue-first held it in memory only). */
   async peekQueue(): Promise<QueuedMessage | undefined> {
-    return (await this.state()).queue?.[0];
+    return (await this.state()).queue?.find((entry) => !entry.paused);
+  }
+
+  async setQueuedPaused(taskId: string, paused: boolean): Promise<void> {
+    await this.updateState((state) => {
+      const entry = state.queue?.find((candidate) => candidate.taskId === taskId);
+      if (!entry) return;
+      if (paused) entry.paused = true;
+      else delete entry.paused;
+    });
   }
 
   /** Durably reserve the transcript event id a queued message will commit

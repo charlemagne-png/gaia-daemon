@@ -60,6 +60,7 @@ export { splitLeadingGaiaThink } from "../shared/gaia-think.js";
  *   doesn't read as a dead turn.
  * @property {boolean} [queued] A not-yet-run queued message (ghost bubble).
  * @property {string} [queuedTaskId] The durable queue task id behind a `queued`
+ * @property {boolean} [queuedPaused] Whether this queued message is paused
  *   ghost — the ✕ delete action removes exactly this entry from the queue.
  * @property {Map<string, MessageView>} [steers] Mid-turn steers this reply's
  *   blocks reference, resolved by messageViews (keyed by the steer's event id)
@@ -308,7 +309,7 @@ function messageViews() {
   // drops the queued task from the snapshot, so the ghost swaps to the committed
   // bubble with no overlap).
   for (const task of state.snapshot?.tasks ?? []) {
-    if (task.status !== "queued" || !task.text.trim()) continue;
+    if ((task.status !== "queued" && task.status !== "paused") || !task.text.trim()) continue;
     // Agent-authored hand-offs / summon callbacks aren't human-typed: their
     // driving text is an agent message or an internal pointer, not a queued
     // user message, so they get no "user →" ghost (the summon result note and
@@ -319,7 +320,7 @@ function messageViews() {
     if (task.recorded) continue;
     views.push({
       id: `queued:${task.id}`,
-      version: "queued",
+      version: task.status === "paused" ? "queued-paused" : "queued",
       timestamp: task.startedAt,
       author: "user",
       targets: task.targets ?? [],
@@ -329,6 +330,7 @@ function messageViews() {
       streaming: false,
       queued: true,
       queuedTaskId: task.id,
+      queuedPaused: task.status === "paused",
     });
   }
   // A steer referenced by a reply's ordered blocks renders INLINE inside that
@@ -763,7 +765,7 @@ function Message(view) {
       SpeakerMark(view),
       h("span", { class: "who", text: speakerName }),
       targetLabel ? h("span", { class: "to", text: targetLabel }) : null,
-      view.queued ? h("small", { class: "channel-tag", title: "queued — runs after the current turn", text: "queued" }) : null,
+      view.queued ? h("small", { class: "channel-tag", title: view.queuedPaused ? "paused in queue" : "queued — runs after the current turn", text: view.queuedPaused ? "paused" : "queued" }) : null,
       view.channel === "voice" ? h("small", { class: "channel-tag", title: "spoken on a voice call", text: UI.call }) : null,
       details.model ? h("small", { class: "model-tag", text: details.model }) : null,
       details.modelFallback

@@ -32,3 +32,14 @@
 .swarm-phase-failed .swarm-phase-title { color: var(--danger); }
 .roster-status { color: var(--muted); font-size: 10px; }
 .unread-dot { width: 6px; height: 6px; border-radius: 0; background: var(--accent); box-shadow: none; }
+
+.todo-row.todo-paused { opacity: .7; }
+.todo-row.todo-paused strong { color: var(--muted); }
+.todo-actions { display: inline-flex; gap: 4px; }
+.todo-action { border: 1px solid var(--border); background: transparent; color: var(--muted); padding: 0 5px; font-size: 10px; }
+.todo-action:hover { color: var(--fg); border-color: var(--fg); }
+.todo-action.danger:hover { color: var(--danger); border-color: var(--danger); }
+.sticky-note { display: flex; align-items: baseline; gap: 8px; padding: 9px 10px; background: #fdfdf6; color: #1c1c1c; border: 1px solid #d8d4c2; border-bottom-width: 2px; box-shadow: 1px 3px 8px rgba(0, 0, 0, .35); }
+.sticky-note small { flex: 1; overflow-wrap: anywhere; color: inherit; }
+.sticky-note .todo-action { color: #8a8676; border-color: #d8d4c2; }
+.sticky-note .todo-action:hover { color: #1c1c1c; border-color: #1c1c1c; }

@@ -1,6 +1,6 @@
 // The right-hand room panel: agents (role select, main-agent star, voice call
 // button) and recent tasks.
-import { accountsCatalog, cancelActiveTask, deleteAgent, deleteQueuedMessage, deleteRoomBookmark, sendMessage, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setRoomAgentDialogue } from "./actions.js";
+import { accountsCatalog, cancelActiveTask, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, sendMessage, setQueuedPaused, setAgentAccount, setAgentDefaultRole, setAgentRole, setDefaultAgent, setRoomAgentDialogue } from "./actions.js";
 import { agentGlyph, STATE, UI } from "./glyphs.js";
 import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
 import { $, h } from "./dom.js";
@@ -312,7 +312,10 @@ window.addEventListener("click", (event) => {
  */
 function TodoSection(snapshot) {
   const tasks = snapshot?.tasks ?? [];
-  const rows = tasks.slice(-8);
+  const notes = snapshot?.room.notes ?? [];
+  const waiting = tasks.filter((task) => task.status === "queued" || task.status === "paused");
+  const history = tasks.filter((task) => task.status !== "queued" && task.status !== "paused").slice(-5);
+  const rows = [...history, ...waiting];
   return h(
     "section",
     { class: "native-section todo-section" },
@@ -320,9 +323,21 @@ function TodoSection(snapshot) {
     h(
       "div",
       { class: "todo-list" },
-      rows.length === 0 ? h("div", { class: "empty", text: "no queued tasks" }) : rows.map((task) => TodoRow(task)),
+      notes.length === 0 && rows.length === 0
+        ? h("div", { class: "empty", text: "no queued tasks" })
+        : [...notes.map((note) => NoteRow(note)), ...rows.map((task) => TodoRow(task))],
     ),
     TodoCreate(snapshot),
+  );
+}
+
+/** @param {import("./types.js").RoomNote} note */
+function NoteRow(note) {
+  return h(
+    "div",
+    { class: "sticky-note" },
+    h("small", { text: note.text, title: note.text }),
+    h("button", { type: "button", class: "todo-action danger", title: "dismiss this note", text: "✕", onclick: () => void deleteNote(note.id) }),
   );
 }
 
@@ -335,7 +350,9 @@ function TodoRow(task) {
   const modifier = task.status === "complete" ? "todo-completed" : task.status === "cancelled" ? "todo-cancelled" : `todo-${task.status}`;
   const glyph = task.status === "running" ? STATE.running : task.status === "complete" ? STATE.done : task.status === "error" ? STATE.error : task.status === "cancelled" ? UI.stop : "";
   const targets = (task.targets ?? []).map((id) => `@${id}`).join(" ");
-  const canCancel = task.status === "queued" || task.status === "running";
+  const isWaiting = task.status === "queued" || task.status === "paused";
+  const isPaused = task.status === "paused";
+  const canCancel = isWaiting || task.status === "running";
   return h(
     "div",
     { class: `todo-row ${modifier}` },
@@ -345,9 +362,20 @@ function TodoRow(task) {
       ? h(
           "div",
           { class: "todo-actions" },
+          isWaiting
+            ? h("button", {
+                type: "button",
+                class: "todo-action",
+                title: isPaused ? "resume queued message" : "pause queued message",
+                text: isPaused ? "▶" : "⏸",
+                onclick: () => void setQueuedPaused(task.id, !isPaused),
+              })
+            : null,
           h("button", {
             type: "button",
-            text: "cancel",
+            class: "todo-action danger",
+            text: task.status === "running" ? "cancel" : "✕",
+            title: task.status === "running" ? "cancel running task" : "drop queued message",
             onclick: () => void (task.status === "running" ? cancelActiveTask() : deleteQueuedMessage(task.id)),
           }),
         )

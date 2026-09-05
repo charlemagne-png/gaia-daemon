@@ -302,6 +302,25 @@ async function roomQueueDelete(ctx: RouteContext): Promise<boolean> {
   json(ctx.response, 200, { task });
   return true;
 }
+async function roomQueuePaused(ctx: RouteContext): Promise<boolean> {
+  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/queue\/([^/]+)\/paused$/);
+  if (ctx.request.method !== "POST" || !params) return false;
+  const body = await parseBody(ctx.request);
+  const paused = Boolean(body && typeof body === "object" && (body as Record<string, unknown>).paused === true);
+  const service = await ctx.daemon.serviceFor(params[0], params[1]);
+  const task = await service.setQueuedPaused(params[2], paused);
+  if (!task) { json(ctx.response, 404, { error: "Queued message not found (it may have already started running)" }); return true; }
+  json(ctx.response, 200, { task });
+  return true;
+}
+async function roomNoteDelete(ctx: RouteContext): Promise<boolean> {
+  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/notes\/([^/]+)$/);
+  if (ctx.request.method !== "DELETE" || !params) return false;
+  const service = await ctx.daemon.serviceFor(params[0], params[1]);
+  await service.removeNote(params[2]);
+  json(ctx.response, 200, { ok: true });
+  return true;
+}
 // Reversible room delete: moves the room dir to trash and purges it from
 // memory. Returns the neighbour room's snapshot (a room is always in view).
 async function deleteRoom(ctx: RouteContext): Promise<boolean> {
@@ -438,6 +457,8 @@ const roomHandlers = [
   roomSummons,
   cancelRoom,
   roomQueueDelete,
+  roomQueuePaused,
+  roomNoteDelete,
   deleteRoom,
   roomContextGate,
   roomReadAloud,

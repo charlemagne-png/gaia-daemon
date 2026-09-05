@@ -716,6 +716,43 @@ export async function deleteQueuedMessage(taskId) {
   }
 }
 
+/** @param {string} taskId @param {boolean} paused */
+export async function setQueuedPaused(taskId, paused) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  try {
+    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/queue/${encodeURIComponent(taskId)}/paused`, {
+      method: "POST",
+      body: JSON.stringify({ paused }),
+    });
+    if (state.snapshot === snapshot) {
+      const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
+      if (task) task.status = paused ? "paused" : "queued";
+      markDirty("transcript", "panel", "status", "composer");
+    }
+  } catch (error) {
+    setError(error);
+  }
+}
+
+/** @param {string} noteId */
+export async function deleteNote(noteId) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  try {
+    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/notes/${encodeURIComponent(noteId)}`, {
+      method: "DELETE",
+      body: "{}",
+    });
+    if (state.snapshot === snapshot && snapshot.room.notes) {
+      snapshot.room.notes = snapshot.room.notes.filter((note) => note.id !== noteId);
+      markDirty("panel");
+    }
+  } catch (error) {
+    setError(error);
+  }
+}
+
 export async function cancelActiveTask() {
   const snapshot = state.snapshot;
   if (!snapshot || !activeTask(snapshot)) return;
