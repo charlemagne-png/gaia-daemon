@@ -28,6 +28,8 @@ test("corner-notes plugin provides global CRUD, normalized persistence, and a so
     const opened = await plugin.run([], ctx("room-a"));
     assert.deepEqual(opened.state, { open: true });
     const emptyPanel = await plugin.panel(ctx("room-a", opened.state));
+    assert.equal(emptyPanel?.placement, "corner");
+    assert.equal(emptyPanel?.corner, "br");
     assert.equal(emptyPanel?.forms?.[0]?.action, "add");
     assert.deepEqual(emptyPanel?.items, []);
 
