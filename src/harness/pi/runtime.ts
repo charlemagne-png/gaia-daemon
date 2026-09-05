@@ -149,10 +149,10 @@ export class PiRuntime implements AgentRuntime {
           { workDir: this.workDir, rootDir: this.cwd },
         );
     const images = (await loadNativeImages(input.attachments)).map(
-      ({ attachment, base64 }) => ({
+      ({ base64, mime }) => ({
         type: "image" as const,
         data: base64,
-        mimeType: attachment.mime,
+        mimeType: mime,
       }),
     );
     session
@@ -210,10 +210,10 @@ export class PiRuntime implements AgentRuntime {
     const session = this.sessions.get(roomId)?.session;
     if (!session?.steer) return false;
     const images = (await loadNativeImages(attachments)).map(
-      ({ attachment, base64 }) => ({
+      ({ base64, mime }) => ({
         type: "image" as const,
         data: base64,
-        mimeType: attachment.mime,
+        mimeType: mime,
       }),
     );
     await session.steer(message, images.length ? images : undefined);
