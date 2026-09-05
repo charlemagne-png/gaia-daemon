@@ -142,14 +142,43 @@ export class RoomCommandsMixin {
    * `command`, when given, is the specific command name that invoked `run()`
    * (PluginContext.command) — relevant only for a plugin owning several. */
   pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>, command?: string): PluginContext {
+    const key = pluginStateKey(plugin);
     return {
       homedir: homedir(),
       roomId: this.roomId,
       workspaceRoot: this.workspace.rootDir,
-      state: state.pluginState?.[pluginStateKey(plugin)],
+      state: state.pluginState?.[key],
       agents: Object.values(this.workspace.agents).map((agent) => ({ id: agent.id, displayName: agent.displayName, icon: agent.icon })),
+      queue: this.pluginQueueFacade(key),
       ...(command ? { command } : {}),
     };
+  }
+
+  pluginQueueFacade(owner: string) {
+    return Object.freeze({
+      enqueue: async (text: string) => {
+        const message = text.trim();
+        if (!message) throw new Error("queue.enqueue requires text");
+        await this.sendMessage(message, { queue: true, pluginQueueOwner: owner });
+      },
+      listOwn: async () => ((await this.room.state()).queue ?? [])
+        .filter((entry) => entry.pluginQueueOwner === owner)
+        .map((entry) => ({ taskId: entry.taskId, text: entry.text, targets: [...entry.targets], paused: entry.paused === true, queuedAt: entry.queuedAt })),
+      setPaused: async (taskId: string, on: boolean) => {
+        const state = await this.room.state();
+        const entry = state.queue?.find((candidate) => candidate.taskId === taskId && candidate.pluginQueueOwner === owner);
+        if (!entry) return false;
+        await this.room.setQueuedPaused(taskId, on);
+        const task = this.queuedTasks.find((candidate) => candidate.id === taskId);
+        if (task) {
+          task.status = on ? "paused" : "queued";
+          this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+        }
+        await this.emitSnapshot();
+        if (!on && !this.activeTask) void this.drain();
+        return true;
+      },
+    });
   }
 
   async runPlugin(plugin: CommandPlugin, args: string[], command?: string): Promise<PluginResult> {

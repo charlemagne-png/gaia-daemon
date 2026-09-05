@@ -60,6 +60,9 @@ export interface QueuedMessage {
    * which would re-run the plugin's state mutation a second time and misroute
    * it back through the command-reply path. */
   pluginMessageTurn?: boolean;
+  /** Plugin bucket that created this entry through ctx.queue; plugin facades
+   * can only list/pause entries bearing their own owner id. */
+  pluginQueueOwner?: string;
   /** User-paused queue entry (the ⏸ in the tasks panel / a /queue idea put on hold). */
   paused?: boolean;
   queuedAt: string;

@@ -939,11 +939,13 @@ test("seedTranscript refuses an occupied room and never clobbers its history", a
 
 test("queue pause is durable and skipped until resumed", async () => {
   const room = await openRoom();
-  await room.enqueue({ taskId: "p1", text: "first", targets: ["gaia"], queuedAt: "2026-01-01" });
+  await room.enqueue({ taskId: "p1", text: "first", targets: ["gaia"], queuedAt: "2026-01-01", pluginQueueOwner: "plugin.queue" });
   await room.enqueue({ taskId: "p2", text: "second", targets: ["gaia"], queuedAt: "2026-01-01" });
   await room.setQueuedPaused("p1", true);
   const reopened = await RoomHandle.open(room.workspaceRoot, room.roomId);
-  assert.equal((await reopened.state()).queue?.[0]?.paused, true);
+  const reopenedState = await reopened.state();
+  assert.equal(reopenedState.queue?.[0]?.paused, true);
+  assert.equal(reopenedState.queue?.[0]?.pluginQueueOwner, "plugin.queue");
   assert.equal((await reopened.peekQueue())?.taskId, "p2");
   await reopened.setQueuedPaused("p1", false);
   assert.equal((await reopened.peekQueue())?.taskId, "p1");

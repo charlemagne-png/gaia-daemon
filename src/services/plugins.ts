@@ -46,12 +46,27 @@ export interface PluginPanel {
   items?: Array<{ title: string; detail?: string; actions?: Array<{ action: string; label: string; args?: string[]; danger?: boolean }> }>;
 }
 
+export interface PluginQueueEntry {
+  taskId: string;
+  text: string;
+  targets: string[];
+  paused: boolean;
+  queuedAt: string;
+}
+
+export interface PluginQueueFacade {
+  enqueue(text: string, options?: { force?: boolean }): Promise<void>;
+  listOwn(): Promise<PluginQueueEntry[]>;
+  setPaused(taskId: string, on: boolean): Promise<boolean>;
+}
+
 export interface PluginContext {
   homedir: string;
   roomId: string;
   workspaceRoot: string;
   state?: Record<string, unknown>;
   agents: PluginAgent[];
+  queue?: PluginQueueFacade;
   /** The specific command name that triggered this `run()` call, when the
    * plugin owns more than one (see `CommandPlugin.command` below). Absent for
    * every OTHER hook (panel/prompt/renderCap/turnStart) — those run once per

@@ -356,7 +356,7 @@ function queueFrom(value: unknown): QueuedMessage[] | undefined {
     const attachments = attachmentsFrom(raw.attachments);
     queue.push({
       ...unknownFields(raw, [
-        "taskId", "text", "targets", "channel", "voice", "attachments", "fromAgentDialogue", "goalStartedAt", "nativeCommand", "pluginMessageTurn", "dogVerbTurn", "paused", "eventId", "recorded",
+        "taskId", "text", "targets", "channel", "voice", "attachments", "fromAgentDialogue", "goalStartedAt", "nativeCommand", "pluginMessageTurn", "dogVerbTurn", "pluginQueueOwner", "paused", "eventId", "recorded",
         "stallRetried", "authRetries", "notBefore", "queuedAt", "humanId", "humanLabel",
       ]),
       taskId: raw.taskId,
@@ -369,6 +369,7 @@ function queueFrom(value: unknown): QueuedMessage[] | undefined {
       ...(typeof raw.goalStartedAt === "string" && raw.goalStartedAt.trim() ? { goalStartedAt: raw.goalStartedAt } : {}),
       ...(raw.nativeCommand === true ? { nativeCommand: true } : {}),
       ...(raw.pluginMessageTurn === true || raw.dogVerbTurn === true ? { pluginMessageTurn: true } : {}),
+      ...(typeof raw.pluginQueueOwner === "string" && raw.pluginQueueOwner.trim() ? { pluginQueueOwner: raw.pluginQueueOwner } : {}),
       ...(raw.paused === true ? { paused: true } : {}),
       // eventId/recorded are the queue→transcript crash-idempotency pair: drop
       // them and a restart re-appends a user event that is already on disk.

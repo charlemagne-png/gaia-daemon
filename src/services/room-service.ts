@@ -204,6 +204,9 @@ export interface SendMessageOptions {
    * through the command-reply path). Never reaches the harness — unlike
    * nativeCommand, it carries no special prompt-building behavior. */
   pluginMessageTurn?: boolean;
+  /** Internal owner for messages enqueued through ctx.queue; plugin queue
+   * facades list/pause only entries bearing their own owner id. */
+  pluginQueueOwner?: string;
   /** Set by drain(): the durable queue entry this turn consumes. The entry
    * stays queued until the turn's first durable record replaces it (the
    * two-phase hand-off — see RoomHandle.peekQueue). */
@@ -909,6 +912,7 @@ export class RoomService {
       ...(options.attachments?.length ? { attachments: options.attachments } : {}),
       ...(options.nativeCommand ? { nativeCommand: true } : {}),
       ...(options.pluginMessageTurn ? { pluginMessageTurn: true } : {}),
+      ...(options.pluginQueueOwner ? { pluginQueueOwner: options.pluginQueueOwner } : {}),
       ...(recordedEventId ? { eventId: recordedEventId } : {}),
       ...(recorded ? { recorded: true } : {}),
       ...(options.human ? { humanId: options.human.id, humanLabel: options.human.label } : {}),

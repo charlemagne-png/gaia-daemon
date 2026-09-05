@@ -109,6 +109,9 @@ export interface RoomCommandsFacadePort {
   emitSnapshot(): Promise<void>;
   distinctPlugins(): Promise<CommandPlugin[]>;
   pluginContext(plugin: CommandPlugin, state: Awaited<ReturnType<RoomHandle["state"]>>, command?: string): PluginContext;
+  pluginQueueFacade(owner: string): NonNullable<PluginContext["queue"]>;
+  sendMessage(text: string, options?: SendMessageOptions): Promise<Task>;
+  drain(onDecided?: () => void): Promise<void>;
   runPlugin(plugin: CommandPlugin, args: string[], command?: string): Promise<PluginResult>;
   roomDefaultTarget(): Promise<string>;
   unknownAgentMessage(agentId: string): string;

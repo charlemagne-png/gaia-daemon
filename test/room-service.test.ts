@@ -2094,6 +2094,62 @@ test("turnSettled plugin callback is awaited after durable reply and can enqueue
   assert.ok(transcript.some((event) => event.author === "system" && /session compacted/.test(event.text)));
 });
 
+
+test("plugin ctx.queue facade owns enqueue/list/pause without raw queue access", async () => {
+  let releaseFirst: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let first = true;
+  let parkedId = "";
+  const { service, root } = await makeService({
+    runtimeFactory: (agent) => {
+      const runtime = scriptedRuntime(agent, () => [{ type: "text-delta", delta: "done" } as AgentEvent]);
+      runtime.capabilities = { gaiaTools: [], granularTools: true, supportsPermissionMode: false, supportsSteer: true };
+      runtime.send = async function* () {
+        if (first) {
+          first = false;
+          await gate;
+        }
+        yield { type: "text-delta", delta: "done" } as AgentEvent;
+      };
+      return runtime;
+    },
+  });
+  const plugin: CommandPlugin = {
+    command: "park",
+    async run(args, ctx) {
+      assert.ok(ctx.queue, "command context exposes queue facade");
+      if (args[0] === "resume") return { reply: (await ctx.queue.setPaused(args[1] ?? "", false)) ? "resumed" : "missing" };
+      await ctx.queue.enqueue(args.join(" "));
+      const own = await ctx.queue.listOwn();
+      parkedId = own[0]?.taskId ?? "";
+      assert.equal(await ctx.queue.setPaused(parkedId, true), true);
+      return { reply: `parked:${own[0]?.text}` };
+    },
+  };
+  (service as unknown as { pluginsPromise: Promise<Map<string, CommandPlugin>> }).pluginsPromise = Promise.resolve(new Map([["park", plugin]]));
+
+  const firstTurn = service.sendMessage("start");
+  await sleep(20);
+  await service.sendMessage("/park later via plugin");
+  assert.ok(parkedId);
+  let state = await (await RoomHandle.open(root, "default")).state();
+  assert.equal(state.queue?.[0]?.pluginQueueOwner, "park");
+  assert.equal(state.queue?.[0]?.paused, true);
+
+  releaseFirst();
+  await firstTurn;
+  await service.waitForIdle();
+  state = await (await RoomHandle.open(root, "default")).state();
+  assert.equal(state.queue?.[0]?.paused, true);
+
+  await service.sendMessage(`/park resume ${parkedId}`);
+  await service.waitForSettled();
+  state = await (await RoomHandle.open(root, "default")).state();
+  assert.equal(state.queue ?? undefined, undefined);
+  const { events: transcript } = await service.room.eventsFrom(0);
+  assert.equal(transcript.filter((event) => event.author === "user" && event.text === "later via plugin").length, 1);
+});
+
 test("postTurn hooks fire with the committed reply (uniform, room-layer)", async () => {
   const { service, workspace, root } = await makeService();
   const out = join(root, "hook-out.json");
