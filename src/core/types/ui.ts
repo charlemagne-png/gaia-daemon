@@ -1,7 +1,7 @@
 import type { BackgroundTask } from "./harness.js";
 import type { EventDetails, LiveTurn, MessageAttachment, ModelFallback, RoomEvent, SkillInvocation } from "./events.js";
 import type { AgentDef } from "./agents.js";
-import type { ContextGatePending, RoomBookmark, RoomState } from "./rooms.js";
+import type { ContextGatePending, RoomState } from "./rooms.js";
 import type { SanitizeStatus } from "./sanitize.js";
 import type { FieldHintOption } from "./settings.js";
 import type { UsageLimits } from "./usage.js";
@@ -141,8 +141,6 @@ export interface RoomSummary {
   favorite?: boolean;
   /** Project label for sidebar grouping. */
   project?: string;
-  /** User-named checkpoints. */
-  bookmarks?: RoomBookmark[];
   /** Original created_at of an imported chat (see RoomState.imported). */
   imported?: string;
   /** Incognito room (see RoomState.incognito) — the tab/list marks it so an

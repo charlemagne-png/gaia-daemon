@@ -133,8 +133,6 @@ export interface RoomCommandsFacadePort {
   runLoveSanitizeRebirthCommand(): Promise<string>;
   runLoveSanitizeAllCommand(): Promise<string>;
   runTeleportCommand(on?: boolean): Promise<string>;
-  setBookmark(eventId: string, name: string): Promise<import("../../core/types.js").RoomBookmark>;
-  removeBookmark(bookmarkId: string): Promise<void>;
 }
 
 /** Dependencies reached by sanitize review, proposal persistence, and apply. */

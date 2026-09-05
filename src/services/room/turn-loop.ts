@@ -275,7 +275,6 @@ export class RoomTurnLoop {
             thinking: options.thinking ?? state.thinkingOverrides[target],
             ...(state.thinkingLevel ? { protocolThinkingLevel: state.thinkingLevel } : {}),
             ...(state.love ? { love: true } : {}),
-            ...(state.bookmarks?.length ? { checkpoints: state.bookmarks } : {}),
             recall,
             ...(pluginContext ? { pluginContext } : {}),
             ...(options.nativeCommand ? { nativeCommand: true } : {}),

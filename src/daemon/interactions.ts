@@ -118,18 +118,6 @@ export class RoomInteractionLifecycle {
     return this.refreshRoomList(workspaceId);
   }
 
-  async setRoomBookmark(workspaceId: string, roomId: string, eventId: string, name: string): Promise<{ bookmark: RoomBookmark; rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    const bookmark = await service.setBookmark(eventId, name);
-    return { bookmark, ...(await this.refreshRoomList(workspaceId)) };
-  }
-
-  async deleteRoomBookmark(workspaceId: string, roomId: string, bookmarkId: string): Promise<{ rooms: Snapshot["rooms"] }> {
-    const service = await this.serviceForExistingRoom(workspaceId, roomId);
-    await service.removeBookmark(bookmarkId);
-    return this.refreshRoomList(workspaceId);
-  }
-
   private async serviceForExistingRoom(workspaceId: string, roomId: string): Promise<RoomService> {
     const record = await this.host.registry.find(workspaceId);
     if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);

@@ -1094,42 +1094,6 @@ export class RoomHandle {
     return events.slice(-limit);
   }
 
-  async setBookmark(eventId: string, name: string): Promise<RoomBookmark> {
-    const { events } = await this.eventsFrom(0);
-    const event = events.find((candidate) => candidate.id === eventId);
-    if (!event) throw new Error(`Unknown event: ${eventId} — cannot bookmark a message that is not in the transcript.`);
-    const bookmark: RoomBookmark = {
-      id: newId("bookmark"),
-      eventId,
-      name: name.trim().slice(0, 80) || "checkpoint",
-      author: event.author,
-      excerpt: event.text.trim().replace(/\s+/g, " ").slice(0, 240),
-      eventAt: event.timestamp,
-      createdAt: new Date().toISOString(),
-    };
-    let stored = bookmark;
-    await this.updateState((state) => {
-      const existing = state.bookmarks?.find((candidate) => candidate.eventId === eventId);
-      if (existing) {
-        stored = { ...existing, name: bookmark.name, excerpt: bookmark.excerpt };
-        state.bookmarks = (state.bookmarks ?? []).map((candidate) => candidate.id === existing.id ? stored : candidate);
-        return;
-      }
-      if ((state.bookmarks?.length ?? 0) >= BOOKMARK_ROOM_MAX) throw new Error(`Checkpoint limit reached (${BOOKMARK_ROOM_MAX} per room) — remove one first.`);
-      state.bookmarks = [...(state.bookmarks ?? []), bookmark].sort((a, b) => a.eventAt.localeCompare(b.eventAt));
-    });
-    return stored;
-  }
-
-  async removeBookmark(bookmarkId: string): Promise<void> {
-    await this.updateState((state) => {
-      if (!state.bookmarks) return;
-      const next = state.bookmarks.filter((candidate) => candidate.id !== bookmarkId);
-      if (next.length) state.bookmarks = next;
-      else delete state.bookmarks;
-    });
-  }
-
   async addNote(text: string): Promise<RoomNote> {
     const note: RoomNote = { id: newId("note"), text: text.trim().slice(0, 2_000), createdAt: new Date().toISOString() };
     if (!note.text) throw new Error("Note text is required.");

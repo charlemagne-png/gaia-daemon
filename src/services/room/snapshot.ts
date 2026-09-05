@@ -406,7 +406,6 @@ export async function scanRoomActivity(rootDir: string): Promise<Snapshot["rooms
             ...(state.activeAgent ? { agent: state.activeAgent } : {}),
             ...(state.favorite ? { favorite: true } : {}),
             ...(state.project ? { project: state.project } : {}),
-            ...(state.bookmarks?.length ? { bookmarks: state.bookmarks } : {}),
             ...(state.imported ? { imported: state.imported } : {}),
             ...(state.incognito ? { incognito: true } : {}),
             ...(state.voiceSession ? { voiceSession: true } : {}),

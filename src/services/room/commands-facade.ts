@@ -28,7 +28,6 @@ import type {
   PendingTurn,
   PetProgressStatus,
   QueuedMessage,
-  RoomBookmark,
   RoomEvent,
   RoomEventKind,
   RoomGoal,
@@ -639,17 +638,6 @@ ${draft.summary}` : ""}`;
 
   async runLoveSanitizeAllCommand(): Promise<string> {
     return this.runLoveSanitizeCommand();
-  }
-
-  async setBookmark(eventId: string, name: string): Promise<RoomBookmark> {
-    const bookmark = await this.room.setBookmark(eventId, name);
-    await this.emitSnapshot();
-    return bookmark;
-  }
-
-  async removeBookmark(bookmarkId: string): Promise<void> {
-    await this.room.removeBookmark(bookmarkId);
-    await this.emitSnapshot();
   }
 
   // DogMode (/dog + its discipline verbs) is a bundled command-plugin now

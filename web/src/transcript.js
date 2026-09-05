@@ -7,7 +7,7 @@
 // rebuilding the whole transcript. v1's author+text merge heuristic is gone:
 // when the final room-event commits under the same id, the stream entry is
 // dropped and the keyed node swaps to the committed version in place.
-import { deleteQueuedMessage, retryMessage, setRoomBookmark, runPluginEventAction } from "./actions.js";
+import { deleteQueuedMessage, retryMessage, runPluginEventAction } from "./actions.js";
 import { agentGlyph, KIND, STATE, UI } from "./glyphs.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
@@ -694,7 +694,6 @@ function Message(view) {
   // rewinds the room there (this failure row + the stale user message move to
   // rewound.jsonl), and re-runs the same text once — never a growing pile.
   const canResendFailedTurn = view.kind === "turn-failed" && !view.streaming && !view.queued;
-  const bookmark = (state.snapshot?.rooms.find((room) => room.isCurrent)?.bookmarks ?? []).find((candidate) => candidate.eventId === view.id);
   // The action row lives at the FOOT of the message (Claude-style), not the meta
   // header — on a long reply the buttons should sit where the reader ends up, not
   // scrolled far above. Built here, appended after the body below.
@@ -739,21 +738,6 @@ function Message(view) {
         void runPluginEventAction(pluginAction.plugin, view.id, pluginAction.action, args);
       },
     })),
-    !view.streaming && !view.queued && view.author !== "system"
-      ? h("button", {
-          type: "button",
-          class: `msg-action bookmark${bookmark ? " active" : ""}`,
-          title: bookmark ? `checkpoint: "${bookmark.name}" — click to rename` : "save as named checkpoint",
-          text: "🔖",
-          onclick: async () => {
-            const name = await promptText(bookmark ? "Rename checkpoint" : "Name this checkpoint", {
-              value: bookmark?.name ?? "",
-              placeholder: "e.g. final spec locked",
-            });
-            if (name !== null && state.snapshot) void setRoomBookmark(state.snapshot.room.id, view.id, name);
-          },
-        })
-      : null,
     // A queued ghost can't be forked, but it CAN be dropped from the queue
     // before it runs — ✕ removes exactly this entry (harness-agnostic).
     view.queued && view.queuedTaskId
