@@ -1983,6 +1983,13 @@ export class RoomService {
     return "reloading daemon — in-flight turns resume after restart.";
   }
 
+  /** Workspace-scoped voice navigation: a background/dispatcher room asked to
+   * open a room, so every active client in the workspace must transport there,
+   * not only clients already watching the origin room. */
+  emitVoiceNavigationRedirect(roomId: string, fromRoomId: string): void {
+    this.emit({ type: "room-redirect", workspaceId: this.workspaceId, roomId, fromWorkspaceId: this.workspaceId, fromRoomId, scope: "workspace" });
+  }
+
   // --- harness-native commands (passthrough) ------------------------------------
 
   /** The agent a bare `/native-command` routes to: whoever the room is actively

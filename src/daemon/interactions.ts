@@ -64,7 +64,7 @@ export class RoomInteractionLifecycle {
     return { workspaces: await this.host.registry.listForHuman(humanId) };
   }
 
-  async selectRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean }): Promise<SelectionPayload> {
+  async selectRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean; voiceNavigation?: boolean }): Promise<SelectionPayload> {
     const record = await this.host.registry.find(workspaceId);
     if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
 
@@ -73,6 +73,8 @@ export class RoomInteractionLifecycle {
     if (this.activeCall?.workspaceId === workspaceId && this.activeCall.info.roomId !== roomId) {
       throw new Error("Stop the active voice call before switching rooms.");
     }
+
+    const fromRoomId = this.host.currentRoom.get(workspaceId) ?? roomId;
 
     // `incognito` only takes effect when this call CREATES the room (immutable
     // seed in ensureWorkspaceRoom); selecting an existing room ignores it.
@@ -83,7 +85,16 @@ export class RoomInteractionLifecycle {
     const service = await this.host.serviceFor(workspaceId, roomId);
     const snapshot = await service.getSnapshot();
     this.host.broadcast({ type: "snapshot", workspaceId, roomId: service.roomId, snapshot });
+    if (opts?.voiceNavigation) service.emitVoiceNavigationRedirect(service.roomId, fromRoomId);
     return { snapshot, workspaceFiles: await this.host.files.listWorkspace(workspaceId), voice: this.voiceFor(workspaceId) };
+  }
+
+  async createRoom(workspaceId: string, roomId: string, opts?: { incognito?: boolean; parentRoomId?: string; voiceSession?: boolean }): Promise<{ rooms: Snapshot["rooms"] }> {
+    const record = await this.host.registry.find(workspaceId);
+    if (!record) throw new Error(`Unknown workspace: ${workspaceId}`);
+    await ensureWorkspaceRoom(record.path, roomId, opts);
+    await this.host.serviceFor(workspaceId, roomId);
+    return this.refreshRoomList(workspaceId);
   }
 
   /** Rename a room's display title without changing its durable id/path. */

@@ -146,21 +146,39 @@ export async function selectRoom(workspaceId, roomId, opts = {}) {
 }
 
 /**
- * @param {string|{title?: string; voiceSession?: boolean; incognito?: boolean}} workspaceId
- * @param {string} [roomId]
- * @param {{ incognito?: boolean; voiceSession?: boolean }} [opts]
+ * Create a room without selecting/opening it. Used by GaiaVoice's hidden
+ * session room: transcript persists, main chat UI stays where you left it.
+ * @param {{ incognito?: boolean, title?: string, voiceSession?: boolean }} [opts]
+ * @returns {Promise<{ workspaceId: string, roomId: string } | null>}
  */
-export async function createRoom(workspaceId, roomId, opts = {}) {
+export async function createRoom(opts = {}) {
   const snapshot = state.snapshot;
   if (!snapshot) return null;
-  if (typeof workspaceId === "object") {
-    const id = newAutoRoomId(workspaceId.voiceSession ? "voice-" : workspaceId.incognito ? "incognito-" : "chat-");
-    await selectRoom(snapshot.workspace.id, id, { incognito: workspaceId.incognito === true });
-    return { workspaceId: snapshot.workspace.id, roomId: id };
+  const incognito = opts.incognito === true;
+  const roomId = newAutoRoomId(incognito ? "incognito-" : "chat-");
+  try {
+    const created = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/create`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...(incognito ? { incognito: true } : {}),
+        ...(opts.voiceSession ? { voiceSession: true } : {}),
+      }),
+    });
+    applyRoomsPayload(snapshot.workspace.id, created.rooms);
+    const title = String(opts.title ?? "").trim();
+    if (title) {
+      const titled = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(roomId)}/title`, {
+        method: "POST",
+        body: JSON.stringify({ title, source: "auto" }),
+      });
+      applyRoomsPayload(snapshot.workspace.id, titled.rooms);
+    }
+    markDirty("sidebar", "tabs", "status");
+    return { workspaceId: snapshot.workspace.id, roomId };
+  } catch (error) {
+    setError(error);
+    return null;
   }
-  if (!roomId) return null;
-  await selectRoom(workspaceId, roomId, opts);
-  return { workspaceId, roomId };
 }
 
 /** @param {string} agentId */

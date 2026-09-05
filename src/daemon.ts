@@ -695,6 +695,7 @@ export class Daemon {
   async setWorkspaceFavorite(...args: Parameters<RoomInteractionLifecycle["setWorkspaceFavorite"]>) { return this.interactions.setWorkspaceFavorite(...args); }
   async reorderWorkspaces(...args: Parameters<RoomInteractionLifecycle["reorderWorkspaces"]>) { return this.interactions.reorderWorkspaces(...args); }
   async selectRoom(...args: Parameters<RoomInteractionLifecycle["selectRoom"]>) { return this.interactions.selectRoom(...args); }
+  async createRoom(...args: Parameters<RoomInteractionLifecycle["createRoom"]>) { return this.interactions.createRoom(...args); }
   async renameRoom(...args: Parameters<RoomInteractionLifecycle["renameRoom"]>) { return this.interactions.renameRoom(...args); }
   async setRoomFavorite(...args: Parameters<RoomInteractionLifecycle["setRoomFavorite"]>) { return this.interactions.setRoomFavorite(...args); }
   async deleteRoom(...args: Parameters<RoomInteractionLifecycle["deleteRoom"]>) { return this.interactions.deleteRoom(...args); }

@@ -14,16 +14,34 @@ async function selectRoom(ctx: RouteContext): Promise<boolean> {
   const body = await parseBody(ctx.request);
   const roomId = stringField(body, "roomId") ?? stringField(body, "id") ?? stringField(body, "room");
   if (!roomId?.trim()) { json(ctx.response, 400, { error: "Missing room id" }); return true; }
-  await respond(ctx.response, () => ctx.daemon.selectRoom(params[0], roomId.trim(), { incognito: boolField(body, "incognito") }));
+  const incognito = boolField(body, "incognito");
+  const voiceSession = boolField(body, "voiceSession");
+  const voiceNavigation = boolField(body, "voiceNavigation") || boolField(body, "voiceNav");
+  const parentRoomId = stringField(body, "parentRoomId")?.trim();
+  await respond(ctx.response, () => ctx.daemon.selectRoom(params[0], roomId.trim(), { incognito, ...(voiceSession ? { voiceSession } : {}), ...(voiceNavigation ? { voiceNavigation } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
+  return true;
+}
+async function createNamedRoom(ctx: RouteContext): Promise<boolean> {
+  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/create$/);
+  if (ctx.request.method !== "POST" || !params) return false;
+  const body = await parseBody(ctx.request);
+  const incognito = boolField(body, "incognito");
+  const voiceSession = boolField(body, "voiceSession");
+  const parentRoomId = stringField(body, "parentRoomId")?.trim();
+  await respond(ctx.response, () => ctx.daemon.createRoom(params[0], params[1], { incognito, ...(voiceSession ? { voiceSession } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
   return true;
 }
 async function selectNamedRoom(ctx: RouteContext): Promise<boolean> {
   const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/(?:select|activate)$/);
   if (ctx.request.method !== "POST" || !params) return false;
-  // The body is optional; when a room is being CREATED via select, it may
-  // carry `incognito: true` (a no-op on an already-existing room).
-  const incognito = boolField(await parseBody(ctx.request), "incognito");
-  await respond(ctx.response, () => ctx.daemon.selectRoom(params[0], params[1], { incognito }));
+  // The body is optional; when a room is being CREATED via select, it may carry
+  // incognito/voice metadata (a no-op on an already-existing room).
+  const body = await parseBody(ctx.request);
+  const incognito = boolField(body, "incognito");
+  const voiceSession = boolField(body, "voiceSession");
+  const voiceNavigation = boolField(body, "voiceNavigation") || boolField(body, "voiceNav");
+  const parentRoomId = stringField(body, "parentRoomId")?.trim();
+  await respond(ctx.response, () => ctx.daemon.selectRoom(params[0], params[1], { incognito, ...(voiceSession ? { voiceSession } : {}), ...(voiceNavigation ? { voiceNavigation } : {}), ...(parentRoomId ? { parentRoomId } : {}) }));
   return true;
 }
 async function roomRole(ctx: RouteContext): Promise<boolean> {
@@ -381,6 +399,7 @@ async function roomReadAloudStream(ctx: RouteContext): Promise<boolean> {
 
 const roomHandlers = [
   selectRoom,
+  createNamedRoom,
   selectNamedRoom,
   roomRole,
   roomPlugin,
