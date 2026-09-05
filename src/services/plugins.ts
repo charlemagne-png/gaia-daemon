@@ -18,7 +18,7 @@ export interface PluginAgent {
 export interface PluginPanelField {
   name: string;
   label: string;
-  type: "text" | "select";
+  type: "text" | "select" | "textarea";
   value?: string;
   options?: Array<{ value: string; label: string }>;
 }
@@ -76,7 +76,7 @@ function sanitizeFields(fields: PluginPanelField[] | undefined): PluginPanelFiel
   return (Array.isArray(fields) ? fields : []).slice(0, 16).flatMap((field) => {
     const name = cleanString(field?.name, 120);
     const label = cleanString(field?.label, 160);
-    const type = field?.type === "select" ? "select" : field?.type === "text" ? "text" : undefined;
+    const type = field?.type === "select" ? "select" : field?.type === "textarea" ? "textarea" : field?.type === "text" ? "text" : undefined;
     if (!name || !label || !type) return [];
     const out: PluginPanelField = { name, label, type };
     const value = cleanString(field?.value, 400);

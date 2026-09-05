@@ -1254,7 +1254,7 @@ export interface SlashCommandDefinition {
 export interface SnapshotPluginPanelField {
   name: string;
   label: string;
-  type: "text" | "select";
+  type: "text" | "select" | "textarea";
   value?: string;
   options?: Array<{ value: string; label: string }>;
 }

@@ -34,7 +34,7 @@ export function pluginPanelCorner(panel) {
 
 /**
  * @param {PluginPanelField} field
- * @param {Record<string, HTMLInputElement|HTMLSelectElement>} refs
+ * @param {Record<string, HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement>} refs
  */
 function Field(field, refs) {
   const control = field.type === "select"
@@ -43,14 +43,16 @@ function Field(field, refs) {
         { class: "prompt-input" },
         (field.options ?? []).map((opt) => h("option", { value: opt.value, text: opt.label, selected: opt.value === field.value })),
       )
-    : h("input", { type: "text", class: "prompt-input", ...(field.value ? { value: field.value } : {}) });
-  refs[field.name] = /** @type {HTMLInputElement|HTMLSelectElement} */ (control);
+    : field.type === "textarea"
+      ? h("textarea", { class: "prompt-input plugin-textarea", rows: "4", ...(field.value ? { value: field.value } : {}) })
+      : h("input", { type: "text", class: "prompt-input", ...(field.value ? { value: field.value } : {}) });
+  refs[field.name] = /** @type {HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement} */ (control);
   return h("label", { class: "plugin-field" }, h("span", { class: "plugin-field-label", text: field.label }), control);
 }
 
 /** @param {string} command @param {{action:string,label:string,fields:PluginPanelField[]}} form */
 function Form(command, form) {
-  /** @type {Record<string, HTMLInputElement|HTMLSelectElement>} */
+  /** @type {Record<string, HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement>} */
   const refs = {};
   const run = () => submit(command, [form.action, ...form.fields.map((field) => refs[field.name]?.value ?? "")]);
   return h(

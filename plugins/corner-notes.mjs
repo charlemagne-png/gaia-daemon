@@ -190,8 +190,8 @@ export default {
       corner: "br",
       description: "Global across rooms.",
       forms: [
-        { action: "add", label: "Add note", fields: [{ name: "text", label: "Quick add", type: "text" }] },
-        ...(editing ? [{ action: `edit:${editing.id}`, label: "Save edit", fields: [{ name: "text", label: "Note", type: "text", value: editing.text }] }] : []),
+        { action: "add", label: "Add note", fields: [{ name: "text", label: "Quick add", type: "textarea" }] },
+        ...(editing ? [{ action: `edit:${editing.id}`, label: "Save edit", fields: [{ name: "text", label: "Note", type: "textarea", value: editing.text }] }] : []),
       ],
       items: sorted(state.notes).map((note) => ({
         title: note.text,

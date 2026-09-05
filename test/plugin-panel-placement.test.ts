@@ -6,12 +6,20 @@ test("plugin panel sanitizer preserves default overlay shape when placement is o
   const panel = sanitizePluginPanel({
     title: "RPG table",
     description: "Character creation and GM/NPC assignment. Play itself stays in room chat.",
-    forms: [{ action: "gm", label: "Assign GM", fields: [{ name: "agent", label: "GM agent", type: "select", options: [{ value: "gm", label: "🎲 @gm" }] }] }],
+    forms: [{ action: "gm", label: "Assign GM", fields: [
+      { name: "agent", label: "GM agent", type: "select", options: [{ value: "gm", label: "🎲 @gm" }] },
+      { name: "name", label: "Character name", type: "text", value: "Ada" },
+      { name: "bio", label: "Character bio", type: "textarea", value: "line one\nline two" },
+    ] }],
   });
   assert.deepEqual(panel, {
     title: "RPG table",
     description: "Character creation and GM/NPC assignment. Play itself stays in room chat.",
-    forms: [{ action: "gm", label: "Assign GM", fields: [{ name: "agent", label: "GM agent", type: "select", options: [{ value: "gm", label: "🎲 @gm" }] }] }],
+    forms: [{ action: "gm", label: "Assign GM", fields: [
+      { name: "agent", label: "GM agent", type: "select", options: [{ value: "gm", label: "🎲 @gm" }] },
+      { name: "name", label: "Character name", type: "text", value: "Ada" },
+      { name: "bio", label: "Character bio", type: "textarea", value: "line one\nline two" },
+    ] }],
   });
 });
 

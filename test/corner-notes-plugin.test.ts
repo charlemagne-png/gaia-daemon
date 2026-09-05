@@ -31,6 +31,7 @@ test("corner-notes plugin provides global CRUD, normalized persistence, and a so
     assert.equal(emptyPanel?.placement, "corner");
     assert.equal(emptyPanel?.corner, "br");
     assert.equal(emptyPanel?.forms?.[0]?.action, "add");
+    assert.equal(emptyPanel?.forms?.[0]?.fields[0]?.type, "textarea");
     assert.deepEqual(emptyPanel?.items, []);
 
     const alpha = await plugin.run(["add", "Alpha", "note"], ctx("room-a", opened.state));
@@ -48,6 +49,7 @@ test("corner-notes plugin provides global CRUD, normalized persistence, and a so
     const editMode = await plugin.run(["edit", alphaId], ctx("room-a", { open: true }));
     const editPanel = await plugin.panel(ctx("room-a", editMode.state));
     assert.equal(editPanel?.forms?.[1]?.action, `edit:${alphaId}`);
+    assert.equal(editPanel?.forms?.[1]?.fields[0]?.type, "textarea");
     assert.equal(editPanel?.forms?.[1]?.fields[0]?.value, "Alpha note");
 
     const edited = await plugin.run(["edit", alphaId, "Alpha", "updated"], ctx("room-a", editMode.state));
