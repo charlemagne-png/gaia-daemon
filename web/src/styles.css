@@ -368,6 +368,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 .tab-dot, .room-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: var(--r-full); background: var(--good); }
 .tab-dot { opacity: 0; box-shadow: 0 0 7px var(--good); animation: dot-pulse 1.2s ease-in-out infinite; transition: opacity var(--dur-fast) var(--ease-out); }
 .tab.running .tab-dot { opacity: 1; }
+.tab.unread .tab-dot,
+.tab-dot.unread { 
+  opacity: 1; 
+  background: var(--accent); 
+  box-shadow: 0 0 6px var(--accent); 
+  animation: none; 
+}
 .room-dot.running { box-shadow: 0 0 7px var(--good); animation: dot-pulse 1.2s ease-in-out infinite; }
 /* Finished with unread agent replies: a steady accent dot (no pulse) + a
    brighter room name. Clears the moment the room is opened (roomUnread). */
