@@ -13,6 +13,7 @@ const panels = new Map();
 /** @type {{entry: string, instanceId: string, lifecycle: ApplicationPanelLifecycle}|null} */
 let mounted = null;
 let fallbackRequested = false;
+let shellHidden = false;
 
 /** Native adapters register logical renderer wiring as data.
  * @param {string} entry
@@ -57,8 +58,19 @@ async function loadCatalog(workspaceId) {
 }
 
 export function openApplicationLauncher() {
+  shellHidden = false;
   state.applications.launcherOpen = true;
   markDirty("applications", "sidebar");
+}
+
+export function hideApplicationShell() {
+  shellHidden = true;
+  state.applications.launcherOpen = false;
+  markDirty("applications", "sidebar");
+}
+
+export function isApplicationShellVisible() {
+  return !shellHidden && (state.applications.launcherOpen || Boolean(activeInstance()));
 }
 
 /** @param {any} entry */
@@ -70,6 +82,7 @@ export async function openApplication(entry) {
   const adapter = panels.get(entry.manifest.panel.entry);
   if (!adapter) return setError(`No renderer registered for ${entry.manifest.name}`);
   state.applications.loading = true;
+  shellHidden = false;
   state.applications.launcherOpen = false;
   markDirty("applications", "sidebar");
   try {
@@ -115,7 +128,8 @@ export async function closeActiveApplication() {
   try {
     const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/application-instances/${encodeURIComponent(instance.instanceId)}`, { method: "DELETE" });
     adoptApplications(body.snapshot);
-    state.applications.launcherOpen = true;
+    shellHidden = true;
+    state.applications.launcherOpen = false;
     markDirty("applications", "sidebar");
   } catch (error) {
     setError(error);
@@ -161,14 +175,18 @@ function renderApplications() {
   const root = $("#application-shell");
   if (!root) return;
   const instance = activeInstance();
-  const show = state.applications.launcherOpen || Boolean(instance);
+  const show = !shellHidden && (state.applications.launcherOpen || Boolean(instance));
   root.hidden = !show;
   root.closest(".main")?.classList.toggle("applications-open", show);
   if (!show) return unmountPanel();
   if (state.applications.launcherOpen || !instance) {
     unmountPanel();
     root.replaceChildren(h("section", { class: "application-home", "aria-label": "Applications" },
-      h("header", { class: "application-home-head" }, h("div", {}, h("span", { class: "application-kicker", text: "Work surfaces" }), h("h2", { text: "Applications" })), h("button", { type: "button", disabled: true, text: "＋ Create app" })),
+      h("header", { class: "application-home-head" },
+        h("div", {}, h("span", { class: "application-kicker", text: "Work surfaces" }), h("h2", { text: "Applications" })),
+        h("div", { class: "application-home-actions" },
+          h("button", { type: "button", disabled: true, text: "＋ Create app" }),
+          h("button", { type: "button", title: "close applications", onclick: () => hideApplicationShell(), text: "×" }))),
       ApplicationsLauncher({ compact: false })));
     return;
   }

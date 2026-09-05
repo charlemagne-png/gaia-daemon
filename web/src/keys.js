@@ -12,6 +12,7 @@
 //   mod+K  search all chats            mod+F  search this chat
 //   Alt+T  theme palette   Alt+Shift+T  cycle theme   Esc  close overlays
 import { deleteRoom, renameRoom } from "./actions.js";
+import { hideApplicationShell, isApplicationShellVisible } from "./applications.js";
 import { jumpTab, newIncognitoRoom, newTab, nextTab, prevTab, togglePanel, toggleSidebar } from "./chrome.js";
 import { isNative } from "./native.js";
 import { markDirty } from "./render.js";
@@ -130,6 +131,13 @@ export function installKeybindings() {
       if (event.key === "Escape" && state.settingsOpen) {
         event.preventDefault();
         closeSettings();
+        return;
+      }
+      // Then the application shell; Escape hides it without deleting an open app.
+      if (event.key === "Escape" && isApplicationShellVisible()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        hideApplicationShell();
         return;
       }
       // Delete the focused ROOM with the OS-native delete chord (⌘⌫ on macOS,

@@ -41,6 +41,7 @@
 .application-home { height: 100%; overflow: auto; padding: var(--sp-5); }
 .application-home-head, .application-chrome { display: flex; align-items: center; gap: var(--sp-2); }
 .application-home-head { justify-content: space-between; margin-bottom: var(--sp-5); }
+.application-home-actions { display: flex; align-items: center; gap: var(--sp-2); }
 .application-home-head h2 { margin: var(--sp-1) var(--sp-0) var(--sp-0); font-size: var(--text-xl); }
 .application-kicker { color: var(--text-secondary); font-size: var(--text-xs); }
 .application-chrome {
