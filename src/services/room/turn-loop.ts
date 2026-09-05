@@ -274,7 +274,6 @@ export class RoomTurnLoop {
             channel: options.channel,
             thinking: options.thinking ?? state.thinkingOverrides[target],
             ...(state.thinkingLevel ? { protocolThinkingLevel: state.thinkingLevel } : {}),
-            ...(state.berserk ? { berserk: true } : {}),
             ...(state.love ? { love: true } : {}),
             ...(state.bookmarks?.length ? { checkpoints: state.bookmarks } : {}),
             recall,

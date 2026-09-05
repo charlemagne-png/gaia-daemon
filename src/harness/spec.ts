@@ -40,8 +40,6 @@ export interface AgentInput {
   /** Room-wide GAIA-THINK protocol level (0-10) from RoomState.thinkingLevel;
    * rides into the `# Protocols` section of the system prompt. Unset = 0. */
   protocolThinkingLevel?: number;
-  /** /berserk tree mode is active for this room. */
-  berserk?: boolean;
   /** /love tree mode is active for this room. */
   love?: boolean;
   /** Auto-retrieved memory block for this turn ("" / absent = nothing cleared

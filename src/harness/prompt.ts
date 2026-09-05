@@ -90,8 +90,6 @@ export interface TurnPromptInput {
   checkpoints?: RoomBookmark[];
   /** Voice room map for voice-control turns. */
   voiceRoomMap?: string;
-  /** /berserk tree mode. */
-  berserk?: boolean;
   /** /love tree mode. */
   love?: boolean;
   /** Context returned by room-local command plugins. */
@@ -123,12 +121,6 @@ export interface DietRenderContext {
   policy: ContextDietPolicy;
   currentAgentId: string;
 }
-
-const BERSERK_INSTRUCTIONS = [
-  "# ⚔️ BERSERK — ADVERSARIAL DEATHMODE (active across this room and every subroom until the human says /berserk off)",
-  "Every claim you output may be cross-examined by the other agents. Defend with verifiable evidence: artifacts, reproductions, citations, measurements.",
-  "Use the mode to break plateaus: name the wall, split it into independent attack vectors, summon worker lanes when useful, and arbitrate findings into a breach plan.",
-].join("\n");
 
 const LOVE_INSTRUCTIONS = [
   "# 💗 LOVE — LOVEMODE (active across this room and every subroom until the human says /love off)",
@@ -450,7 +442,6 @@ export async function buildTurnPromptFor(
     recall: input.recall,
     checkpoints: input.checkpoints,
     voiceRoomMap: input.voiceRoomMap,
-    berserk: input.berserk,
     love: input.love,
     pluginContext: input.pluginContext,
     channel: input.channel,
@@ -475,7 +466,6 @@ export function buildTurnPrompt(input: TurnPromptInput): string {
     `Current agent: @${input.agentId}`,
     worktreeLine,
     input.channel === "voice" ? VOICE_MODE_INSTRUCTIONS : "",
-    input.berserk ? BERSERK_INSTRUCTIONS : "",
     input.love ? LOVE_INSTRUCTIONS : "",
     input.memory?.trim() ? `# Your persistent memory\n\n${input.memory.trim()}` : "",
     input.recall?.trim() ?? "",

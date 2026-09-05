@@ -139,8 +139,9 @@ registerRegion("layout", renderLayout);
 // Semantic plugin chrome stays data-only; the client theme owns rendering.
 // Legacy core flags retain their classes until each feature adopts this seam.
 registerRegion("chrome", () => {
-  document.body.dataset.roomChrome = (state.snapshot?.room.pluginChromeTokens ?? []).join(" ");
-  document.body.classList.toggle("berserk", Boolean(state.snapshot?.room.berserk));
+  const tokens = state.snapshot?.room.pluginChromeTokens ?? [];
+  document.body.dataset.roomChrome = tokens.join(" ");
+  document.body.classList.toggle("berserk", tokens.includes("danger"));
   document.body.classList.toggle("love", Boolean(state.snapshot?.room.love));
   document.body.classList.toggle("teleport", Boolean(state.snapshot?.room.teleport));
 });

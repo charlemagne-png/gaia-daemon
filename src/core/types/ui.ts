@@ -150,8 +150,6 @@ export interface RoomSummary {
   incognito?: boolean;
   /** GaiaVoice session room. */
   voiceSession?: boolean;
-  /** Effective /berserk mode. */
-  berserk?: boolean;
   /** Data-only semantic room chrome contributed by plugins. */
   pluginChromeTokens?: string[];
   /** Effective /love mode. */
@@ -264,8 +262,6 @@ export interface Snapshot {
     eventTotal: number;
     /** Stable short reference code for voice/typing room lookup. */
     refCode?: string;
-    /** Effective /berserk mode. */
-    berserk?: boolean;
     /** Data-only semantic room chrome contributed by plugins. */
     pluginChromeTokens?: string[];
     /** Effective /love mode. */

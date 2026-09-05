@@ -193,7 +193,7 @@ export interface RoomState {
    * a single room value driving the `# Protocols` section's thinking line for
    * ALL agents. Absent/0 = thought blocks disabled. */
   thinkingLevel?: number;
-  /** /berserk tree mode. */
+  /** Legacy /berserk rollback seed; active ownership lives in pluginState. */
   berserk?: true;
   /** /love tree mode. */
   love?: true;

@@ -556,15 +556,6 @@ ${draft.summary}` : ""}`;
     return host.summonAndWait(this.roomId, "dario", `gaiago translate/seal:\n${source}`);
   }
 
-  async runBerserkCommand(off?: boolean): Promise<string> {
-    await this.room.updateState((state) => {
-      if (off) delete state.berserk;
-      else state.berserk = true;
-    });
-    await this.emitSnapshot();
-    return off ? "⚔️ berserk off — the room tree stands down." : "⚔️ berserk on — adversarial plateau-break mode active for this room.";
-  }
-
   async runLoveCommand(off?: boolean): Promise<string> {
     await this.room.updateState((state) => {
       if (off) delete state.love;

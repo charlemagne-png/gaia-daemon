@@ -124,7 +124,6 @@ export interface RoomCommandsFacadePort {
   sanitizePreview(): Promise<SanitizeProposal>;
   sanitizeApply(edits: { eventId: string; quote: string; replacement: string }[]): Promise<{ applied: number; skipped: number }>;
   runGaiagoCommand(text?: string): Promise<string>;
-  runBerserkCommand(off?: boolean): Promise<string>;
   runLoveCommand(off?: boolean): Promise<string>;
   runLoveSanitizeCommand(): Promise<string>;
   runLoveSanitizeAutoCommand(): Promise<string>;
