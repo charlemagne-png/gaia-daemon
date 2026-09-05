@@ -1448,7 +1448,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .plugin-item { border: 1px solid var(--border); padding: var(--sp-2) calc(var(--sp-1) * 2.5); }
 .plugin-item-actions { display: flex; gap: calc(var(--sp-1) * 1.5); flex-wrap: wrap; margin-top: calc(var(--sp-1) * 1.5); }
 .plugin-dialog .prompt-input { margin: calc(var(--sp-1) * 0.5) 0; }
-.plugin-corner { position: fixed; z-index: 19; display: grid; --plugin-corner-gap: calc(var(--sp-3) + var(--plugin-corner-offset, 0px)); }
+.plugin-corner { position: fixed; z-index: 19; display: grid; width: max-content; max-width: calc(100vw - var(--plugin-corner-gap) - var(--plugin-corner-gap)); max-height: calc(100vh - var(--plugin-corner-gap) - var(--plugin-corner-gap)); pointer-events: none; --plugin-corner-gap: calc(var(--sp-4) + var(--plugin-corner-offset, 0px)); }
+.plugin-corner > * { pointer-events: auto; }
 .plugin-corner--br { right: var(--plugin-corner-gap); bottom: var(--plugin-corner-gap); }
 .plugin-corner--bl { left: var(--plugin-corner-gap); bottom: var(--plugin-corner-gap); }
 .plugin-corner--tr { right: var(--plugin-corner-gap); top: var(--plugin-corner-gap); }
@@ -1456,7 +1457,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .plugin-corner-fab { width: calc(var(--sp-7) - var(--sp-1)); height: calc(var(--sp-7) - var(--sp-1)); padding: 0; display: grid; place-items: center; border-radius: var(--r-full); border-color: var(--border-emphasis); background: color-mix(in srgb, var(--surface-2) 82%, var(--accent)); box-shadow: 0 0 calc(var(--sp-5) * 0.75) var(--glow); transition: transform var(--dur-base) var(--ease-spring), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
 .plugin-corner-fab:hover { transform: translateY(calc(var(--sp-1) * -1)); }
 .plugin-corner-fab-mark { color: var(--accent); font-weight: var(--fw-bold); font-size: var(--text-lg); line-height: var(--lh-solid); }
-.plugin-corner-panel { width: min(calc(var(--sp-6) * 10), calc(100vw - var(--sp-6))); height: min(calc(var(--sp-6) * 10), calc(100vh - var(--sp-6))); display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-emphasis); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface-1) 94%, var(--accent)); box-shadow: 0 calc(var(--sp-5) * 0.75) calc(var(--sp-7) * 1.25) color-mix(in srgb, var(--surface-0) 82%, transparent), 0 0 calc(var(--sp-5) * 0.75) var(--glow); animation: plugin-corner-in var(--dur-base) var(--ease-out); }
+.plugin-corner-panel { box-sizing: border-box; inline-size: min(20rem, calc(100vw - var(--plugin-corner-gap) - var(--plugin-corner-gap))); block-size: min(20rem, calc(100vh - var(--plugin-corner-gap) - var(--plugin-corner-gap))); max-inline-size: 20rem; max-block-size: 20rem; aspect-ratio: 1 / 1; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-emphasis); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface-1) 94%, var(--accent)); box-shadow: 0 calc(var(--sp-5) * 0.75) calc(var(--sp-7) * 1.25) color-mix(in srgb, var(--surface-0) 82%, transparent), 0 0 calc(var(--sp-5) * 0.75) var(--glow); animation: plugin-corner-in var(--dur-base) var(--ease-out); }
 .plugin-corner-head { display: flex; align-items: start; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3); border-bottom: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--surface-2) 72%, transparent); }
 .plugin-corner-title { min-width: 0; }
 .plugin-corner-title h2 { margin: 0; color: var(--accent); font-size: var(--text-base); line-height: var(--lh-tight); }
