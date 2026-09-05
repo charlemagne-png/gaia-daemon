@@ -1184,7 +1184,6 @@ function VoiceButtons() {
   }
   // Off a call: the dictation (voice-input) button. One click records, the next
   // stops and transcribes into the composer; right-click cancels a recording.
-  if (!state.snapshot) return [];
   const recording = state.dictating;
   const busy = state.dictationBusy;
   const voiceControlPhase = state.voiceControl.phase;
