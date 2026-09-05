@@ -6,7 +6,7 @@
 // and a settings edit must take effect on the next turn without a daemon
 // bounce. Missing file = no accounts; a MALFORMED file throws loudly — a torn
 // credential store must never quietly demote an agent to the shared login.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { globalPaths } from "../core/paths.js";
 
 export interface AccountRecord {
@@ -25,6 +25,16 @@ export interface AccountRecord {
   providers?: string[];
   /** Opaque credential bag; field meaning is the owning spec's (accounts.fields). */
   credentials: Record<string, string>;
+  authStatus?: "ok" | "needs-reauth" | "error" | "unknown";
+  authCheckedAt?: string;
+  authFailure?: string;
+}
+
+function writeAccounts(raw: Record<string, unknown>): void {
+  const path = accountsPath();
+  const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(temp, JSON.stringify(raw, null, 2) + "\n", { mode: 0o600 });
+  renameSync(temp, path);
 }
 
 export function accountsPath(): string {
@@ -35,7 +45,7 @@ export function accountsPath(): string {
 export function ensureAccountsFile(): void {
   const path = accountsPath();
   if (existsSync(path)) return;
-  writeFileSync(path, JSON.stringify({ accounts: [] }, null, 2) + "\n", { mode: 0o600 });
+  writeAccounts({ accounts: [] });
 }
 
 export function listAccounts(): AccountRecord[] {
@@ -64,6 +74,9 @@ export function listAccounts(): AccountRecord[] {
         ...(typeof record.workspace === "string" && record.workspace.trim() ? { workspace: record.workspace.trim() } : {}),
         ...(Array.isArray(record.providers) ? { providers: record.providers.filter((p): p is string => typeof p === "string") } : {}),
         credentials,
+        ...(record.authStatus === "ok" || record.authStatus === "needs-reauth" || record.authStatus === "error" || record.authStatus === "unknown" ? { authStatus: record.authStatus } : {}),
+        ...(typeof record.authCheckedAt === "string" ? { authCheckedAt: record.authCheckedAt } : {}),
+        ...(typeof record.authFailure === "string" ? { authFailure: record.authFailure } : {}),
       },
     ];
   });
@@ -74,13 +87,16 @@ export function findAccount(id: string): AccountRecord | undefined {
 }
 
 /** Redacted view for clients — never includes the credential bag. */
-export function redactedAccounts(): Array<{ id: string; harness: string; label?: string; email?: string; workspace?: string; providers?: string[] }> {
-  return listAccounts().map(({ id, harness, label, email, workspace, providers }) => ({
+export function redactedAccounts(): Array<{ id: string; harness: string; label?: string; email?: string; workspace?: string; providers?: string[]; authStatus?: AccountRecord["authStatus"]; authCheckedAt?: string; authFailure?: string }> {
+  return listAccounts().map(({ id, harness, label, email, workspace, providers, authStatus, authCheckedAt, authFailure }) => ({
     id, harness,
     ...(label ? { label } : {}),
     ...(email ? { email } : {}),
     ...(workspace ? { workspace } : {}),
     ...(providers?.length ? { providers } : {}),
+    ...(authStatus ? { authStatus } : {}),
+    ...(authCheckedAt ? { authCheckedAt } : {}),
+    ...(authFailure ? { authFailure } : {}),
   }));
 }
 
@@ -102,7 +118,7 @@ export function updateAccount(id: string, patch: { label?: string | null; email?
     else next[field] = value.trim();
   }
   list[index] = next;
-  writeFileSync(path, JSON.stringify({ ...raw, accounts: list }, null, 2) + "\n", { mode: 0o600 });
+  writeAccounts({ ...raw, accounts: list });
   return listAccounts().find((account) => account.id === id);
 }
 
@@ -138,10 +154,10 @@ export function addAccount(record: AccountRecord): void {
     throw new Error(`account '${record.id}' already exists`);
   }
   list.push(record);
-  writeFileSync(path, JSON.stringify({ ...raw, accounts: list }, null, 2) + "\n", { mode: 0o600 });
+  writeAccounts({ ...raw, accounts: list });
 }
 
-export function replaceAccountCredentials(id: string, credentials: Record<string, string>, email?: string): AccountRecord | undefined {
+export function replaceAccountCredentials(id: string, credentials: Record<string, string>, email?: string, auth?: { status: AccountRecord["authStatus"]; checkedAt?: string; failure?: string }): AccountRecord | undefined {
   const path = accountsPath();
   if (!existsSync(path)) return undefined;
   const raw = JSON.parse(readFileSync(path, "utf8")) as { accounts?: unknown };
@@ -149,8 +165,13 @@ export function replaceAccountCredentials(id: string, credentials: Record<string
   const index = list.findIndex((entry) => (entry as Partial<AccountRecord>)?.id === id);
   if (index < 0) return undefined;
   const current = list[index] as Record<string, unknown>;
-  list[index] = { ...current, ...(email ? { email } : {}), credentials };
-  writeFileSync(path, JSON.stringify({ ...raw, accounts: list }, null, 2) + "\n", { mode: 0o600 });
+  const next: Record<string, unknown> = { ...current, ...(email ? { email } : {}), credentials };
+  if (auth?.status) next.authStatus = auth.status;
+  if (auth?.checkedAt) next.authCheckedAt = auth.checkedAt;
+  if (auth?.failure) next.authFailure = auth.failure;
+  else if (auth) delete next.authFailure;
+  list[index] = next;
+  writeAccounts({ ...raw, accounts: list });
   return listAccounts().find((account) => account.id === id);
 }
 
@@ -161,6 +182,6 @@ export function removeAccount(id: string): boolean {
   const list = Array.isArray(raw.accounts) ? (raw.accounts as unknown[]) : [];
   const kept = list.filter((entry) => (entry as Partial<AccountRecord>)?.id !== id);
   if (kept.length === list.length) return false;
-  writeFileSync(path, JSON.stringify({ ...raw, accounts: kept }, null, 2) + "\n", { mode: 0o600 });
+  writeAccounts({ ...raw, accounts: kept });
   return true;
 }

@@ -4,7 +4,7 @@
 // HarnessSpec registered at the bottom (AGENTS.md §RULE #0).
 
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -28,6 +28,8 @@ import type { ResolvedRole } from "../domain/roles.js";
 import { agentSkillNames, resolveSkillRefs } from "../domain/skills.js";
 import { agentRoster, buildPiTools } from "./tools.js";
 import {
+  type AccountCredentialContext,
+  type AccountCredentialResult,
   type AgentInput,
   type AgentRuntime,
   type HarnessCapabilities,
@@ -51,7 +53,7 @@ import { ModelLabel } from "./model-label.js";
 registerBunOAuthFlows();
 import { findModelWithAlias } from "./model-aliases.js";
 import { buildBaseSystemPrompt, buildTurnPromptFor, promptCacheKey } from "./prompt.js";
-import { emailFromJwt, expiryMsFromJwt, fetchAnthropicUsage, fetchChatGptUsage } from "./usage.js";
+import { emailFromJwt, expiryMsFromJwt, fetchAnthropicUsage, fetchChatGptUsage, USAGE_TIMEOUT_MS } from "./usage.js";
 
 // ---------------------------------------------------------------------------
 // Subprocess-side egress redirect for the credential proxy (v1's
@@ -901,36 +903,18 @@ async function probePiUsage(provider: "anthropic" | "openai-codex"): Promise<Usa
     : fetchChatGptUsage(token, typeof cred.accountId === "string" ? cred.accountId : undefined);
 }
 
-async function probePiAccountUsage(credentials: Record<string, string>): Promise<UsageProbeResult> {
-  // Normalize credential field names (support both old and new formats)
-  const accessToken = credentials.access || credentials.accessToken;
-  
-  // Detect provider from credential structure
-  const isOpenAI = credentials.accountId || (accessToken && accessToken.startsWith("eyJ"));
-  const isAnthropic = accessToken && accessToken.startsWith("sk-ant-");
-  if (!accessToken || (!isOpenAI && !isAnthropic)) return { status: "none" };
-  const provider = isOpenAI ? "openai-codex" : "anthropic";
-  
-  // Probe through the account's MATERIALIZED agent dir — the same auth.json
-  // agent runs use. ModelRuntime.getAuth auto-refreshes an expired OAuth
-  // token (with file locking) and writes the rotated pair back into that dir,
-  // so an expired accounts.json token no longer freezes the meter: the stored
-  // refresh token mints a fresh access token whenever a probe finds a stale one.
-  let cred: { type?: string; accountId?: unknown } | undefined;
-  let token: string | undefined;
+async function probePiAccountUsage(credentials: Record<string, string>, context: AccountCredentialContext): Promise<UsageProbeResult> {
+  const provider = piAccountProvider(context);
+  if (!provider || !credentials.access) return { status: "none" };
   try {
-    const authPath = join(materializePiAgentDir(credentials), "auth.json");
-    cred = readStoredCredential(provider, authPath) as typeof cred;
-    if (!cred || cred.type !== "oauth") return { status: "none" };
+    const authPath = join(materializePiAgentDir(credentials, context), "auth.json");
     const runtime = await ModelRuntime.create({ authPath });
-    token = (await runtime.getAuth(provider))?.auth.apiKey;
+    const token = (await runtime.getAuth(provider))?.auth.apiKey;
+    if (!token) return { status: "error" };
+    return provider === "anthropic" ? fetchAnthropicUsage(token) : fetchChatGptUsage(token, credentials.accountId);
   } catch {
-    return { status: "error" }; // store unreadable / refresh raced — transient, keep last-known.
+    return { status: "error" };
   }
-  if (!token) return { status: "error" }; // refresh could not mint a token — transient, keep last-known.
-  return isAnthropic
-    ? fetchAnthropicUsage(token)
-    : fetchChatGptUsage(token, credentials.accountId ?? (typeof cred.accountId === "string" ? cred.accountId : undefined));
 }
 
 // Named pi accounts: an isolated PI_CODING_AGENT_DIR materialized from the
@@ -960,12 +944,12 @@ function piLoginAuthCredentials(configDir: string): Record<string, string> | und
   const record = provider ? all[provider] : undefined;
   if (!record || typeof record !== "object") return undefined;
   const credential = record as Record<string, unknown>;
-  const accessToken = typeof credential.access === "string" ? credential.access : typeof credential.accessToken === "string" ? credential.accessToken : undefined;
-  const refreshToken = typeof credential.refresh === "string" ? credential.refresh : typeof credential.refreshToken === "string" ? credential.refreshToken : undefined;
+  const accessToken = typeof credential.access === "string" ? credential.access : undefined;
+  const refreshToken = typeof credential.refresh === "string" ? credential.refresh : undefined;
   const accountId = typeof credential.accountId === "string" ? credential.accountId : undefined;
   const expires = typeof credential.expires === "number" ? String(credential.expires) : typeof credential.expires === "string" ? credential.expires : undefined;
   if (!accessToken || !refreshToken) return undefined;
-  return { accessToken, refreshToken, ...(accountId ? { accountId } : {}), ...(expires ? { expires } : {}) };
+  return { type: "oauth", access: accessToken, refresh: refreshToken, ...(accountId ? { accountId } : {}), ...(expires ? { expires } : {}) };
 }
 
 function piLoginUrl(output: string): string | undefined {
@@ -996,87 +980,143 @@ function piTerminalLoginCommand(configDir: string, initialInput: string[] | unde
   return { argv: ["/bin/bash", "-lc", script], env: { PI_CODING_AGENT_DIR: configDir, PI_OFFLINE: "0" } };
 }
 
-function materializePiAgentDir(credentials: Record<string, string>): string {
-  // Detect provider from credential structure:
-  // OpenAI: accountId present (or JWT-structured access token)
-  // Anthropic: sk-ant- prefix on access token
-  // Support both old (accessToken/refreshToken) and new (access/refresh) field names
-  const accessToken = credentials.access || credentials.accessToken;
-  const refreshToken = credentials.refresh || credentials.refreshToken;
-  const isOpenAI = credentials.accountId || (accessToken && accessToken.startsWith("eyJ"));
-  const provider = isOpenAI ? "openai-codex" : "anthropic";
-  
-  // Key for directory: OpenAI uses accountId, Anthropic hashes refresh token
-  const key = isOpenAI
-    ? (credentials.accountId?.trim() || createHash("sha256").update(refreshToken ?? "").digest("hex").slice(0, 16))
-    : createHash("sha256").update(refreshToken ?? "").digest("hex").slice(0, 16);
-  
-  const dir = join(gaiaHome(), "pi-accounts", key);
+type PiAccountProvider = "anthropic" | "openai-codex";
+type PiOauth = { type: "oauth"; access: string; refresh: string; expires: number; accountId?: string };
+
+function piAccountProvider(context: AccountCredentialContext): PiAccountProvider | undefined {
+  return context.providers.includes("openai-codex") ? "openai-codex" : context.providers.includes("anthropic") ? "anthropic" : undefined;
+}
+
+function normalizePiCredentials(credentials: Record<string, string>, context: AccountCredentialContext): Record<string, string> {
+  const provider = piAccountProvider(context);
+  const access = credentials.access ?? credentials.accessToken ?? credentials.oauthToken ?? "";
+  const refresh = credentials.refresh ?? credentials.refreshToken ?? "";
+  const expires = String(Number(credentials.expires) || expiryMsFromJwt(access));
+  return {
+    type: "oauth",
+    access,
+    refresh,
+    expires,
+    ...(provider === "openai-codex" && credentials.accountId ? { accountId: credentials.accountId } : {}),
+    ...(provider === "openai-codex" && credentials.idToken ? { idToken: credentials.idToken } : {}),
+  };
+}
+
+function stablePiAccountDir(context: AccountCredentialContext): string {
+  return join(gaiaHome(), "pi-accounts", `account-${createHash("sha256").update(context.id).digest("hex").slice(0, 16)}`);
+}
+
+function readPiOauth(path: string, provider: PiAccountProvider): PiOauth | undefined {
+  try {
+    const entry = (JSON.parse(readFileSync(path, "utf8")) as Record<string, Partial<PiOauth>>)[provider];
+    if (entry?.type !== "oauth" || !entry.access || !entry.refresh) return undefined;
+    return { type: "oauth", access: entry.access, refresh: entry.refresh, expires: Number(entry.expires) || expiryMsFromJwt(entry.access), ...(entry.accountId ? { accountId: entry.accountId } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+function writePiOauth(path: string, provider: PiAccountProvider, entry: PiOauth): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(temp, JSON.stringify({ [provider]: entry }, null, 2) + "\n", { mode: 0o600 });
+  renameSync(temp, path);
+}
+
+function credentialBag(entry: PiOauth, source: Record<string, string>): Record<string, string> {
+  return { type: "oauth", access: entry.access, refresh: entry.refresh, expires: String(entry.expires), ...(entry.accountId ? { accountId: entry.accountId } : {}), ...(source.idToken ? { idToken: source.idToken } : {}) };
+}
+
+function freshestPiOauth(credentials: Record<string, string>, context: AccountCredentialContext): PiOauth | undefined {
+  const provider = piAccountProvider(context);
+  if (!provider) return undefined;
+  const normalized = normalizePiCredentials(credentials, context);
+  const candidates: PiOauth[] = [];
+  if (normalized.access && normalized.refresh) candidates.push({ type: "oauth", access: normalized.access, refresh: normalized.refresh, expires: Number(normalized.expires) || 0, ...(normalized.accountId ? { accountId: normalized.accountId } : {}) });
+  const legacyKey = provider === "openai-codex"
+    ? credentials.accountId
+    : createHash("sha256").update(credentials.refresh ?? credentials.refreshToken ?? "").digest("hex").slice(0, 16);
+  for (const path of [
+    join(stablePiAccountDir(context), "auth.json"),
+    ...(legacyKey ? [join(gaiaHome(), "pi-accounts", legacyKey, "auth.json")] : []),
+  ]) {
+    const entry = readPiOauth(path, provider);
+    if (entry) candidates.push(entry);
+  }
+  if (provider === "openai-codex" && normalized.accountId) {
+    for (const path of [join(homedir(), ".pi", "agent", "auth.json")]) {
+      const entry = readPiOauth(path, provider);
+      if (entry?.accountId === normalized.accountId) candidates.push(entry);
+    }
+    try {
+      const tokens = (JSON.parse(readFileSync(join(homedir(), ".codex", "auth.json"), "utf8")) as { tokens?: Record<string, string> }).tokens;
+      if (tokens?.account_id === normalized.accountId && tokens.access_token && tokens.refresh_token) {
+        candidates.push({ type: "oauth", access: tokens.access_token, refresh: tokens.refresh_token, expires: expiryMsFromJwt(tokens.access_token), accountId: tokens.account_id });
+      }
+    } catch {}
+  }
+  return candidates.sort((a, b) => b.expires - a.expires)[0];
+}
+
+function materializePiAgentDir(credentials: Record<string, string>, context: AccountCredentialContext): string {
+  const provider = piAccountProvider(context);
+  if (!provider) throw new Error(`account '${context.id}' has no supported provider`);
+  const dir = stablePiAccountDir(context);
   mkdirSync(dir, { recursive: true });
-  
-  // Create full Pi directory structure (bin, skills, sessions)
   mkdirSync(join(dir, "bin"), { recursive: true });
   mkdirSync(join(dir, "skills"), { recursive: true });
   mkdirSync(join(dir, "sessions"), { recursive: true });
-  
-  // Copy models.json from ambient Pi if present
   const modelsSrc = join(homedir(), ".pi", "agent", "models.json");
   const modelsDst = join(dir, "models.json");
   if (existsSync(modelsSrc) && !existsSync(modelsDst)) copyFileSync(modelsSrc, modelsDst);
-  
-  // Symlink extensions from ambient Pi (critical for pi-claude-code-identity)
   const extensionsSrc = join(homedir(), ".pi", "agent", "extensions");
   const extensionsDst = join(dir, "extensions");
   if (existsSync(extensionsSrc) && !existsSync(extensionsDst)) {
-    try {
-      symlinkSync(extensionsSrc, extensionsDst);
-    } catch (err) {
-      // Symlink failed (permissions/filesystem) → fall back to recursive copy
-      cpSync(extensionsSrc, extensionsDst, { recursive: true });
-    }
+    try { symlinkSync(extensionsSrc, extensionsDst); } catch { cpSync(extensionsSrc, extensionsDst, { recursive: true }); }
   }
-  
-  // Create settings.json with default model if missing
   const settingsPath = join(dir, "settings.json");
-  if (!existsSync(settingsPath)) {
-    const defaultModel = isOpenAI ? "openai-codex/gpt-5.5" : "anthropic/claude-sonnet-4";
-    writeFileSync(settingsPath, JSON.stringify({ model: { default: defaultModel } }, null, 2) + "\n");
-  }
-  
+  if (!existsSync(settingsPath)) writeFileSync(settingsPath, JSON.stringify({ model: { default: provider === "openai-codex" ? "openai-codex/gpt-5.5" : "anthropic/claude-sonnet-4" } }, null, 2) + "\n");
   const authPath = join(dir, "auth.json");
-  
-  // Build auth entry based on provider
-  const entry = isOpenAI
-    ? {
-        type: "oauth",
-        refresh: refreshToken ?? "",
-        access: accessToken ?? "",
-        expires: expiryMsFromJwt(accessToken),
-        ...(credentials.accountId ? { accountId: credentials.accountId } : {}),
-      }
-    : {
-        type: "oauth",
-        refresh: refreshToken ?? "",
-        access: accessToken ?? "",
-        expires: Number(credentials.expires) || 0,
-      };
-  
-  // Read existing and only rewrite if store's credential is fresher
-  let existing: { [provider: string]: { refresh?: string; access?: string; expires?: number } } | undefined;
-  try {
-    existing = JSON.parse(readFileSync(authPath, "utf8")) as typeof existing;
-  } catch {
-    // missing or torn — rewrite below
-  }
-  
-  const materialized = existing?.[provider];
-  const currentExpiry = isOpenAI ? expiryMsFromJwt(materialized?.access) : (materialized?.expires ?? 0);
-  const newExpiry = isOpenAI ? entry.expires : Number(entry.expires);
-  
-  if (!materialized?.refresh || newExpiry > currentExpiry) {
-    writeFileSync(authPath, JSON.stringify({ [provider]: entry }, null, 2) + "\n", { mode: 0o600 });
-  }
+  const freshest = freshestPiOauth(credentials, context);
+  const current = readPiOauth(authPath, provider);
+  if (freshest && (!current || freshest.expires > current.expires)) writePiOauth(authPath, provider, freshest);
   return dir;
+}
+
+async function probePiIdentity(provider: PiAccountProvider, entry: PiOauth): Promise<number> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${entry.access}` };
+  const url = provider === "anthropic" ? "https://api.anthropic.com/api/oauth/usage" : "https://chatgpt.com/backend-api/wham/usage";
+  if (provider === "anthropic") headers["anthropic-beta"] = "oauth-2025-04-20";
+  else { headers["User-Agent"] = "codex-cli"; if (entry.accountId) headers["ChatGPT-Account-Id"] = entry.accountId; }
+  return (await fetch(url, { headers, signal: AbortSignal.timeout(USAGE_TIMEOUT_MS) })).status;
+}
+
+async function reconcilePiCredentials(credentials: Record<string, string>, context: AccountCredentialContext): Promise<AccountCredentialResult> {
+  const provider = piAccountProvider(context);
+  if (!provider) return { credentials: normalizePiCredentials(credentials, context), status: "error", failure: "unsupported provider" };
+  const dir = materializePiAgentDir(credentials, context);
+  const authPath = join(dir, "auth.json");
+  let entry = readPiOauth(authPath, provider);
+  if (!entry) return { credentials: normalizePiCredentials(credentials, context), status: "needs-reauth", failure: "credential missing" };
+  try {
+    const runtime = await ModelRuntime.create({ authPath });
+    await runtime.getAuth(provider);
+    entry = readPiOauth(authPath, provider) ?? entry;
+    let status = await probePiIdentity(provider, entry);
+    if (status === 401 || status === 403) {
+      const oauth = runtime.getProvider(provider)?.auth.oauth;
+      if (!oauth) throw new Error("OAuth refresh unavailable");
+      entry = await oauth.refresh(entry, AbortSignal.timeout(30_000)) as PiOauth;
+      writePiOauth(authPath, provider, entry);
+      status = await probePiIdentity(provider, entry);
+    }
+    if ((status >= 200 && status < 300) || status === 429) return { credentials: credentialBag(entry, credentials), status: "ok" };
+    return { credentials: credentialBag(entry, credentials), status: "error", failure: `provider check HTTP ${status}` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const needsReauth = /invalid_grant|invalid_token|oauth refresh failed|refresh token/i.test(message);
+    return { credentials: credentialBag(entry, credentials), status: needsReauth ? "needs-reauth" : "error", failure: needsReauth ? "refresh rejected" : "provider check failed" };
+  }
 }
 
 registerHarness({
@@ -1097,12 +1137,21 @@ registerHarness({
   accounts: {
     label: "Pi account (terminal subscription login)",
     fields: [
-      { key: "accessToken", label: "Access token", secret: true, hint: "~/.pi/agent/auth.json → openai-codex.access (or a codex account's tokens.access_token)" },
-      { key: "refreshToken", label: "Refresh token", secret: true, hint: "~/.pi/agent/auth.json → openai-codex.refresh (codex: tokens.refresh_token)" },
-      { key: "accountId", label: "Account ID", hint: "~/.pi/agent/auth.json → openai-codex.accountId (codex: tokens.account_id)" },
+      { key: "access", label: "Access token", secret: true },
+      { key: "refresh", label: "Refresh token", secret: true },
+      { key: "expires", label: "Expiry (epoch ms)" },
+      { key: "accountId", label: "Account ID" },
     ],
-    env: (credentials) => ({ PI_CODING_AGENT_DIR: materializePiAgentDir(credentials) }),
-    email: (credentials) => emailFromJwt(credentials.accessToken ?? credentials.access),
+    normalize: normalizePiCredentials,
+    reconcile: reconcilePiCredentials,
+    readBack: (credentials, context) => {
+      const provider = piAccountProvider(context);
+      if (!provider) return undefined;
+      const entry = readPiOauth(join(materializePiAgentDir(credentials, context), "auth.json"), provider);
+      return entry ? credentialBag(entry, credentials) : undefined;
+    },
+    env: (credentials, context) => ({ PI_CODING_AGENT_DIR: materializePiAgentDir(credentials, context) }),
+    email: (credentials) => emailFromJwt(credentials.access),
     login: {
       command: ({ configDir, initialInput }) => piTerminalLoginCommand(configDir, initialInput),
       initialInput: ["/login openai-codex"],
@@ -1131,7 +1180,7 @@ registerHarness({
   usageAccounts: (accounts) => [
     { account: "ambient:pi:anthropic", probe: () => probePiUsage("anthropic") },
     { account: "ambient:pi", probe: () => probePiUsage("openai-codex") },
-    ...accounts.map((account) => ({ account: account.id, probe: () => probePiAccountUsage(account.credentials) })),
+    ...accounts.map((account) => ({ account: account.id, probe: () => probePiAccountUsage(account.credentials, { id: account.id, providers: account.providers ?? [] }) })),
   ],
   ambientUsageAccount: (agent) => (agent.model?.provider === "anthropic" ? "ambient:pi:anthropic" : "ambient:pi"),
 });

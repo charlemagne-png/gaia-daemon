@@ -1412,7 +1412,7 @@ async function probeClaudeUsage(): Promise<UsageProbeResult> {
 }
 
 async function probeClaudeAccountUsage(credentials: Record<string, string>): Promise<UsageProbeResult> {
-  const token = credentials.oauthToken;
+  const token = credentials.access;
   return token ? fetchAnthropicUsage(token) : { status: "none" };
 }
 
@@ -1488,14 +1488,15 @@ registerHarness({
     label: "Claude account",
     fields: [
       {
-        key: "oauthToken",
+        key: "access",
         label: "OAuth token",
         secret: true,
         placeholder: "sk-ant-oat01-...",
         hint: "In a terminal: CLAUDE_CONFIG_DIR=~/.claude-<name> claude setup-token — sign in as the OTHER account in the browser it opens, then paste the printed sk-ant-oat... token. The isolated config dir keeps the main keychain login untouched.",
       },
     ],
-    env: (credentials) => ({ CLAUDE_CODE_OAUTH_TOKEN: credentials.oauthToken ?? "" }),
+    normalize: (credentials) => ({ type: "oauth", access: credentials.access ?? credentials.oauthToken ?? credentials.accessToken ?? "", refresh: credentials.refresh ?? credentials.refreshToken ?? "", expires: String(Number(credentials.expires) || 0) }),
+    env: (credentials) => ({ CLAUDE_CODE_OAUTH_TOKEN: credentials.access ?? "" }),
     // No in-app Claude OAuth flow here: subscription account addition is via
     // Pi terminal login (`/login anthropic`) so Settings never opens Claude's
     // browser OAuth or asks for a pasted Claude approval code.

@@ -4,10 +4,13 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findHarness } from "../src/harness/spec.js";
-import { stripAnsi } from "../src/services/account-login.js";
+import { AccountLoginService, stripAnsi } from "../src/services/account-login.js";
 import "../src/harness/claude.js"; // side-effect: registers the claude spec
 import "../src/harness/codex.js"; // side-effect: registers the codex spec
 import "../src/harness/pi.js"; // side-effect: registers the pi spec
+
+const openAiContext = { id: "work-openai", providers: ["openai-codex"] };
+const anthropicContext = { id: "work-anthropic", providers: ["anthropic"] };
 
 function withGaiaHome(fn: (home: string) => void): void {
   const previous = process.env.GAIA_HOME;
@@ -93,9 +96,11 @@ test("codex login: credentials from the config-dir auth.json codex itself writes
     JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: { id_token: "id1", access_token: "at1", refresh_token: "rt1", account_id: "acct1" } }),
   );
   assert.deepEqual(codexLogin.credentials({ output: "Successfully logged in", configDir: dir }), {
+    type: "oauth",
     idToken: "id1",
-    accessToken: "at1",
-    refreshToken: "rt1",
+    access: "at1",
+    refresh: "rt1",
+    expires: "0",
     accountId: "acct1",
   });
 });
@@ -109,7 +114,7 @@ test("codex accounts.env: materializes CODEX_HOME/auth.json from the stored bag"
   withGaiaHome(() => {
     const env = findHarness("codex")?.accounts?.env;
     assert.ok(env);
-    const result = env({ idToken: "id1", accessToken: "at1", refreshToken: "rt1", accountId: "acct1" });
+    const result = env({ type: "oauth", idToken: "id1", access: "at1", refresh: "rt1", expires: "0", accountId: "acct1" }, openAiContext);
     assert.ok(result.CODEX_HOME);
     const written = JSON.parse(readFileSync(join(result.CODEX_HOME, "auth.json"), "utf8"));
     assert.equal(written.tokens.access_token, "at1");
@@ -122,11 +127,11 @@ test("codex accounts.env: never stomps a live-refreshed file with the SAME store
   withGaiaHome(() => {
     const env = findHarness("codex")?.accounts?.env;
     assert.ok(env);
-    const creds = { idToken: "id1", accessToken: "at1", refreshToken: "rt1", accountId: "acct1" };
-    const dir = env(creds).CODEX_HOME!;
+    const creds = { type: "oauth", idToken: "id1", access: "at1", refresh: "rt1", expires: "0", accountId: "acct1" };
+    const dir = env(creds, openAiContext).CODEX_HOME!;
     // Simulate codex's own in-place refresh of access_token, keeping the same refresh_token.
     writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { access_token: "REFRESHED", refresh_token: "rt1", account_id: "acct1" } }));
-    const again = env(creds).CODEX_HOME!;
+    const again = env(creds, openAiContext).CODEX_HOME!;
     assert.equal(again, dir);
     const stillThere = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
     assert.equal(stillThere.tokens.access_token, "REFRESHED", "a later spawn must not overwrite codex's own refreshed token");
@@ -137,11 +142,22 @@ test("codex accounts.env: re-materializes once the stored refresh_token actually
   withGaiaHome(() => {
     const env = findHarness("codex")?.accounts?.env;
     assert.ok(env);
-    env({ idToken: "id1", accessToken: "at1", refreshToken: "rt1", accountId: "acct1" });
-    const dir = env({ idToken: "id2", accessToken: "at2", refreshToken: "rt2", accountId: "acct1" }).CODEX_HOME!;
+    env({ type: "oauth", idToken: "id1", access: "at1", refresh: "rt1", expires: "0", accountId: "acct1" }, openAiContext);
+    const dir = env({ type: "oauth", idToken: "id2", access: "at2", refresh: "rt2", expires: "0", accountId: "acct1" }, openAiContext).CODEX_HOME!;
     const written = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
     assert.equal(written.tokens.access_token, "at2");
     assert.equal(written.tokens.refresh_token, "rt2");
+  });
+});
+
+test("pi accounts: legacy provider shapes normalize to one OAuth schema", () => {
+  const normalize = findHarness("pi")?.accounts?.normalize;
+  assert.ok(normalize);
+  assert.deepEqual(normalize({ oauthToken: "at", refreshToken: "rt", expires: "42" }, anthropicContext), {
+    type: "oauth", access: "at", refresh: "rt", expires: "42",
+  });
+  assert.deepEqual(normalize({ accessToken: "at", refreshToken: "rt", accountId: "acct" }, openAiContext), {
+    type: "oauth", access: "at", refresh: "rt", expires: "0", accountId: "acct",
   });
 });
 
@@ -149,7 +165,7 @@ test("pi accounts: env materializes an isolated PI_CODING_AGENT_DIR", () => {
   withGaiaHome(() => {
     const env = findHarness("pi")?.accounts?.env;
     assert.ok(env);
-    const result = env({ accessToken: "at1", refreshToken: "rt1", accountId: "acct1" });
+    const result = env({ type: "oauth", access: "at1", refresh: "rt1", expires: "0", accountId: "acct1" }, openAiContext);
     assert.ok(result.PI_CODING_AGENT_DIR);
     const written = JSON.parse(readFileSync(join(result.PI_CODING_AGENT_DIR, "auth.json"), "utf8"));
     assert.deepEqual(written, {
@@ -162,11 +178,11 @@ test("pi accounts: unchanged refresh token does not rewrite auth.json", () => {
   withGaiaHome(() => {
     const env = findHarness("pi")?.accounts?.env;
     assert.ok(env);
-    const creds = { accessToken: "at1", refreshToken: "rt1", accountId: "acct1" };
-    const dir = env(creds).PI_CODING_AGENT_DIR!;
+    const creds = { type: "oauth", access: "at1", refresh: "rt1", expires: "0", accountId: "acct1" };
+    const dir = env(creds, openAiContext).PI_CODING_AGENT_DIR!;
     // Simulate pi's own in-place refresh of the access token, keeping the same refresh token.
     writeFileSync(join(dir, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", refresh: "rt1", access: "REFRESHED", expires: 0, accountId: "acct1" } }));
-    const again = env(creds).PI_CODING_AGENT_DIR!;
+    const again = env(creds, openAiContext).PI_CODING_AGENT_DIR!;
     assert.equal(again, dir);
     const stillThere = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
     assert.equal(stillThere["openai-codex"].access, "REFRESHED", "a later spawn must not overwrite pi's own refreshed token");
@@ -177,9 +193,9 @@ test("pi accounts: changed refresh token does not stomp a live materialized auth
   withGaiaHome(() => {
     const env = findHarness("pi")?.accounts?.env;
     assert.ok(env);
-    const dir = env({ accessToken: "at1", refreshToken: "rt1", accountId: "acct1" }).PI_CODING_AGENT_DIR!;
-    writeFileSync(join(dir, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", refresh: "rt-live", access: "REFRESHED", expires: 0, accountId: "acct1" } }));
-    env({ accessToken: "at2", refreshToken: "rt2", accountId: "acct1" });
+    const dir = env({ type: "oauth", access: "at1", refresh: "rt1", expires: "0", accountId: "acct1" }, openAiContext).PI_CODING_AGENT_DIR!;
+    writeFileSync(join(dir, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", refresh: "rt-live", access: "REFRESHED", expires: 100, accountId: "acct1" } }));
+    env({ type: "oauth", access: "at2", refresh: "rt2", expires: "0", accountId: "acct1" }, openAiContext);
     const written = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
     assert.equal(written["openai-codex"].refresh, "rt-live");
   });
@@ -192,6 +208,28 @@ test("addAccount / listAccounts round-trip + duplicate throws", async () => {
     assert.equal(listAccounts().find((a) => a.id === "work")?.credentials.oauthToken, "sk-ant-oat01-z");
     assert.throws(() => addAccount({ id: "work", harness: "claude", credentials: {} }), /already exists/);
   });
+});
+
+test("reauth login replaces credentials in place", async () => {
+  const login = findHarness("pi")?.accounts?.login;
+  assert.ok(login);
+  const originalCommand = login.command;
+  const originalHome = process.env.GAIA_HOME;
+  const home = mkdtempSync(join(tmpdir(), "gaia-reauth-test-"));
+  process.env.GAIA_HOME = home;
+  const { addAccount, findAccount } = await import("../src/domain/accounts.js");
+  addAccount({ id: "existing", harness: "pi", providers: ["anthropic"], credentials: { type: "oauth", access: "old", refresh: "old-r", expires: "1" } });
+  login.command = ({ configDir }) => ({ argv: [process.execPath, "-e", `await Bun.write(${JSON.stringify(join(configDir, "auth.json"))}, JSON.stringify({anthropic:{type:"oauth",access:"new",refresh:"new-r",expires:42}}))`] });
+  try {
+    const service = new AccountLoginService();
+    const session = service.start("pi", undefined, "anthropic", "existing");
+    for (let n = 0; n < 100 && service.status(session.sessionId).status !== "done"; n++) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(service.status(session.sessionId).status, "done");
+    assert.equal(findAccount("existing")?.credentials.access, "new");
+  } finally {
+    login.command = originalCommand;
+    if (originalHome === undefined) delete process.env.GAIA_HOME; else process.env.GAIA_HOME = originalHome;
+  }
 });
 
 test("removeAccount true then false", async () => {

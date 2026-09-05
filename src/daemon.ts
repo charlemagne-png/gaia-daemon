@@ -27,6 +27,7 @@ import { DEFAULT_ROOM, ensureWorkspaceRoom, initWorkspace, isValidRoomId, liveMa
 import { setAgentDefaultRole, trashGlobalAgent } from "./domain/agents.js";
 import { listAgentRoles } from "./domain/roles.js";
 import { ensureAccountsFile } from "./domain/accounts.js";
+import { reconcileAccounts } from "./services/account-auth.js";
 import { RoomService, scanRoomActivity, type HomeWorkspaceRedirectRequest, type HomeWorkspaceRedirectResult } from "./services/room-service.js";
 import { playTurnCompletionSound } from "./services/turn-completion-sound.js";
 import { resolveTitleLlmAccount } from "./services/title-auth.js";
@@ -230,6 +231,8 @@ export class Daemon {
 
   /** Boot-time sweeps. Called once the server knows its base URL. */
   async boot(baseUrl: string): Promise<void> {
+    const accountResults = await reconcileAccounts();
+    for (const [id, result] of accountResults) if (result.status !== "ok") this.log(`account ${id}: ${result.status}${result.failure ? ` (${result.failure})` : ""}`);
     // The orphan-runner sweep must complete before anything can resume a pending
     // turn (scheduler tick, summon recovery, serviceFor from HTTP). Otherwise a
     // surviving runner from the previous daemon and the freshly resumed runner
@@ -1725,7 +1728,7 @@ function accountAuthPath(accountId: string | undefined): string | undefined {
   const accounts = harnessSpecFor(record.harness).accounts;
   const explicit = accounts?.authStoragePath?.(record.credentials);
   if (explicit) return explicit;
-  const env = accounts?.env(record.credentials);
+  const env = accounts?.env(record.credentials, { id: record.id, providers: record.providers ?? [] });
   const dir = env?.PI_CODING_AGENT_DIR;
   return dir ? join(dir, "auth.json") : undefined;
 }

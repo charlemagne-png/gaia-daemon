@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { accountsPath, ensureAccountsFile, findAccount, listAccounts, redactedAccounts, updateAccount } from "../src/domain/accounts.js";
+import { accountsPath, ensureAccountsFile, findAccount, listAccounts, redactedAccounts, replaceAccountCredentials, updateAccount } from "../src/domain/accounts.js";
 
 function withGaiaHome(fn: (home: string) => void): void {
   const previous = process.env.GAIA_HOME;
@@ -40,8 +40,7 @@ test("records round-trip + filtering", () => {
       accountsPath(),
       JSON.stringify({
         accounts: [
-          { id: "a1", harness: "claude", label: "Second", credentials: { oauthToken: "sk-ant-oat01-x" } },
-          { foo: 1 },
+          { id: "a1", harness: "claude", label: "Second", credentials: { oauthToken: "sk-ant-oat01-x", ignored: 42 } },
         ],
       }),
     );
@@ -51,6 +50,15 @@ test("records round-trip + filtering", () => {
     ]);
     assert.equal(findAccount("a1")?.credentials.oauthToken, "sk-ant-oat01-x");
     assert.equal(findAccount("nope"), undefined);
+  });
+});
+
+test("credential write-back persists redacted auth health", () => {
+  withGaiaHome(() => {
+    writeFileSync(accountsPath(), JSON.stringify({ accounts: [{ id: "a1", harness: "pi", credentials: { access: "old" } }] }));
+    replaceAccountCredentials("a1", { type: "oauth", access: "new", refresh: "r", expires: "42" }, undefined, { status: "needs-reauth", checkedAt: "2026-09-05T12:00:00.000Z", failure: "refresh rejected" });
+    assert.deepEqual(redactedAccounts(), [{ id: "a1", harness: "pi", authStatus: "needs-reauth", authCheckedAt: "2026-09-05T12:00:00.000Z", authFailure: "refresh rejected" }]);
+    assert.equal(findAccount("a1")?.credentials.access, "new");
   });
 });
 

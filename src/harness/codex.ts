@@ -36,7 +36,7 @@ import { missingBinaryError, spawnLineReader } from "./proc.js";
 import { configuredModelLabel, ModelLabel } from "./model-label.js";
 import { buildInlineSystemPrompt, buildTurnPromptFor, promptCacheKey } from "./prompt.js";
 import { agentRoster, buildPiTools } from "./tools.js";
-import { emailFromJwt, fetchChatGptUsage } from "./usage.js";
+import { emailFromJwt, expiryMsFromJwt, fetchChatGptUsage } from "./usage.js";
 
 // ---------------------------------------------------------------------------
 // Internal JSON-RPC client abstraction (injectable for tests)
@@ -1137,7 +1137,7 @@ interface CodexAuthTokens {
 function codexAccountDir(credentials: Record<string, string>): string {
   // OpenAI's own account_id is the natural stable key; hash the access token
   // as a fallback for a hand-pasted bag that omitted it.
-  const key = credentials.accountId || createHash("sha1").update(credentials.accessToken ?? credentials.refreshToken ?? "").digest("hex").slice(0, 16);
+  const key = credentials.accountId || createHash("sha1").update(credentials.access ?? credentials.refresh ?? "").digest("hex").slice(0, 16);
   return join(gaiaHome(), "codex-accounts", key);
 }
 
@@ -1149,8 +1149,8 @@ function materializeCodexHome(credentials: Record<string, string>): string {
     OPENAI_API_KEY: null,
     tokens: {
       id_token: credentials.idToken ?? "",
-      access_token: credentials.accessToken ?? "",
-      refresh_token: credentials.refreshToken ?? "",
+      access_token: credentials.access ?? "",
+      refresh_token: credentials.refresh ?? "",
       account_id: credentials.accountId ?? "",
     } satisfies CodexAuthTokens,
     last_refresh: new Date().toISOString(),
@@ -1188,7 +1188,7 @@ function readCodexLoginCredentials(configDir: string): Record<string, string> | 
   }
   const t = parsed?.tokens;
   if (!t?.access_token || !t?.refresh_token) return undefined;
-  return { idToken: t.id_token ?? "", accessToken: t.access_token, refreshToken: t.refresh_token, accountId: t.account_id ?? "" };
+  return { type: "oauth", idToken: t.id_token ?? "", access: t.access_token, refresh: t.refresh_token, expires: String(expiryMsFromJwt(t.access_token)), accountId: t.account_id ?? "" };
 }
 
 registerHarness({
@@ -1222,13 +1222,15 @@ registerHarness({
   accounts: {
     label: "Codex account",
     fields: [
-      { key: "accessToken", label: "Access token", secret: true, hint: "From that account's ~/.codex/auth.json → tokens.access_token" },
-      { key: "refreshToken", label: "Refresh token", secret: true, hint: "Same file → tokens.refresh_token" },
+      { key: "access", label: "Access token", secret: true },
+      { key: "refresh", label: "Refresh token", secret: true },
+      { key: "expires", label: "Expiry (epoch ms)" },
       { key: "idToken", label: "ID token", secret: true, hint: "Same file → tokens.id_token" },
       { key: "accountId", label: "Account ID", hint: "Same file → tokens.account_id" },
     ],
+    normalize: (credentials) => ({ type: "oauth", access: credentials.access ?? credentials.accessToken ?? "", refresh: credentials.refresh ?? credentials.refreshToken ?? "", expires: String(Number(credentials.expires) || expiryMsFromJwt(credentials.access ?? credentials.accessToken)), ...(credentials.idToken ? { idToken: credentials.idToken } : {}), ...(credentials.accountId ? { accountId: credentials.accountId } : {}) }),
     env: (credentials) => ({ CODEX_HOME: materializeCodexHome(credentials) }),
-    email: (credentials) => emailFromJwt(credentials.idToken),
+    email: (credentials) => emailFromJwt(credentials.idToken ?? credentials.access),
     // In-app login: plain `codex login` (browser-redirect flow) — the daemon
     // runs on the user's own machine, so codex opens the auth window in the
     // local browser itself (localhost callback); the printed URL is also

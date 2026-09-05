@@ -365,6 +365,17 @@ export interface AccountLoginSpec {
  * may only bind to accounts of their own harness (enforced at spawn, loudly).
  * Absent ⇒ this harness has no account concept: its agents always run on the
  * ambient login (keychain / config dir / env of the daemon). */
+export interface AccountCredentialContext {
+  id: string;
+  providers: string[];
+}
+
+export interface AccountCredentialResult {
+  credentials: Record<string, string>;
+  status: "ok" | "needs-reauth" | "error";
+  failure?: string;
+}
+
 export interface HarnessAccountsSpec {
   /** UI noun for one of this harness's accounts, e.g. "Claude account". */
   label: string;
@@ -372,7 +383,13 @@ export interface HarnessAccountsSpec {
   fields: AccountFieldDef[];
   /** Env merged into a bound agent's subprocess — e.g. claude's
    * CLAUDE_CODE_OAUTH_TOKEN, which its CLI honors over the keychain login. */
-  env(credentials: Record<string, string>): Record<string, string>;
+  env(credentials: Record<string, string>, context: AccountCredentialContext): Record<string, string>;
+  /** Canonical provider credential shape → migration/login/write-path seam. */
+  normalize?(credentials: Record<string, string>, context: AccountCredentialContext): Record<string, string>;
+  /** Refresh + least-privilege provider check → canonical write-back. */
+  reconcile?(credentials: Record<string, string>, context: AccountCredentialContext): Promise<AccountCredentialResult>;
+  /** Pull harness-native in-place refreshes back into the canonical store. */
+  readBack?(credentials: Record<string, string>, context: AccountCredentialContext): Record<string, string> | undefined;
   /** Best-effort identity extraction from an opaque credential bag. */
   email?(credentials: Record<string, string>): string | undefined;
   /** On-disk auth.json path for an account's materialized credential store,

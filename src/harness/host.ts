@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { env } from "../core/env.js";
 import { workspacePaths } from "../core/paths.js";
-import { accountsPath, findAccount } from "../domain/accounts.js";
+import { accountsPath, findAccount, replaceAccountCredentials } from "../domain/accounts.js";
 import { NO_SESSION_TO_COMPACT, type AgentDef, type AgentEvent, type CompactProgressUpdate, type CompactResult, type MessageAttachment, type Workspace } from "../core/types.js";
 import type { MemoryStore } from "../domain/memory.js";
 import { CircuitBreaker, defaultBreaker } from "./breaker.js";
@@ -556,6 +556,7 @@ export class RunnerHost implements AgentRuntime {
   }
 
   private async spawnChild(roomId: string): Promise<void> {
+    await this.prepareBoundAccount();
     this.childReady = false;
     this.launchSettled = false;
     // The install marker lets a later daemon's boot sweep find this child if we
@@ -685,11 +686,13 @@ export class RunnerHost implements AgentRuntime {
         this.activeChannel?.push(message.event);
         return;
       case "turn-end":
+        this.readBackBoundAccount();
         this.activeTurnEndedNormally = true;
         this.activeChannel?.close();
         this.settleTurn();
         return;
       case "turn-error":
+        this.readBackBoundAccount();
         this.failActive(new Error(message.message));
         this.settleTurn();
         return;
@@ -791,6 +794,29 @@ export class RunnerHost implements AgentRuntime {
     return childEnv;
   }
 
+  private async prepareBoundAccount(): Promise<void> {
+    const accountId = this.agent.account;
+    if (!accountId) return;
+    const record = findAccount(accountId);
+    if (!record) throw new Error(`Agent '${this.agent.id}' names unknown account '${accountId}'`);
+    const accounts = harnessSpecFor(this.options.harness).accounts;
+    if (!accounts?.reconcile) return;
+    const result = await accounts.reconcile(record.credentials, { id: record.id, providers: record.providers ?? [] });
+    replaceAccountCredentials(record.id, result.credentials, accounts.email?.(result.credentials), { status: result.status, checkedAt: new Date().toISOString(), failure: result.failure });
+    if (result.status === "needs-reauth") throw new Error(`Account '${record.id}' needs reauthentication; use Accounts → Reauthorize`);
+    if (result.status === "error") throw new Error(`Account '${record.id}' authentication check failed: ${result.failure ?? "unknown error"}`);
+  }
+
+  private readBackBoundAccount(): void {
+    const accountId = this.agent.account;
+    if (!accountId) return;
+    const record = findAccount(accountId);
+    if (!record) return;
+    const accounts = harnessSpecFor(this.options.harness).accounts;
+    const credentials = accounts?.readBack?.(record.credentials, { id: record.id, providers: record.providers ?? [] });
+    if (credentials) replaceAccountCredentials(record.id, credentials, accounts?.email?.(credentials));
+  }
+
   // Resolve the env for this agent's named account (AgentDef.account →
   // ~/.gaia/accounts.json → the harness spec's accounts.env). Uniform: the
   // record is an opaque bag only the harness's own declared wiring interprets —
@@ -803,7 +829,7 @@ export class RunnerHost implements AgentRuntime {
     const record = findAccount(accountId);
     if (!record) throw new Error(`Agent '${this.agent.id}' names account '${accountId}', which is not in ${accountsPath()}`);
     if (record.harness !== this.options.harness) throw new Error(`Agent '${this.agent.id}' (harness '${this.options.harness}') names account '${accountId}', which belongs to harness '${record.harness}'`);
-    return spec.accounts.env(record.credentials);
+    return spec.accounts.env(record.credentials, { id: record.id, providers: record.providers ?? [] });
   }
 
   // Test seam: the full child env for a (room, policy), resolving the bridge token

@@ -19,7 +19,7 @@ import { state } from "./state.js";
 /** @typedef {{ id: string, config: FileDescriptor[], persona: FileDescriptor[], memory: FileDescriptor[], files: FileDescriptor[] }} AgentGroup */
 /** @typedef {(string|number)[]} JsonPath */
 /** @typedef {{ key: string, hint: FieldHint, path: JsonPath }} FieldEntry */
-/** @typedef {{ id: string, harness: string, label?: string, email?: string, workspace?: string, providers?: string[] }} Account */
+/** @typedef {{ id: string, harness: string, label?: string, email?: string, workspace?: string, providers?: string[], authStatus?: "ok"|"needs-reauth"|"error"|"unknown", authCheckedAt?: string, authFailure?: string }} Account */
 /** @typedef {{ key: string, label: string }} AccountLoginVariant */
 /** @typedef {{ id: string, label?: string, login: boolean, loginVariants?: AccountLoginVariant[] }} AccountHarness */
 /** @typedef {{ accounts: Account[], harnesses: AccountHarness[] }} AccountsCatalog */
@@ -411,6 +411,8 @@ let loginLabelDrafts = {};
 let loginWorkspaceDrafts = {};
 /** @type {string} */
 let loginCodeDraft = "";
+/** @type {string|undefined} */
+let loginReplacingAccountId;
 /** @type {Record<string, { label: string, email: string }>} */
 let accountDrafts = {};
 
@@ -453,7 +455,8 @@ function applyLoginSession(session) {
   if (session.status === "done") {
     stopLoginPolling();
     loginSession = null;
-    accountsNotice = `account ${session.account?.id ?? session.harness} added`;
+    accountsNotice = loginReplacingAccountId ? `account ${session.account?.id ?? session.harness} reauthorized` : `account ${session.account?.id ?? session.harness} added`;
+    loginReplacingAccountId = undefined;
     markDirty("settings"); // reflect the cleared session/notice now — loadAccounts's own markDirty lands later, once the refetch resolves
     void loadAccounts();
     refreshAccountsCatalog();
@@ -462,27 +465,30 @@ function applyLoginSession(session) {
   if (session.status === "cancelled") {
     stopLoginPolling();
     loginSession = null;
+    loginReplacingAccountId = undefined;
   } else if (session.status === "error") {
     stopLoginPolling(); // kept in state (with .error) until the user hits Dismiss
   }
   markDirty("settings");
 }
 
-/** @param {string} harnessId @param {string | undefined} [variant] */
-async function startLogin(harnessId, variant) {
+/** @param {string} harnessId @param {string | undefined} [variant] @param {Account | undefined} [account] */
+async function startLogin(harnessId, variant, account) {
   if (loginSession) return; // only one active login session at a time
   accountsError = "";
   accountsNotice = "";
-  const label = (loginLabelDrafts[harnessId] ?? "").trim();
-  const workspace = (loginWorkspaceDrafts[harnessId] ?? "").trim();
+  const label = account?.label ?? (loginLabelDrafts[harnessId] ?? "").trim();
+  const workspace = account?.workspace ?? (loginWorkspaceDrafts[harnessId] ?? "").trim();
+  loginReplacingAccountId = account?.id;
   try {
     const body = await api("/api/accounts/login", {
       method: "POST",
-      body: JSON.stringify({ harness: harnessId, ...(label ? { label } : {}), ...(workspace ? { workspace } : {}), ...(variant ? { variant } : {}) }),
+      body: JSON.stringify({ harness: harnessId, ...(label ? { label } : {}), ...(workspace ? { workspace } : {}), ...(variant ? { variant } : {}), ...(account ? { accountId: account.id } : {}) }),
     });
     applyLoginSession(body.session);
     if (isActiveLoginStatus(body.session.status)) startLoginPolling(body.session.sessionId);
   } catch (error) {
+    loginReplacingAccountId = undefined;
     accountsError = error instanceof Error ? error.message : String(error);
     markDirty("settings");
   }
@@ -524,6 +530,7 @@ async function cancelLogin() {
 function dismissLoginError() {
   stopLoginPolling();
   loginSession = null;
+  loginReplacingAccountId = undefined;
   markDirty("settings");
 }
 
@@ -585,12 +592,15 @@ function AccountRow(account) {
   const emailText = account.email ? ` ${account.email}` : " email not recorded";
   const title = account.label || account.id;
   const idText = account.label ? `${account.id} · ` : "";
+  const harness = accountsCatalog?.harnesses.find((item) => item.id === account.harness);
+  const variant = harness?.loginVariants?.find((item) => account.providers?.includes(item.key))?.key;
+  const authText = account.authStatus === "ok" ? "authorized" : account.authStatus === "needs-reauth" ? "reauthorization required" : account.authStatus === "error" ? "check failed" : "not checked";
   return h(
     "div",
     { class: "account-row" },
     h("div", { class: "account-row-head" }, 
       h("strong", { text: title }), 
-      h("small", { class: "muted", text: `${idText}${emailText} · ${providers}` })
+      h("small", { class: account.authStatus === "needs-reauth" ? "settings2-error-line" : "muted", text: `${idText}${emailText} · ${providers} · ${authText}` })
     ),
     h(
       "div",
@@ -612,6 +622,7 @@ function AccountRow(account) {
         },
       }),
       h("button", { onclick: () => void saveAccount(account), text: "Save" }),
+      harness?.login ? h("button", { disabled: loginSession !== null, onclick: () => void startLogin(account.harness, variant, account), text: "Reauthorize" }) : null,
       h("button", { class: "settings2-row-remove", title: "remove this account", onclick: () => void removeAccount(account.id), text: "Remove" }),
     ),
   );
