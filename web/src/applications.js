@@ -14,6 +14,8 @@ const panels = new Map();
 let mounted = null;
 let fallbackRequested = false;
 let shellHidden = false;
+let observedRoomKey = "";
+let shellOpenRoomKey = "";
 
 /** Native adapters register logical renderer wiring as data.
  * @param {string} entry
@@ -27,6 +29,13 @@ export function registerApplicationPanel(entry, lifecycle, options) {
 /** Replace browser mirrors only from authoritative snapshot/catalog DTOs. */
 export function syncApplications() {
   const snapshot = /** @type {any} */ (state.snapshot);
+  const roomKey = applicationRoomKey(snapshot);
+  if (roomKey && observedRoomKey && roomKey !== observedRoomKey) {
+    shellOpenRoomKey = "";
+    shellHidden = false;
+    state.applications.launcherOpen = false;
+  }
+  if (roomKey) observedRoomKey = roomKey;
   const durable = snapshot?.room?.applications;
   state.applications.catalog = Array.isArray(snapshot?.applications?.applications) ? snapshot.applications.applications : state.applications.catalog;
   state.applications.instances = durable?.instances && typeof durable.instances === "object" ? durable.instances : {};
@@ -58,19 +67,25 @@ async function loadCatalog(workspaceId) {
 }
 
 export function openApplicationLauncher() {
+  syncApplications();
+  shellOpenRoomKey = applicationRoomKey(state.snapshot);
   shellHidden = false;
   state.applications.launcherOpen = true;
   markDirty("applications", "sidebar");
 }
 
 export function hideApplicationShell() {
+  shellOpenRoomKey = "";
   shellHidden = true;
   state.applications.launcherOpen = false;
   markDirty("applications", "sidebar");
 }
 
 export function isApplicationShellVisible() {
-  return !shellHidden && (state.applications.launcherOpen || Boolean(activeInstance()));
+  syncApplications();
+  return shellOpenRoomKey === applicationRoomKey(state.snapshot)
+    && !shellHidden
+    && (state.applications.launcherOpen || Boolean(activeInstance()));
 }
 
 /** @param {any} entry */
@@ -82,6 +97,7 @@ export async function openApplication(entry) {
   const adapter = panels.get(entry.manifest.panel.entry);
   if (!adapter) return setError(`No renderer registered for ${entry.manifest.name}`);
   state.applications.loading = true;
+  shellOpenRoomKey = applicationRoomKey(snapshot);
   shellHidden = false;
   state.applications.launcherOpen = false;
   markDirty("applications", "sidebar");
@@ -128,6 +144,7 @@ export async function closeActiveApplication() {
   try {
     const body = await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/application-instances/${encodeURIComponent(instance.instanceId)}`, { method: "DELETE" });
     adoptApplications(body.snapshot);
+    shellOpenRoomKey = "";
     shellHidden = true;
     state.applications.launcherOpen = false;
     markDirty("applications", "sidebar");
@@ -175,7 +192,9 @@ function renderApplications() {
   const root = $("#application-shell");
   if (!root) return;
   const instance = activeInstance();
-  const show = !shellHidden && (state.applications.launcherOpen || Boolean(instance));
+  const show = shellOpenRoomKey === applicationRoomKey(state.snapshot)
+    && !shellHidden
+    && (state.applications.launcherOpen || Boolean(instance));
   root.hidden = !show;
   root.closest(".main")?.classList.toggle("applications-open", show);
   if (!show) return unmountPanel();
@@ -218,6 +237,13 @@ function renderApplications() {
 function unmountPanel() {
   mounted?.lifecycle.unmount?.();
   mounted = null;
+}
+
+/** @param {any} snapshot */
+function applicationRoomKey(snapshot) {
+  return snapshot?.workspace?.id && snapshot?.room?.id
+    ? `${snapshot.workspace.id}:${snapshot.room.id}`
+    : "";
 }
 
 function requestId() {
