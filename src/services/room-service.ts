@@ -128,8 +128,6 @@ export interface RoomServiceOptions {
   settingsChanged?: (scope: "global" | "workspace") => Promise<void>;
   /** Optional title auth resolver for model-based room-title refinement. */
   titleLlmAccount?: (provider: string) => string | undefined;
-  /** Agent-turn settlement seam (macOS completion sound, parent wake). */
-  turnSettled?: (notice: { workspaceId: string; roomId: string; taskId: string; agentIds: string[]; status: "complete" | "error" | "cancelled"; settledAt: string }) => void;
   /** Test seam around the real safe Codex package loader. Production omits it. */
   petLoader?: (name: string) => Promise<unknown>;
 }

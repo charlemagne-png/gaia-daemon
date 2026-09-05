@@ -68,7 +68,6 @@ export class RoomUiMixin {
     } else {
       this.emit({ type: "task-end", workspaceId: this.workspaceId, roomId: this.roomId, task });
     }
-    this.options.turnSettled?.({ workspaceId: this.workspaceId, roomId: this.roomId, taskId: task.id, agentIds: task.targets, status, settledAt: task.endedAt });
     if (status === "complete") this.maybeAutoCompact(task);
     this.maybeAutoHeal(task);
     void this.emitRoomsChanged();

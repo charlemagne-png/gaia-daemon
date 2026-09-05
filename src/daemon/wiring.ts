@@ -23,7 +23,6 @@ import { findModelWithAlias } from "../harness/model-aliases.js";
 import { harnessSpecFor } from "../harness/spec.js";
 import { RoomService } from "../services/room-service.js";
 import { MemoryService } from "../services/memory-service.js";
-import { playTurnCompletionSound } from "../services/turn-completion-sound.js";
 import type { ConsolidateLlm } from "../services/consolidate.js";
 import { SummonCoordinator } from "../services/summons.js";
 import type { HarnessBridge } from "../services/bridge.js";
@@ -158,7 +157,6 @@ async function createService(host: WiringHost, workspaceId: string, resolvedRoom
     // rewrite agent.json, and only a service rebuild reaches the runner
     // subprocesses (they snapshot the config at spawn).
     settingsChanged: (scope) => host.applySettingsChange(scope, workspaceId),
-    turnSettled: (notice) => playTurnCompletionSound(notice),
     harnessHost: host.bridge ? (opts) => host.bridge!.hostFor(workspaceId, opts) : undefined,
     // Closures resolve host.scheduler per call: services built before boot()
     // (or after dispose) answer gracefully instead of binding a stale ref.

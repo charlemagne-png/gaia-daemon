@@ -491,6 +491,7 @@ export class RoomTurnLoop {
       if (producedOutput) await this.service.captureEpisode(target, text, partialReply, cancelled ? "cancelled" : "complete", turn.details, channel);
       this.service.fireHooks("postTurn", {
         agentId: target,
+        taskId: task.id,
         reply: partialReply.slice(0, HOOK_TEXT_CAP),
         outcome: cancelled ? "cancelled" : "complete",
         tools: [...new Set((turn.details.tools ?? []).map((tool) => tool.toolName))],
