@@ -378,7 +378,6 @@ const COMMANDS: Record<string, CommandHandler> = {
       : Promise.resolve(""),
   teleport: (service, command) => (command.type === "teleport" ? service.runTeleportCommand(command.on) : Promise.resolve("")),
   scaffold: async () => "usage: /scaffold <task>",
-  queue: async () => "usage: /queue <text> — park an idea on the durable queue without steering the running turn",
   "thanks-dario": (service, command) => (command.type === "thanks-dario" ? service.runThanksDarioCommand(command.sub) : Promise.resolve("")),
   // DogMode (/dog + its discipline verbs) is a bundled command-plugin, not a
   // registry entry — see plugins/defaults/dog-mode.mjs + sendMessage()'s
@@ -694,11 +693,6 @@ export class RoomService {
     await this.init();
 
     let command: RoomCommand = parseCommand(text);
-    if (command.type === "queue" && command.text) {
-      text = command.text;
-      command = { type: "message", text };
-      options = { ...options, queue: true };
-    }
     if (command.type === "berserk" && !command.off) {
       const proclamation = await this.runBerserkCommand(false);
       const event: RoomEvent = { id: newRoomEventId(), timestamp: new Date().toISOString(), author: "system", text: proclamation };
