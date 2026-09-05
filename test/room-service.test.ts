@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGENT_DIALOGUE_MAX_HOPS, RoomService, type RoomMemoryHooks } from "../src/services/room-service.js";
 import { RoomHandle } from "../src/domain/rooms.js";
+import { redirectHomeWorkspace, type HomeWorkspaceRedirectRequest, type HomeWorkspaceRedirectResult } from "../src/domain/fenced/home-workspace-pin.js";
 import { MemoryStore } from "../src/domain/memory.js";
 import { DEFAULTS } from "../src/core/config.js";
 import { readJson } from "../src/core/store.js";
@@ -117,6 +118,8 @@ async function makeService(options: {
   tools?: string[];
   /** Durable queue entries to seed before RoomService.open() runs boot drain. */
   queued?: QueuedMessage[];
+  workspaceId?: string;
+  homeWorkspaceRedirect?: (request: HomeWorkspaceRedirectRequest) => Promise<HomeWorkspaceRedirectResult | undefined>;
 } = {}): Promise<{ service: RoomService; workspace: Workspace; root: string; events: UiEvent[]; runtimes: Map<string, ReturnType<typeof scriptedRuntime>> }> {
   const root = await mkdtemp(join(tmpdir(), "gaia-svc-"));
   const roomId = options.roomId ?? "default";
@@ -158,7 +161,7 @@ async function makeService(options: {
   const script = options.script ?? (() => [{ type: "text-delta", delta: "hello from agent" } as AgentEvent]);
   const runtimes = new Map<string, ReturnType<typeof scriptedRuntime>>();
   const service = await RoomService.open({
-    workspaceId: "ws1",
+    workspaceId: options.workspaceId ?? "ws1",
     workspace,
     roomId,
     memoryStore: new MemoryStore(),
@@ -168,6 +171,7 @@ async function makeService(options: {
     ...(options.summonHost ? { summonHost: options.summonHost } : {}),
     ...(options.llm ? { llm: options.llm } : {}),
     ...(options.titleLlmAccount ? { titleLlmAccount: options.titleLlmAccount } : {}),
+    ...(options.homeWorkspaceRedirect ? { homeWorkspaceRedirect: options.homeWorkspaceRedirect } : {}),
     runtimeFactory: (agent) => {
       const runtime = options.runtimeFactory ? (options.runtimeFactory(agent, workspace) as ReturnType<typeof scriptedRuntime>) : scriptedRuntime(agent, script);
       runtimes.set(agent.id, runtime);
@@ -483,6 +487,61 @@ test("auto title drift re-checks every eighth user message with the title accoun
   assert.equal(state.title, "GaiaVoice Room Naming");
   assert.equal(state.titleSource, "model");
   assert.equal(state.titleDrift, undefined);
+});
+
+test("human message to a foreign-home agent redirects instead of running locally", async () => {
+  const requests: HomeWorkspaceRedirectRequest[] = [];
+  const { service, workspace, root, events, runtimes } = await makeService({
+    agents: ["gaia", "artus"],
+    homeWorkspaceRedirect: async (request) => {
+      requests.push(request);
+      return { workspaceId: "fenyx", roomId: "chat-fenyx", workspaceName: "FENYX", roomRef: "FX1" };
+    },
+  });
+  workspace.agents.artus.homeWorkspace = "FENYX";
+
+  const task = await service.sendMessage("@artus chase this lead", { origin: "human" });
+
+  assert.equal(task.status, "complete");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.agent.id, "artus");
+  assert.equal(runtimes.get("artus")?.sends, 0);
+  assert.ok(events.some((event) => event.type === "room-redirect" && event.workspaceId === "fenyx" && event.roomId === "chat-fenyx"));
+  const transcript = await (await RoomHandle.open(root, "default")).eventsFrom(0);
+  assert.match(transcript.events.at(-1)?.text ?? "", /Artus is homed in FENYX → continuing in #FX1/);
+});
+
+test("home redirect resolves case-insensitive workspace name, reuses agent room, and forwards", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gaia-home-pin-"));
+  const source = { id: "source", path: join(root, "source"), name: "Source", lastOpenedAt: "", isInitialized: true };
+  const home = { id: "fenyx", path: join(root, "fenyx"), name: "FENYX", lastOpenedAt: "", isInitialized: true };
+  const sent: string[] = [];
+  const broadcasts: UiEvent[] = [];
+  const agent = makeAgent("artus", root);
+  agent.homeWorkspace = "fenyx";
+
+  const redirect = await redirectHomeWorkspace({
+    registry: {
+      list: async () => [source, home],
+      find: async (id) => id === source.id ? source : id === home.id ? home : undefined,
+    },
+    scanRooms: async () => [{ id: "chat-artus", path: join(home.path, ".gaia", "rooms", "chat-artus"), isCurrent: false, agent: "artus" }],
+    serviceFor: async (workspaceId, roomId) => {
+      assert.equal(workspaceId, "fenyx");
+      assert.equal(roomId, "chat-artus");
+      return {
+        roomId,
+        sendMessage: async (message) => { sent.push(message); },
+        getSnapshot: async () => ({ room: { id: roomId, path: "", refCode: "FX2", events: [], queue: [], activeRoles: {}, thinkingOverrides: {}, agentCursors: {} } }),
+        listRooms: async () => [],
+      };
+    },
+    broadcast: (event) => broadcasts.push(event),
+  }, { agent, text: "chase this lead", fromWorkspaceId: "source", fromRoomId: "chat-source" });
+
+  assert.deepEqual(redirect, { workspaceId: "fenyx", roomId: "chat-artus", workspaceName: "FENYX", roomRef: "FX2" });
+  assert.deepEqual(sent, ["chase this lead"]);
+  assert.ok(broadcasts.some((event) => event.type === "rooms" && event.workspaceId === "fenyx"));
 });
 
 test("@mentions route to multiple agents in order; unknown mentions fail at send time", async () => {

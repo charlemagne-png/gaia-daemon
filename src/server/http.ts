@@ -21,6 +21,7 @@ import type { MemoryAction } from "../domain/memory.js";
 import { parseContextDietOverrides } from "../domain/context-diet.js";
 import { scaffoldGlobalAgent } from "../domain/agents.js";
 import { installGitGuard } from "../domain/git-guard.js";
+import { homeWorkspaceRedirectDeliveryScope } from "../domain/fenced/home-workspace-pin.js";
 import { findAccount, redactedAccounts, removeAccount, updateAccount } from "../domain/accounts.js";
 import { authenticate, createUser, issueSessionToken, listUsers } from "../domain/users.js";
 import { harnessSpecs, type GaiaTool } from "../harness/spec.js";
@@ -527,6 +528,7 @@ export class GaiaWebServer {
       targets: [call.info.agentId],
       channel: "voice",
       recordUserMessage: turn.kind === "user",
+      ...(turn.kind === "user" ? { origin: "human" as const } : {}),
       thinking: call.info.thinking,
     });
     if (streaming) beginSse(response);
@@ -628,7 +630,7 @@ export class GaiaWebServer {
     for (const client of this.clients) void this.deliverSse(client, event, payload, ambient);
   }
   private async deliverSse(client: SseClient, event: UiEvent, payload: string, ambient: boolean): Promise<void> {
-    const scoped = event as { workspaceId?: string; roomId?: string };
+    const scoped = homeWorkspaceRedirectDeliveryScope(event) ?? (event as { workspaceId?: string; roomId?: string });
     if (!ambient) {
       if (client.workspaceId && scoped.workspaceId && client.workspaceId !== scoped.workspaceId) return;
       if (client.roomId && scoped.roomId && client.roomId !== scoped.roomId) return;

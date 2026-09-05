@@ -15,12 +15,13 @@ import { workspacePaths } from "../core/paths.js";
 import { recoverPendingTurns as runPendingTurnRecovery } from "../services/fenced/auto-wake-watchdog.js";
 import type { Workspace } from "../core/types.js";
 import { ensureWorkspaceRoom, liveMaxSummonsPerRoom, loadWorkspace } from "../domain/workspace.js";
+import { redirectHomeWorkspace } from "../domain/fenced/home-workspace-pin.js";
 import { workspaceRoomRefs, type RoomRef } from "../domain/workspace-index.js";
 import { MemoryStore } from "../domain/memory.js";
 import { findAccount } from "../domain/accounts.js";
 import { findModelWithAlias } from "../harness/model-aliases.js";
 import { harnessSpecFor } from "../harness/spec.js";
-import { RoomService } from "../services/room-service.js";
+import { RoomService, scanRoomActivity } from "../services/room-service.js";
 import { MemoryService } from "../services/memory-service.js";
 import type { ConsolidateLlm } from "../services/consolidate.js";
 import { SummonCoordinator } from "../services/summons.js";
@@ -156,6 +157,7 @@ async function createService(host: WiringHost, workspaceId: string, resolvedRoom
     // rewrite agent.json, and only a service rebuild reaches the runner
     // subprocesses (they snapshot the config at spawn).
     settingsChanged: (scope) => host.applySettingsChange(scope, workspaceId),
+    homeWorkspaceRedirect: (request) => redirectHomeWorkspace({ registry: host.registry, serviceFor: (id, roomId) => serviceFor(host, id, roomId), scanRooms: scanRoomActivity, broadcast: host.broadcast }, request),
     harnessHost: host.bridge ? (opts) => host.bridge!.hostFor(workspaceId, opts) : undefined,
     // Closures resolve host.scheduler per call: services built before boot()
     // (or after dispose) answer gracefully instead of binding a stale ref.

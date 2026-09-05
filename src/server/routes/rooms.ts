@@ -218,6 +218,7 @@ async function roomMessages(ctx: RouteContext): Promise<boolean> {
   const membership = await service.roomHumans();
   if (await service.roomMembershipRestricted() && !membership.includes(human?.id ?? "")) { json(ctx.response, 403, { error: "Not a member of this room." }); return true; }
   const task = await service.sendMessage(textValue, {
+    origin: "human",
     ...(attachments ? { attachments } : {}),
     ...(queue ? { queue } : {}),
     ...(human ? { human: { id: human.id, label: human.displayName } } : {}),

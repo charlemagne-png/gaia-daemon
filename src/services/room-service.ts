@@ -54,6 +54,7 @@ import type {
 } from "../core/types.js";
 import { DEFAULTS, DEFAULT_CONTEXT_WARN_TOKENS } from "../core/config.js";
 import { displayEventText, type RenderCap } from "../domain/render-cap.js";
+import { redirectPinnedAgentMessage, type HomeWorkspaceRedirectRequest, type HomeWorkspaceRedirectResult } from "../domain/fenced/home-workspace-pin.js";
 import { estimateTokens } from "../core/tokens.js";
 import type { ResumeEpoch } from "./resume-epoch.js";
 import { deriveRoomTitle, isAutoRoomId, newRoomEventId, normalizeRoomState, normalizeRoomTitle, RoomHandle } from "../domain/rooms.js";
@@ -131,6 +132,8 @@ export interface RoomServiceOptions {
   titleLlmAccount?: (provider: string) => string | undefined;
   /** Test seam around the real safe Codex package loader. Production omits it. */
   petLoader?: (name: string) => Promise<unknown>;
+  /** Daemon-owned foreign-workspace forwarding; this room stays source writer. */
+  homeWorkspaceRedirect?: (request: HomeWorkspaceRedirectRequest) => Promise<HomeWorkspaceRedirectResult | undefined>;
 }
 
 /** What /schedule needs from the scheduler (daemon-provided, workspace-bound). */
@@ -167,6 +170,8 @@ export interface SendMessageOptions {
    * Cmd/Ctrl+Enter shortcut). Steer-by-default otherwise injects a message
    * aimed at the busy agent into its live turn. */
   queue?: boolean;
+  /** Explicit human entry points may redirect home-pinned agents. */
+  origin?: "human";
   channel?: "text" | "voice";
   /** Synthetic prompts (call greetings, silence nudges) skip the user event. */
   recordUserMessage?: boolean;
@@ -786,6 +791,8 @@ export class RoomService {
       for (const target of targets) {
         if (!this.workspace.agents[target]) throw new Error(this.unknownAgentMessage(target));
       }
+      const redirected = await redirectPinnedAgentMessage(this, text, targets, options);
+      if (redirected) return redirected;
     }
 
     const task = this.createTask(text, targets);
