@@ -265,7 +265,7 @@ function RoomTree() {
   return h(
     "div",
     { class: "room-tree" },
-    visible.map((room) => RoomNode(room, childrenOf, 0)),
+    state.snapshot ? GroupedRooms(visible, childrenOf) : visible.map((room) => RoomNode(room, childrenOf, 0)),
     remaining > 0
       ? h("button", {
           class: "nav-action rooms-more",
@@ -277,6 +277,67 @@ function RoomTree() {
         })
       : null,
   );
+}
+
+
+/**
+ * Day label for sidebar grouping. Calendar days, local time.
+ * @param {number|undefined} timestamp
+ */
+function dayLabel(timestamp) {
+  if (!timestamp) return "older";
+  const date = new Date(timestamp);
+  const now = new Date();
+  const startOfDay = (/** @type {Date} */ d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+/**
+ * Top-level rooms grouped by day, then by project label when present. Ordering
+ * stays daemon/newest-first; a project cluster anchors where its newest room
+ * appears. Subrooms remain nested inside RoomNode.
+ * @param {RoomSummary[]} visible
+ * @param {Map<string|null, RoomSummary[]>} childrenOf
+ * @returns {HTMLElement[]}
+ */
+function GroupedRooms(visible, childrenOf) {
+  /** @type {{ label: string, groups: { project: string|null, rooms: RoomSummary[] }[], byProject: Map<string, { project: string|null, rooms: RoomSummary[] }> }[]} */
+  const days = [];
+  let day = days[0];
+  for (const room of visible) {
+    const label = dayLabel(room.lastActivity);
+    if (!day || day.label !== label) {
+      day = { label, groups: [], byProject: new Map() };
+      days.push(day);
+    }
+    if (room.project) {
+      let group = day.byProject.get(room.project);
+      if (!group) {
+        group = { project: room.project, rooms: [] };
+        day.byProject.set(room.project, group);
+        day.groups.push(group);
+      }
+      group.rooms.push(room);
+    } else {
+      day.groups.push({ project: null, rooms: [room] });
+    }
+  }
+  return days.flatMap((section) => [
+    h("div", { class: "room-day-head", text: section.label }),
+    ...section.groups.map((group) =>
+      group.project
+        ? h(
+            "div",
+            { class: "room-project-group" },
+            h("div", { class: "room-project-head", title: `project · ${group.project}`, text: group.project }),
+            group.rooms.map((room) => RoomNode(room, childrenOf, 0)),
+          )
+        : RoomNode(group.rooms[0], childrenOf, 0),
+    ),
+  ]);
 }
 
 /**

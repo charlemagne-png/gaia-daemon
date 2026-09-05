@@ -142,3 +142,26 @@
   .process-layout { grid-template-columns: minmax(0, 1fr); }
   .process-list { max-height: 36vh; border-right: 0; border-bottom: 1px solid var(--border); }
 }
+
+/* Sidebar room grouping restored from pre-upstream web parity: day → project. */
+.room-day-head {
+  margin: 10px 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.room-project-group {
+  display: grid;
+  gap: 2px;
+  margin: 3px 0 7px 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.room-project-head {
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
