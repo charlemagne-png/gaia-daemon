@@ -2,7 +2,7 @@
 // child room nests under its parent (via room.parentRoomId) and is collapsed
 // by default behind a twisty. Nesting is unbounded — grandchildren summon
 // their own children.
-import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, renameRoom, reorderWorkspaces, selectRoom, setRoomFavorite, setWorkspaceFavorite } from "./actions.js";
+import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, openSubroom, renameRoom, reorderWorkspaces, selectRoom, setRoomFavorite, setWorkspaceFavorite, summonAgentInRoom } from "./actions.js";
 import { UI } from "./glyphs.js";
 import { closeSidebarOverlay } from "./chrome.js";
 import { $, h } from "./dom.js";
@@ -550,6 +550,41 @@ function RoomContextMenu() {
       },
       text: room.favorite ? "Remove favorite" : "Add favorite",
     }),
+    h("button", {
+      type: "button",
+      onclick: () => {
+        close();
+        void openSubroom(room.id);
+      },
+      text: "Open subroom",
+    }),
+    h("button", {
+      type: "button",
+      onclick: () => {
+        state.roomContextMenu = { ...open, summonOpen: !open.summonOpen };
+        markDirty("sidebar");
+      },
+      text: open.summonOpen ? "Summon agent ▾" : "Summon agent ▸",
+    }),
+    open.summonOpen
+      ? h(
+          "div",
+          { class: "room-menu-sub" },
+          (snapshot.agents ?? []).map((agent) =>
+            h("button", {
+              type: "button",
+              onclick: () => {
+                close();
+                void summonAgentInRoom(room.id, agent.id);
+              },
+              text:
+                agent.displayName && agent.displayName.toLowerCase() !== agent.id.toLowerCase()
+                  ? `@${agent.id} · ${agent.displayName}`
+                  : `@${agent.id}`,
+            }),
+          ),
+        )
+      : null,
   );
 }
 
