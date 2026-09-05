@@ -186,6 +186,8 @@ export default {
     const editing = state.notes.find((note) => note.id === ui.editing);
     return {
       title: "Corner notes",
+      placement: "corner",
+      corner: "br",
       description: "Global across rooms.",
       forms: [
         { action: "add", label: "Add note", fields: [{ name: "text", label: "Quick add", type: "text" }] },
