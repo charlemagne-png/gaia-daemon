@@ -1,5 +1,5 @@
 // FENCED FORK FEATURE — agent home-workspace pin configuration + redirect.
-// Owning commits: 0dafdde + restoration commit.
+// Owning commits: 0dafdde + 4054c2d.
 // Rollback: inline config normalization in domain/agents.ts; remove redirect hooks.
 import type { AgentDef, RoomEvent, Snapshot, Task, UiEvent, Workspace, WorkspaceRecord } from "../../core/types.js";
 import { deriveRoomTitle, newRoomEventId, RoomHandle } from "../rooms.js";

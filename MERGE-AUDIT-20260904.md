@@ -42,7 +42,7 @@
 | bookmarks/checkpoints | PRESENT | `RoomState.bookmarks`/`RoomBookmark` → `RoomHandle.setBookmark` → snapshot/summary → `AgentInput.checkpoints` → prompt block |
 | `/queue` + pause | PRESENT | `commands.ts` parse → durable `QueuedMessage.paused` + `RoomService.drain` skip |
 | `/note` | PRESENT | `commands.ts` parse → `RoomHandle.addNote` → snapshot room notes |
-| home-workspace pin | PRESENT | `AgentDef.homeWorkspace` type/domain parse preserved; daemon redirect seam requires follow-up hardening |
+| home-workspace pin | RESTORED | `4054c2d` → fenced config + human source routing → daemon-owned name/id lookup, target-room create/reuse + forward → source-scoped redirect delivery |
 | GaiaVoice/dictation | PRESENT | voice state/types + `web/src/voice-control.js` + STT commands/transcribe services |
 | turn-completion sound | PRESENT | `RoomServiceOptions.turnSettled` → `RoomUiMixin.settleTask` → `daemon/wiring.ts` → `playTurnCompletionSound` |
 | payload guard 1MB/24MB | PRESENT | `core/http.readRawBody(maxBytes)` + upload/transcribe caps |
