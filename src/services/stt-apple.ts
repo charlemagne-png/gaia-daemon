@@ -1,7 +1,7 @@
 // apple — macOS on-device dictation ("local Siri"): SFSpeechRecognizer via a
 // tiny Swift helper, compiled once on first use and cached. Zero network, zero
-// keys, zero per-clip API latency. Registered as one more STT engine in the
-// uniform registry (transcribe.ts) — the shared path never learns it exists.
+// keys, zero per-clip API latency. Registration lives in transcribe.ts as
+// engine DATA; this module exports the implementation only.
 //
 // Pipeline per clip:
 //   1. ffmpeg decodes whatever the recorder produced (webm/opus, mp4, …) to
@@ -20,7 +20,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { registerSttEngine, type SttContext, type SttResult } from "./transcribe.js";
+import type { SttContext, SttResult } from "./transcribe.js";
 
 // ---------------------------------------------------------------------------
 // Swift helper source. Embedded as a string (the daemon is a compiled bun
@@ -255,9 +255,3 @@ export async function appleTranscribe(context: SttContext): Promise<SttResult> {
     rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }
-
-registerSttEngine({
-  id: "apple",
-  label: "Apple dictation (on-device Siri, local + free)",
-  transcribe: appleTranscribe,
-});
