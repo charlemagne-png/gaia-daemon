@@ -245,12 +245,12 @@ export interface SummonDelivery {
   deliver: "note" | "turn";
   /** Parent-room agent re-invoked with the result (deliver: "turn"). */
   callerAgentId?: string;
+  /** One contract for every child turn: `running` until its result + wake are
+   * durably accepted by the parent, then `delivered`. */
   status: "running" | "delivered";
+  /** Stable identity of the current child-turn settlement. */
+  deliveryId: string;
   launchedAt: string;
-  /** Most recent resumed turn's durable parent-delivery contract. */
-  resumeStatus?: "running" | "delivered";
-  /** Unique epoch for the resumed turn; stale watchers cannot close newer work. */
-  resumeStartedAt?: string;
 }
 
 /** A user-named checkpoint pinned to one transcript event — a durable

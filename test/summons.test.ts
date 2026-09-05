@@ -104,8 +104,7 @@ async function makeWorkspace(extraAgents: Record<string, AgentDef> = {}): Promis
 function fakeRoom(reply: string): SummonRoomAccess & {
   sent: string[];
   delivered: { from: string; reply: string; delivery: SummonResultDelivery }[];
-  markedDelivered: number;
-  markedResume: string[];
+  markedDeliveryIds: string[];
   settle: (status?: string, error?: string) => void;
 } {
   const listeners = new Set<(event: SummonTaskEvent) => void>();
@@ -113,8 +112,7 @@ function fakeRoom(reply: string): SummonRoomAccess & {
   const room = {
     sent: [] as string[],
     delivered: [] as { from: string; reply: string; delivery: SummonResultDelivery }[],
-    markedDelivered: 0,
-    markedResume: [] as string[],
+    markedDeliveryIds: [] as string[],
     settle(status = "complete", error?: string) {
       task.status = status;
       task.error = error;
@@ -145,11 +143,8 @@ function fakeRoom(reply: string): SummonRoomAccess & {
     async deliverAgentResult(from: string, reply: string, delivery: SummonResultDelivery) {
       room.delivered.push({ from, reply, delivery });
     },
-    async markSummonDelivered() {
-      room.markedDelivered += 1;
-    },
-    async markSummonResumeDelivered(token: string) {
-      room.markedResume.push(token);
+    async markSummonDeliverySettled(deliveryId: string) {
+      room.markedDeliveryIds.push(deliveryId);
     },
     async broadcastRoomsChanged() {},
   };
@@ -181,7 +176,7 @@ test("summonAndWait creates a linked child room and returns the worker's reply",
   assert.equal(state.summon, undefined); // no delivery record without a deliver mode
 });
 
-test("background summon never blocks: launch resolves first, then the result is delivered as a caller turn", async () => {
+test("fresh summon settles through one funnel and posts back with a parent wake", async () => {
   const { workspace, path } = await makeWorkspace();
   const child = fakeRoom("scouting report: all clear");
   const parent = fakeRoom("");
@@ -208,7 +203,7 @@ test("background summon never blocks: launch resolves first, then the result is 
   assert.equal(parent.delivered[0].delivery.childRoomId, roomId);
   assert.equal(parent.delivered[0].delivery.failed, false);
   assert.equal(parent.delivered[0].delivery.triggerTarget, "gaia"); // the subagent callback re-invokes the caller
-  assert.equal(child.markedDelivered, 1);
+  assert.deepEqual(child.markedDeliveryIds, ["initial"]);
   assert.equal(coordinator.runningChildren().length, 0);
 });
 
@@ -226,7 +221,7 @@ test("a failed worker turn is delivered loudly, never swallowed", async () => {
   assert.equal(parent.delivered[0].delivery.failed, true); // rendered as a "⚠️ FAILED" collapsed header
   assert.match(parent.delivered[0].reply, /sandbox exploded/);
   assert.equal(parent.delivered[0].delivery.triggerTarget, undefined); // note mode: no turn trigger
-  assert.equal(child.markedDelivered, 1); // delivered (the failure IS the result)
+  assert.deepEqual(child.markedDeliveryIds, ["initial"]); // delivered (the failure IS the result)
 });
 
 test("summon suggests substring and near-match agent ids in the unknown-agent error", async () => {
@@ -341,10 +336,10 @@ test("recoverUndelivered re-arms a stranded summon and delivers its surviving re
   assert.equal(parent.delivered.length, 1);
   assert.match(parent.delivered[0].reply, /recovered result/);
   assert.equal(parent.delivered[0].delivery.triggerTarget, "gaia");
-  assert.equal(child.markedDelivered, 1);
+  assert.deepEqual(child.markedDeliveryIds, ["initial"]);
 });
 
-test("concurrent resumes of one lane produce one parent delivery", async () => {
+test("resumed turn enters the settlement funnel once under a double-settle", async () => {
   const { workspace, path } = await makeWorkspace();
   const childRoomId = "terry-resumed";
   await mkdir(join(workspace.roomsDir, childRoomId), { recursive: true });
@@ -368,16 +363,16 @@ test("concurrent resumes of one lane produce one parent delivery", async () => {
     coordinator.resume(childRoomId, child, "second follow-up"),
   ]);
   child.settle();
-  for (let i = 0; i < 100 && parent.delivered.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  await Promise.all([coordinator.settleChildTurn(childRoomId), coordinator.settleChildTurn(childRoomId)]);
 
   assert.equal(parent.delivered.length, 1);
-  assert.equal(child.markedResume.length, 1);
+  assert.equal(child.markedDeliveryIds.length, 1);
   const state = normalizeRoomState(await readJson(workspacePaths.roomState(path, childRoomId)));
-  assert.equal(state.summon?.resumeStatus, "running", "fake close does not mutate disk; epoch remains restart-recoverable");
-  assert.ok(state.summon?.resumeStartedAt);
+  assert.equal(state.summon?.status, "running", "fake close leaves the contract restart-recoverable");
+  assert.equal(child.markedDeliveryIds[0], state.summon?.deliveryId);
 });
 
-test("restart recovery delivers a durably stamped resumed turn", async () => {
+test("boot recovery replays an undelivered child-turn result", async () => {
   const { workspace, path } = await makeWorkspace();
   const childRoomId = "terry-resume-recovery";
   await mkdir(join(workspace.roomsDir, childRoomId), { recursive: true });
@@ -388,10 +383,9 @@ test("restart recovery delivers a durably stamped resumed turn", async () => {
     summon: {
       agentId: "terry",
       deliver: "note",
-      status: "delivered",
+      status: "running",
+      deliveryId: "delivery-recovered",
       launchedAt: new Date().toISOString(),
-      resumeStatus: "running",
-      resumeStartedAt: "2026-09-05T12:00:00.000Z#1",
     },
   });
   const child = fakeRoom("survived restart");
@@ -404,7 +398,7 @@ test("restart recovery delivers a durably stamped resumed turn", async () => {
 
   assert.equal(parent.delivered.length, 1);
   assert.match(parent.delivered[0].reply, /survived restart/);
-  assert.deepEqual(child.markedResume, ["2026-09-05T12:00:00.000Z#1"]);
+  assert.deepEqual(child.markedDeliveryIds, ["delivery-recovered"]);
 });
 
 test("recoverUndelivered skips delivered records and non-summon rooms", async () => {

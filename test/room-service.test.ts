@@ -1675,7 +1675,7 @@ test("auto-compact: a turn ending above the context threshold queues a /compact 
   assert.equal(compactCalls, 1, "no auto-compact loop after the pass");
 });
 
-test("deliver:note queues one durable wake behind an active parent turn", async () => {
+test("settlement funnel dedupes a double-settle and queues one durable parent wake", async () => {
   let release!: () => void;
   let started!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });

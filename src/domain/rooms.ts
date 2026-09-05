@@ -404,15 +404,22 @@ function summonDeliveryFrom(value: unknown): SummonDelivery | undefined {
   if (typeof value.agentId !== "string" || !value.agentId.trim()) return undefined;
   const deliver = value.deliver === "turn" ? "turn" : value.deliver === "note" ? "note" : undefined;
   if (!deliver) return undefined;
-  const resumeStatus = value.resumeStatus === "running" || value.resumeStatus === "delivered" ? value.resumeStatus : undefined;
+  // Legacy resumeStatus/resumeStartedAt records collapse into the same
+  // settlement contract as initial turns. No caller needs a resume branch.
+  const legacyResumeRunning = value.resumeStatus === "running";
+  const status = legacyResumeRunning || value.status !== "delivered" ? "running" : "delivered";
+  const legacyResumeId = typeof value.resumeStartedAt === "string" && value.resumeStartedAt ? value.resumeStartedAt : "resume-legacy";
   return {
     agentId: value.agentId,
     deliver,
     ...(typeof value.callerAgentId === "string" && value.callerAgentId.trim() ? { callerAgentId: value.callerAgentId } : {}),
-    status: value.status === "delivered" ? "delivered" : "running",
+    status,
+    deliveryId: typeof value.deliveryId === "string" && value.deliveryId
+      ? value.deliveryId
+      : legacyResumeRunning
+        ? legacyResumeId
+        : "initial",
     launchedAt: typeof value.launchedAt === "string" ? value.launchedAt : new Date().toISOString(),
-    ...(resumeStatus ? { resumeStatus } : {}),
-    ...(resumeStatus && typeof value.resumeStartedAt === "string" ? { resumeStartedAt: value.resumeStartedAt } : {}),
   };
 }
 

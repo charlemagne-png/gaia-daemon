@@ -533,9 +533,14 @@ export class Daemon {
       // (single-writer rule) — same serviceFor the summon coordinator uses.
       roomPeer: (roomId) => this.serviceFor(workspaceId, roomId),
       homeWorkspaceRedirect: (request) => this.redirectHomeWorkspace(request),
-      // Every room uses this shared post-WAL callback: root, subroom, summon,
-      // scheduler, and future room kinds all notify without harness branches.
-      turnSettled: playTurnCompletionSound,
+      // Every room uses this shared post-WAL callback. Child lanes enter one
+      // coordinator settlement funnel; non-child rooms are a cheap no-op.
+      turnSettled: (notice) => {
+        playTurnCompletionSound(notice);
+        void this.coordinatorFor(workspaceId)
+          .then((coordinator) => coordinator.settleChildTurn(notice.roomId))
+          .catch((error) => console.warn(`[gaia] child settlement for '${notice.roomId}' failed: ${error instanceof Error ? error.message : String(error)}`));
+      },
       // Same reload the settings-file save route uses: /model + /thinking
       // rewrite agent.json, and only a service rebuild reaches the runner
       // subprocesses (they snapshot the config at spawn).

@@ -73,7 +73,6 @@ import type { EpisodeCapture } from "./memory-service.js";
 import { formatDreamProposal } from "./consolidate.js";
 import type { ConsolidateLlm, ConsolidateLlmInput, ConsolidateResult } from "./consolidate.js";
 import { allowSummonForTurn, effectiveTrust, type SummonHost, type SummonResultDelivery } from "./summons.js";
-import type { ResumeEpoch } from "./resume-epoch.js";
 import { HOOK_TEXT_CAP, runHooks, type HookEvent } from "./hooks.js";
 import { MonadEngine } from "./monad.js";
 import { activateSetup, deactivateMonad, discoverSetups } from "./setups.js";
@@ -1546,22 +1545,12 @@ export class RoomService {
     }
   }
 
-  /** Mark this (summon child) room's durable delivery record as delivered —
-   * called by the coordinator AFTER the result landed in the parent room, so
-   * a crash in between re-delivers instead of losing the result. */
-  async markSummonDelivered(): Promise<void> {
+  /** Close exactly the child-turn settlement that reached its parent. A stale
+   * settle cannot close a newer turn's contract. */
+  async markSummonDeliverySettled(deliveryId: string): Promise<void> {
     await this.init();
     await this.room.updateState((state) => {
-      if (state.summon) state.summon.status = "delivered";
-    });
-  }
-
-  /** Close exactly the resumed-turn delivery contract that settled. */
-  async markSummonResumeDelivered(token: ResumeEpoch): Promise<void> {
-    await this.init();
-    await this.room.updateState((state) => {
-      if (state.summon?.resumeStartedAt !== token) return;
-      state.summon.resumeStatus = "delivered";
+      if (state.summon?.deliveryId === deliveryId) state.summon.status = "delivered";
     });
   }
 
