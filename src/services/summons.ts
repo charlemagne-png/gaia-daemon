@@ -149,8 +149,9 @@ export interface SummonRoomAccess {
    * — nudge that caller agent to react (steer its running turn, else a fresh
    * turn). Never a queued "user →" bubble. */
   deliverAgentResult(fromAgentId: string, reply: string, delivery: SummonResultDelivery): Promise<void>;
-  /** Arm this CHILD room's next delivery through its resident state writer. */
-  armSummonDelivery(deliveryId: string): Promise<boolean>;
+  /** Arm this CHILD room's next delivery through its resident state writer.
+   * expectedDeliveryId permits a sealed running contract to gain a successor. */
+  armSummonDelivery(deliveryId: string, expectedDeliveryId?: string): Promise<boolean>;
   /** Close exactly one CHILD turn's durable settlement contract. */
   markSummonDeliverySettled(deliveryId: string): Promise<void>;
   /** Best-effort model refinement for a machine-owned title already seeded on
@@ -247,9 +248,9 @@ async function inspectWorker(rootDir: string, roomId: string, agentId: string): 
 
 export interface SummonOptions {
   /** Deliver the worker's result back into the parent room when it settles:
-   *  "note" — appended as a message from the worker (human-visible, no turn);
-   *  "turn" — the note PLUS a queued turn for callerAgentId (the subagent
-   *  callback: the calling agent is re-invoked with the result).
+   *  "note" — result note PLUS a queued turn for the parent's active agent;
+   *  "turn" — result note PLUS a queued turn for callerAgentId (falling back
+   *  to the parent's active agent when that caller is unavailable).
    *  Omitted → no delivery; the caller consumes the settled promise itself
    *  (summonAndWait: monad steps, the sanitize reviewer, scheduled runs). */
   deliver?: "note" | "turn";
@@ -289,8 +290,6 @@ export interface SummonHost {
  * see SummonRoomAccess.runCancelCommand) and the summon fails loudly instead
  * of leaving an orphaned turn running. */
 export const SUMMON_TIMEOUT_MS = 30 * 60_000; // 30 minutes
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function levenshteinDistance(left: string, right: string): number {
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -394,6 +393,10 @@ export class SummonCoordinator implements SummonHost {
   private readonly completions = new Map<string, Promise<unknown>>();
   /** The one settlement funnel, deduped per child room. */
   private readonly settling = new Map<string, Promise<SettledOutcome | undefined>>();
+  /** Delivery identity whose settled outcome is being observed. A resume that
+   * arrives after this seal receives a successor identity instead of letting
+   * the predecessor publish stale output under the new turn's receipt. */
+  private readonly sealed = new Map<string, string>();
 
   constructor(
     private readonly workspace: Workspace,
@@ -560,7 +563,6 @@ export class SummonCoordinator implements SummonHost {
         .map((child) => this.completions.get(child.roomId))
         .filter((completion): completion is Promise<unknown> => completion !== undefined);
       if (completions.length > 0) await Promise.allSettled(completions);
-      else if (direct.length > 0) await sleep(10);
       await room.waitForSettled();
       if (this.runningChildren(roomId).length === 0 && !(await room.hasPendingWork())) return;
     }
@@ -649,27 +651,39 @@ export class SummonCoordinator implements SummonHost {
     if (!initial.summon || !initial.parentRoomId || initial.summon.status !== "running") return undefined;
 
     const child = await this.serviceForRoom(roomId);
-    await this.waitForDelegatedWork(child, roomId);
-    const outcome = await this.settledOutcome(child, roomId, initial.summon.agentId);
+    let lastOutcome: SettledOutcome | undefined;
+    for (;;) {
+      await this.waitForDelegatedWork(child, roomId);
 
-    // A resume can land while the prior settle is inspecting output. Always
-    // close/deliver the latest still-pending identity; stale work cannot mark it.
-    const state = await handle.state();
-    const record = state.summon;
-    const parentRoomId = state.parentRoomId;
-    if (!record || !parentRoomId || record.status !== "running") return outcome;
-    const deliveryId = record.deliveryId;
-    const parent = await this.serviceForRoom(parentRoomId);
-    await parent.deliverAgentResult(record.agentId, outcome.reply, {
-      childRoomId: roomId,
-      failed: outcome.failed,
-      deliveryId,
-      ...(record.deliver === "turn" && record.callerAgentId && !outcome.cancelled ? { triggerTarget: record.callerAgentId } : {}),
-    });
-    await child.markSummonDeliverySettled(deliveryId);
-    this.running.delete(roomId);
-    this.notifyParentRoomsChanged(parentRoomId);
-    return outcome;
+      // Seal BEFORE observing the outcome. A resume before this point merges
+      // into the still-settling turn; one after it mints a successor contract.
+      const state = await handle.state();
+      const record = state.summon;
+      const parentRoomId = state.parentRoomId;
+      if (!record || !parentRoomId || record.status !== "running") return lastOutcome;
+      const deliveryId = record.deliveryId;
+      this.sealed.set(roomId, deliveryId);
+      const outcome = await this.settledOutcome(child, roomId, record.agentId);
+      lastOutcome = outcome;
+
+      const parent = await this.serviceForRoom(parentRoomId);
+      await parent.deliverAgentResult(record.agentId, outcome.reply, {
+        childRoomId: roomId,
+        failed: outcome.failed,
+        deliveryId,
+        ...(record.deliver === "turn" && record.callerAgentId && !outcome.cancelled ? { triggerTarget: record.callerAgentId } : {}),
+      });
+      await child.markSummonDeliverySettled(deliveryId);
+      if (this.sealed.get(roomId) === deliveryId) this.sealed.delete(roomId);
+
+      // markSummonDeliverySettled is identity-checked. A post-seal resume left
+      // a newer running id behind; loop it through this same funnel.
+      const latest = await handle.state();
+      if (latest.summon?.status === "running" && latest.summon.deliveryId !== deliveryId) continue;
+      this.running.delete(roomId);
+      this.notifyParentRoomsChanged(parentRoomId);
+      return outcome;
+    }
   }
 
   /** Boot → replay every undelivered child settlement through settleChildTurn. */
@@ -717,12 +731,14 @@ export class SummonCoordinator implements SummonHost {
 
     let deliveryId = state.summon.deliveryId;
     let armed = false;
-    if (state.summon.status === "delivered") {
+    const sealedDeliveryId = this.sealed.get(roomId);
+    if (state.summon.status === "delivered" || sealedDeliveryId === state.summon.deliveryId) {
       deliveryId = newId("delivery");
       // RoomService owns this room's cached RoomHandle. Arming through that
       // writer prevents sendMessage's next state write from restoring stale
-      // `delivered:initial` state over the new contract.
-      armed = await room.armSummonDelivery(deliveryId);
+      // state over the new contract. A sealed running identity may only be
+      // replaced by its exact successor.
+      armed = await room.armSummonDelivery(deliveryId, sealedDeliveryId);
     }
     this.running.set(roomId, {
       roomId,
@@ -732,7 +748,9 @@ export class SummonCoordinator implements SummonHost {
       untrusted: state.summonUntrusted === true,
     });
     try {
-      await room.sendMessage(message, { recordUserMessage: true });
+      // Summon identity is immutable routing data. Mutable activeAgent and
+      // mentions inside the message cannot flip a resumed lane's executor.
+      await room.sendMessage(message, { targets: [state.summon.agentId], recordUserMessage: true });
     } catch (error) {
       if (armed) {
         this.running.delete(roomId);

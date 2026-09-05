@@ -1419,14 +1419,10 @@ export class RoomService {
     if (!this.activeTask) void this.drain();
   }
 
-  /** Deliver a background worker's result into this room (the summon callback):
-   * append it as a COLLAPSED, summon-labeled note authored by the worker, then
-   * — deliver:"turn" — nudge the caller agent to continue (Claude-Code subagent
-   * style). The nudge STEERS the caller's running turn if it has one, else it
-   * runs a fresh turn; either way the caller reads the full result from the note
-   * (loaded as context past its cursor) and no misleading "user →" bubble is
-   * created. Durable: the note is on disk before we nudge, and the nudge itself
-   * rides the durable queue when it can't run now. */
+  /** Deliver a background worker's result into this room: append one collapsed
+   * worker note, then durably queue the explicit caller (deliver:"turn") or
+   * current active agent (deliver:"note" and fallback). The callback reads the
+   * note from transcript context; no synthetic user bubble exists. */
   async deliverAgentResult(fromAgentId: string, reply: string, delivery: SummonResultDelivery): Promise<void> {
     await this.init();
     const deliveryId = `${delivery.childRoomId}:${delivery.deliveryId ?? "initial"}`;
@@ -1516,12 +1512,6 @@ export class RoomService {
     await this.emitRoomsChanged();
   }
 
-  /** Resolves when the room has FULLY settled: no running task, no durable
-   * pending turn, an empty queue — stable across two consecutive checks
-   * (init() resumes a prior process's turn asynchronously, so a single
-   * idle observation right after open can be a lie). Unlike waitForIdle
-   * (one task), this covers everything the room is still going to run —
-   * the summon-recovery wait. */
   /** True while a queued message or durable pending-turn marker still exists — i.e. the room
    * will run again without outside input (auth-retry requeue etc.). */
   async hasPendingWork(): Promise<boolean> {
@@ -1529,28 +1519,38 @@ export class RoomService {
     return Boolean(this.activeTask || this.queuedTasks.length > 0 || (await this.room.state()).pendingTurn != null);
   }
 
+  /** Event-driven full settlement: no task, pending WAL, or runnable queue.
+   * Subscribe before inspecting state so init/resume/drain transitions cannot
+   * hide in a check→subscribe race. No quiescence polling. */
   async waitForSettled(): Promise<void> {
     await this.init();
-    let stable = 0;
     for (;;) {
-      if (this.activeTask) {
-        stable = 0;
-        await this.waitForIdle();
-      }
+      let wake!: () => void;
+      const changed = new Promise<void>((resolve) => { wake = resolve; });
+      const unsubscribe = this.subscribe((event) => {
+        if (event.type === "task-start" || event.type === "task-end" || event.type === "task-error") wake();
+      });
       const state = await this.room.state();
-      const settled = !this.activeTask && !state.pendingTurn && (state.queue?.length ?? 0) === 0;
-      stable = settled ? stable + 1 : 0;
-      if (stable >= 2) return;
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (!this.activeTask && !state.pendingTurn && (state.queue?.filter((entry) => !entry.paused).length ?? 0) === 0) {
+        unsubscribe();
+        return;
+      }
+      if (!this.activeTask && state.queue?.some((entry) => !entry.paused)) void this.drain();
+      await changed;
+      unsubscribe();
     }
   }
 
-  /** Re-arm a delivered child through this room's resident state writer. */
-  async armSummonDelivery(deliveryId: string): Promise<boolean> {
+  /** Re-arm a delivered child, or replace the exact sealed running identity
+   * with its successor, through this room's resident state writer. */
+  async armSummonDelivery(deliveryId: string, expectedDeliveryId?: string): Promise<boolean> {
     await this.init();
     let armed = false;
     await this.room.updateState((state) => {
-      if (!state.summon || state.summon.status !== "delivered") return;
+      if (!state.summon) return;
+      const delivered = state.summon.status === "delivered";
+      const sealed = state.summon.status === "running" && expectedDeliveryId !== undefined && state.summon.deliveryId === expectedDeliveryId;
+      if (!delivered && !sealed) return;
       state.summon.status = "running";
       state.summon.deliveryId = deliveryId;
       armed = true;

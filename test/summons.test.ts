@@ -438,6 +438,38 @@ test("resumed turn enters the settlement funnel once under a double-settle", asy
   assert.equal(child.markedDeliveryIds[0], state.summon?.deliveryId);
 });
 
+test("resume pins execution to summon.agentId despite mutable activeAgent", async () => {
+  const { workspace, path } = await makeWorkspace();
+  const childRoomId = "terry-agent-pin";
+  await mkdir(join(workspace.roomsDir, childRoomId), { recursive: true });
+  await writeJsonAtomic(workspacePaths.roomState(path, childRoomId), {
+    activeRoles: {},
+    agentCursors: {},
+    activeAgent: "gaia",
+    parentRoomId: "default",
+    summon: {
+      agentId: "terry",
+      deliver: "turn",
+      callerAgentId: "gaia",
+      status: "delivered",
+      deliveryId: "initial",
+      launchedAt: new Date().toISOString(),
+    },
+  });
+  const child = fakeRoom("resumed by terry");
+  let targets: string[] | undefined;
+  child.sendMessage = async (_text, options) => {
+    targets = options.targets;
+    return { id: "pin", status: "running" };
+  };
+  child.armSummonDelivery = async () => true;
+  const coordinator = new SummonCoordinator(workspace, path, async () => child, async () => 8, () => {});
+
+  await coordinator.resume(childRoomId, child, "@gaia this mention must not flip the lane");
+
+  assert.deepEqual(targets, ["terry"]);
+});
+
 test("boot recovery replays an undelivered child-turn result", async () => {
   const { workspace, path } = await makeWorkspace();
   const childRoomId = "terry-resume-recovery";
