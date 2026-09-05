@@ -54,7 +54,7 @@ import { capabilitiesFor, contextWindowFor, findHarness, harnessIdFor, nativeCom
 import { readOptional, renderAttachmentLines, renderRoomTranscript } from "../../harness/prompt.js";
 import { readUserNameSetting } from "../user-name.js";
 import { HELP_TEXT, SLASH_COMMANDS, hasExplicitMention, mentionedAgents, parseCommand, planMentionRoute, validateThinkingLevel, type SlashCommand } from "../commands.js";
-import { loadCommandPlugins, pluginStateKey, type CommandPlugin, type PluginContext, type PluginPanel, type PluginResult } from "../plugins.js";
+import { loadedCommandPlugins, loadCommandPlugins, pluginStateKey, type CommandPlugin, type PluginContext, type PluginPanel, type PluginResult } from "../plugins.js";
 import { SANITIZE_REVIEWER_ID, buildSanitizePrompt, parseSanitizeProposal, type SanitizeContext } from "../sanitize.js";
 import { applyEventToDetails, finalizeInterruptedTools, runAgentTurn } from "../turns.js";
 import { ContextPolicyStore } from "../context-policy-store.js";
@@ -133,7 +133,7 @@ export class RoomCommandsMixin {
    * object under each of its keys, and every hook below (panel/prompt/
    * renderCap/turnStart) must run ONCE per plugin, not once per alias. */
   async distinctPlugins(): Promise<CommandPlugin[]> {
-    return [...new Set((await this.pluginsPromise).values())];
+    return loadedCommandPlugins(await this.pluginsPromise);
   }
 
   /** Runs a local command-plugin's .run(), tolerating a thrown/rejected plugin
@@ -251,6 +251,55 @@ export class RoomCommandsMixin {
       current.pluginState = { ...(current.pluginState ?? {}), ...updates };
     });
     state.pluginState = { ...(state.pluginState ?? {}), ...updates };
+  }
+
+
+  async pluginRoomMetadataPolicy(text: string): Promise<void> {
+    const state = await this.room.state();
+    for (const plugin of await this.distinctPlugins()) {
+      if (!plugin.roomMetadataPolicy) continue;
+      try {
+        const key = pluginStateKey(plugin);
+        const nextState = await plugin.roomMetadataPolicy({
+          homedir: homedir(),
+          roomId: this.roomId,
+          workspaceRoot: this.workspace.rootDir,
+          state: state.pluginState?.[key],
+          title: state.title,
+          titleSource: state.titleSource,
+          imported: state.imported,
+          event: "post-user-commit",
+          text,
+          recentEvents: (limit: number) => this.room.recentEvents(limit),
+          setAutoTitle: async (expected, title, source = "model") => {
+            const nextTitle = normalizeRoomTitle(title);
+            if (!nextTitle) return false;
+            let changed = false;
+            await this.room.updateState((current: any) => {
+              if (current.imported || current.titleSource === "manual") return;
+              if (expected.title !== undefined && current.title !== expected.title) return;
+              if (expected.titleSource !== undefined && current.titleSource !== expected.titleSource) return;
+              current.title = nextTitle;
+              current.titleSource = source;
+              changed = true;
+            });
+            if (changed) await (this as any).emitRoomsChanged();
+            return changed;
+          },
+          llm: this.options.llm
+            ? (input) => this.options.llm!((this as any).withTitleLlmAccount(input))
+            : undefined,
+        });
+        if (nextState !== undefined) {
+          await this.room.updateState((current: any) => {
+            current.pluginState ??= {};
+            current.pluginState[key] = nextState;
+          });
+        }
+      } catch (error) {
+        console.warn(`[plugins] roomMetadataPolicy ${pluginStateKey(plugin)}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   /** Idle-path fallback for an unrecognized /command: the sendMessage seam

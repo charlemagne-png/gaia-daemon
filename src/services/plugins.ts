@@ -12,6 +12,8 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import type { RoomEvent } from "../core/types.js";
+import type { ConsolidateLlmInput } from "./consolidate.js";
 import { pathToFileURL } from "node:url";
 import { bundledDir, globalPaths } from "../core/paths.js";
 
@@ -96,12 +98,25 @@ export interface PluginResult {
   targets?: string[];
 }
 
+export interface RoomMetadataPolicyContext {
+  homedir: string;
+  roomId: string;
+  workspaceRoot: string;
+  state?: Record<string, unknown>;
+  title?: string;
+  titleSource?: string;
+  imported?: string;
+  recentEvents(limit: number): Promise<RoomEvent[]>;
+  setAutoTitle(expected: { title?: string; titleSource?: string }, title: string, source?: "auto" | "model"): Promise<boolean>;
+  llm?(input: ConsolidateLlmInput): Promise<string>;
+}
+
 export interface CommandPlugin {
   /** One command name, or several aliases/verbs this SAME plugin owns (e.g. a
    * persona-register plugin with a master toggle plus a handful of discipline
    * verbs). Every name maps to this one plugin object; `ctx.command` in
    * `run()` tells you which one fired. */
-  command: string | readonly string[];
+  command?: string | readonly string[];
   /** Key RoomState.pluginState is namespaced under and panel/prompt/renderCap/
    * turnStart are deduplicated by, for a plugin owning several command names
    * (see pluginStateKey). Defaults to the first `command` name. */
@@ -120,6 +135,7 @@ export interface CommandPlugin {
    * the plugin's persisted state (e.g. to expire a transient flag); returning
    * undefined leaves it untouched. Never blocks or mutates the turn itself. */
   turnStart?(ctx: PluginContext): Record<string, unknown> | undefined | Promise<Record<string, unknown> | undefined>;
+  roomMetadataPolicy?(ctx: RoomMetadataPolicyContext & { event: "post-user-commit"; text: string }): Record<string, unknown> | void | Promise<Record<string, unknown> | void>;
 }
 
 /** RoomState.pluginState / panel-prompt-renderCap-turnStart dedup key for a
@@ -127,11 +143,18 @@ export interface CommandPlugin {
  * first (or only) `command` name. Exported so room-service.ts uses the exact
  * same key everywhere a plugin's own state is read or written. */
 export function pluginStateKey(plugin: Pick<CommandPlugin, "command" | "id">): string {
-  return plugin.id ?? (typeof plugin.command === "string" ? plugin.command : plugin.command[0]);
+  if (plugin.id) return plugin.id;
+  return typeof plugin.command === "string" ? plugin.command : plugin.command?.[0] ?? "plugin";
 }
 
 function pluginCommandNames(plugin: CommandPlugin): string[] {
+  if (!plugin.command) return [];
   return typeof plugin.command === "string" ? [plugin.command] : [...plugin.command];
+}
+
+const loadedPluginsByMap = new WeakMap<Map<string, CommandPlugin>, CommandPlugin[]>();
+export function loadedCommandPlugins(map: Map<string, CommandPlugin>): CommandPlugin[] {
+  return loadedPluginsByMap.get(map) ?? [...new Set(map.values())];
 }
 
 /** Bundled defaults directory: shipped inside the install itself (checkout:
@@ -156,6 +179,7 @@ function userCommandPluginsDir(): string {
  * makes the WHOLE plugin skip — never a partial registration. */
 export async function loadCommandPlugins(): Promise<Map<string, CommandPlugin>> {
   const plugins = new Map<string, CommandPlugin>();
+  const loaded: CommandPlugin[] = [];
   for (const dir of [bundledCommandPluginsDir(), userCommandPluginsDir()]) {
     let files: string[];
     try {
@@ -171,10 +195,12 @@ export async function loadCommandPlugins(): Promise<Map<string, CommandPlugin>> 
         const mod = await import(pathToFileURL(path).href);
         const candidate = mod?.default;
         const commandOk =
+          candidate?.command === undefined ||
           typeof candidate?.command === "string" ||
           (Array.isArray(candidate?.command) && candidate.command.length > 0 && candidate.command.every((c: unknown) => typeof c === "string" && c));
-        if (!candidate || !commandOk || typeof candidate.run !== "function") {
-          console.warn(`[plugins] skipped ${file}: invalid plugin (needs a default export with string|string[] .command and function .run)`);
+        const hookOk = typeof candidate?.run === "function" || typeof candidate?.panel === "function" || typeof candidate?.prompt === "function" || typeof candidate?.renderCap === "function" || typeof candidate?.turnStart === "function" || typeof candidate?.roomMetadataPolicy === "function";
+        if (!candidate || !commandOk || !hookOk) {
+          console.warn(`[plugins] skipped ${file}: invalid plugin (needs a default export with a command hook or room hook)`);
           continue;
         }
         const plugin = candidate as CommandPlugin;
@@ -184,11 +210,13 @@ export async function loadCommandPlugins(): Promise<Map<string, CommandPlugin>> 
           console.warn(`[plugins] skipped ${file}: duplicate command(s) "${dupes.join(", ")}"`);
           continue;
         }
+        loaded.push(plugin);
         for (const name of names) plugins.set(name, plugin);
       } catch (error) {
         console.warn(`[plugins] skipped ${file}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
+  loadedPluginsByMap.set(plugins, loaded);
   return plugins;
 }

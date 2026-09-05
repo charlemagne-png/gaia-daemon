@@ -1,12 +1,10 @@
 import { newId } from "../../core/ids.js";
 import { DEFAULTS } from "../../core/config.js";
 import type { AgentEvent, PetProgressStatus, Task, UiEvent } from "../../core/types.js";
-import { deriveRoomTitle, isAutoRoomId, normalizeRoomTitle } from "../../domain/rooms.js";
 import { HOOK_TEXT_CAP, runHooks, type HookEvent } from "../hooks.js";
 import { applyEventToDetails } from "../turns.js";
 import type { ConsolidateLlmInput } from "../consolidate.js";
 
-const TITLE_DRIFT_EVERY = 8;
 
 export class RoomUiMixin {
   [key: string]: any;
@@ -210,119 +208,19 @@ export class RoomUiMixin {
     }
   }
 
-  /** Give an auto-created room (a `chat-<slug>` id) a display title from its
-   * first human message. We do what Claude/Codex-style chat UIs effectively do:
-   * show a cheap local title immediately, then (best-effort) ask the same
-   * daemon LLM surface used for consolidation/compact to refine it into a short
-   * human label. Manual renames set `titleSource: manual`, and that state is the
-   * lock: background title jobs never overwrite it. */
   async maybeAutoTitle(text: string): Promise<void> {
-    if (this.incognito || !isAutoRoomId(this.roomId)) return;
-    const state = await this.room.state();
-    if (state.title || state.imported || state.titleSource === "manual") return;
-    const fallback = deriveRoomTitle(text);
-    if (!fallback) return;
-
-    await this.room.updateState((current: any) => {
-      if (!current.title && !current.imported && current.titleSource !== "manual") {
-        current.title = fallback;
-        current.titleSource = "auto";
-      }
-    });
-    await this.emitRoomsChanged();
-
-    if (this.options.llm) void this.refineAutoTitle(text, fallback);
+    if (this.incognito) return;
+    await this.pluginRoomMetadataPolicy(text);
   }
 
   withTitleLlmAccount(input: ConsolidateLlmInput): ConsolidateLlmInput {
     const provider = input.model?.provider ?? DEFAULTS.roomTitleModel.provider;
     const account = this.options.titleLlmAccount?.(provider);
     if (!account) throw new Error(`no named title LLM account for provider: ${provider}`);
-    return { ...input, account };
+    return { ...input, model: input.model ?? DEFAULTS.roomTitleModel, account };
   }
 
-  /** Drift half of the living-titles law: every TITLE_DRIFT_EVERY user
-   * messages, re-read the recent conversation against the current title and
-   * re-title if the room's purpose has moved (generalize when it broadens,
-   * specialize when it crystallizes). Manual titles are the lock — the drift
-   * pass never touches them; auto/model titles stay living. */
-  async maybeRetitleOnDrift(): Promise<void> {
-    if (this.incognito || !isAutoRoomId(this.roomId) || !this.options.llm) return;
-    const state = await this.room.state();
-    if (!state.title || state.imported || state.titleSource === "manual") return;
-    const title = state.title;
-    let due = false;
-    await this.room.updateState((current: any) => {
-      const n = (current.titleDrift ?? 0) + 1;
-      if (n >= TITLE_DRIFT_EVERY) {
-        delete current.titleDrift;
-        due = true;
-      } else {
-        current.titleDrift = n;
-      }
-    });
-    if (!due) return;
-    try {
-      const events = await this.room.recentEvents(60);
-      const userLines = events
-        .filter((event: any) => event.author === "user" && typeof event.text === "string" && event.text.trim())
-        .slice(-10)
-        .map((event: any) => {
-          const text = event.text.replace(/\s+/g, " ").trim();
-          return text.length > 280 ? `${text.slice(0, 280)}…` : text;
-        });
-      if (userLines.length < 3) return;
-      const reply = await this.options.llm?.(this.withTitleLlmAccount({
-        system:
-          "You keep chat-room titles honest. Given the current title and the room's recent user messages, decide whether the title still names the room's PURPOSE in the user's own words. If it still fits, return it UNCHANGED. If the room has drifted, return a new concise title, 2-6 words, no quotes, no period — generalize if the room broadened, specialize if it crystallized. Return ONLY the title.",
-        user: `Current title: ${title}\n\nRecent user messages (oldest first):\n${userLines.map((line: string) => `- ${line}`).join("\n")}\n\nTitle:`,
-        model: DEFAULTS.roomTitleModel,
-      }));
-      const next = normalizeRoomTitle(reply ?? "");
-      if (!next || next === title) return;
-      let changed = false;
-      await this.room.updateState((current: any) => {
-        if (current.title === title && current.titleSource !== "manual" && !current.imported) {
-          current.title = next;
-          current.titleSource = "model";
-          changed = true;
-        }
-      });
-      if (changed) await this.emitRoomsChanged();
-    } catch (error) {
-      // Same visibility rule as refineAutoTitle: keep the old title, say why.
-      console.warn(`[room-title] drift check failed for ${this.roomId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  async refineAutoTitle(firstMessage: string, fallback: string): Promise<void> {
-    try {
-      const reply = await this.options.llm?.(this.withTitleLlmAccount({
-        system:
-          "You name chat rooms by PURPOSE, in the user's own words. Return ONLY a concise title, 2-6 words, no quotes, no period. Name what the room is FOR (the task or topic), never echo the sentence itself. Preserve key project or product names. Do not mention the assistant.",
-        user: `First user message:
-${firstMessage}
-
-Title:`,
-        model: DEFAULTS.roomTitleModel,
-      }));
-      const title = normalizeRoomTitle(reply ?? "");
-      if (!title || title === fallback) return;
-      let changed = false;
-      await this.room.updateState((current: any) => {
-        if (current.titleSource === "auto" && current.title === fallback && !current.imported) {
-          current.title = title;
-          current.titleSource = "model";
-          changed = true;
-        }
-      });
-      if (changed) await this.emitRoomsChanged();
-    } catch (error) {
-      // A title is chrome, not turn durability: keep the local fallback — but
-      // say so. A silent catch here hid dead model/account configs for weeks.
-      console.warn(`[room-title] refine failed for ${this.roomId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
+  async maybeRetitleOnDrift(): Promise<void> {}
 
   unknownAgentMessage(agentId: string): string {
     return `Unknown agent: @${agentId}\nAvailable agents: ${Object.keys(this.workspace.agents)
