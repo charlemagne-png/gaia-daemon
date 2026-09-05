@@ -49,6 +49,19 @@ test("selectOrphans excludes a different install id", () => {
   assert.deepEqual(selectOrphans(entries, ID, /*selfPid*/ 333), []);
 });
 
+test("secondary daemon cannot reap canonical runners", async () => {
+  const killed: number[] = [];
+  const result = await reapOrphans({
+    id: ID,
+    selfPid: 333,
+    ownsInstall: false,
+    listProcesses: () => `  900 500 ${mark("canonical-runner")}`,
+    kill: (pid) => killed.push(pid),
+  });
+  assert.deepEqual(result, { found: 0, reaped: 0 });
+  assert.deepEqual(killed, []);
+});
+
 test("reapOrphans escalates SIGTERM survivors to SIGKILL", async () => {
   const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const table = `  900 500 ${mark("stubborn")}`;

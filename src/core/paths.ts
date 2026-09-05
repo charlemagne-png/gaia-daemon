@@ -21,6 +21,8 @@ export const globalPaths = {
   config: () => join(gaiaHome(), "config.json"),
   /** Daemon-global app state (workspace registry, current workspace). */
   appSettings: () => join(gaiaHome(), "app.json"),
+  /** Port-scoped daemon ownership record; default port owns daemon.pid. */
+  daemonPidfile: (port: number, defaultPort: number) => join(gaiaHome(), port === defaultPort ? "daemon.pid" : `daemon-${port}.pid`),
   accounts: () => join(gaiaHome(), "accounts.json"),
   agentsDir: () => join(gaiaHome(), "agents"),
   /** Always-loaded global prompt protocols: every *.md here (sorted by

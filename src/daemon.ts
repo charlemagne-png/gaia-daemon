@@ -242,7 +242,16 @@ export class Daemon {
     // surviving runner from the previous daemon and the freshly resumed runner
     // can execute the same turn in parallel.
     this.baseUrl = baseUrl;
-    this.orphanSweepDone = reapOrphans({ log: (message) => this.log(message) }).then(() => {});
+    const boundPort = Number.parseInt(new URL(baseUrl).port, 10);
+    let ownsInstall = false;
+    if (boundPort === DEFAULTS.port) {
+      try {
+        ownsInstall = Number.parseInt((await readFile(globalPaths.daemonPidfile(boundPort, DEFAULTS.port), "utf8")).trim(), 10) === process.pid;
+      } catch {
+        ownsInstall = false;
+      }
+    }
+    this.orphanSweepDone = reapOrphans({ ownsInstall, log: (message) => this.log(message) }).then(() => {});
     await this.orphanSweepDone;
     this.bridge = new HarnessBridge(baseUrl);
     // Proactive runs: one tick across every initialized workspace. The first

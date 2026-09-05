@@ -80,6 +80,9 @@ export function selectOrphans(entries: ProcEntry[], id: string, selfPid: number)
 export interface ReapOptions {
   id?: string;
   selfPid?: number;
+  /** True only for the daemon that owns this install's canonical pidfile/port.
+   * Probe and secondary daemons must never signal canonical runners. */
+  ownsInstall?: boolean;
   /** Test seam: return the raw `ps` table instead of shelling out. */
   listProcesses?: () => string;
   /** Test seam: how a pid is terminated (default process.kill with the provided signal). */
@@ -126,6 +129,10 @@ export async function reapOrphans(options: ReapOptions = {}): Promise<{ found: n
   const pollMs = Math.max(1, options.pollMs ?? 100);
   const sleep = options.sleep ?? defaultSleep;
 
+  if (options.ownsInstall === false) {
+    log("orphan sweep: skipped — daemon does not own the canonical install pidfile/port");
+    return { found: 0, reaped: 0 };
+  }
   if (!options.listProcesses && process.platform === "win32") return { found: 0, reaped: 0 };
 
   try {

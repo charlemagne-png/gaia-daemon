@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DEFAULTS, gaiaCodesignIdentity } from "../core/config.js";
-import { gaiaHome } from "../core/paths.js";
+import { gaiaHome, globalPaths } from "../core/paths.js";
 
 // Constants from http.ts
 const RELOAD_DELAY_MS = 250;
@@ -38,9 +38,8 @@ interface OrphanWatchdogOptions {
  * 2026-08-07: a second instance on :8797 rewrote daemon.pid → shell fired
  * spurious mid-boot reloads + the real daemon's orphan-retire saw a foreign
  * pid and exited). */
-export function pidfilePath(port?: number): string {
-  if (port === undefined || port === DEFAULTS.port) return join(gaiaHome(), "daemon.pid");
-  return join(gaiaHome(), `daemon-${port}.pid`);
+export function pidfilePath(port = DEFAULTS.port): string {
+  return globalPaths.daemonPidfile(port, DEFAULTS.port);
 }
 
 /** Write <gaia home>/daemon[-<port>].pid after a successful bind — the
