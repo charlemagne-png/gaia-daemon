@@ -3759,6 +3759,70 @@ export class RoomService {
       : `Set GAIA-THINK level to ${level}/10 for this room.`;
   }
 
+  /** Promote this room to the tree root; its current parent becomes its
+   * first-class subroom. Two resident RoomService handles each perform exactly
+   * one atomic state write. Clearing this side first prevents a transient
+   * parent cycle; other children retain their parent id and follow the former
+   * root down naturally. */
+  async promote(): Promise<{ promotedRoomId: string; demotedRoomId: string }> {
+    await this.init();
+    const state = await this.room.state();
+    const parentRoomId = state.parentRoomId;
+    if (!parentRoomId || parentRoomId === this.roomId) throw new Error("Only a room with a parent can be promoted.");
+    if (!this.options.roomPeer) throw new Error("Promotion needs the room-peer seam — not available in this workspace.");
+
+    const parent = await this.options.roomPeer(parentRoomId);
+    const parentIdentity = await parent.promotionIdentity();
+    const demotedTitle = state.title;
+    const demotedTitleSource = state.titleSource;
+
+    await this.room.updateState((current) => {
+      delete current.parentRoomId;
+      delete current.subroom;
+      if (parentIdentity.title === undefined) delete current.title;
+      else current.title = parentIdentity.title;
+      if (parentIdentity.titleSource === undefined) delete current.titleSource;
+      else current.titleSource = parentIdentity.titleSource;
+    });
+    this.isSummonRoom = false;
+
+    await parent.adoptPromotionDemotion({
+      promotedRoomId: this.roomId,
+      title: demotedTitle,
+      titleSource: demotedTitleSource,
+    });
+    await this.appendSystemNote(`⚙ promoted to main; former main ${parentRoomId} now subroom.`);
+    await this.emitSnapshot();
+    await this.emitRoomsChanged();
+    return { promotedRoomId: this.roomId, demotedRoomId: parentRoomId };
+  }
+
+  /** Parent-side promotion metadata read; no foreign RoomHandle access. */
+  async promotionIdentity(): Promise<{ title?: string; titleSource?: "auto" | "model" | "manual" }> {
+    await this.init();
+    const state = await this.room.state();
+    return {
+      ...(state.title !== undefined ? { title: state.title } : {}),
+      ...(state.titleSource !== undefined ? { titleSource: state.titleSource } : {}),
+    };
+  }
+
+  /** Former-parent side of promote; one state write + durable note + live UI. */
+  async adoptPromotionDemotion(seed: { promotedRoomId: string; title?: string; titleSource?: "auto" | "model" | "manual" }): Promise<void> {
+    await this.init();
+    await this.room.updateState((state) => {
+      state.parentRoomId = seed.promotedRoomId;
+      state.subroom = true;
+      state.title = `† ${seed.title ?? this.roomId}`;
+      if (seed.titleSource === undefined) delete state.titleSource;
+      else state.titleSource = seed.titleSource;
+    });
+    this.isSummonRoom = false;
+    await this.appendSystemNote(`⚙ ${seed.promotedRoomId} promoted to main; this former main is now its subroom.`);
+    await this.emitSnapshot();
+    await this.emitRoomsChanged();
+  }
+
   /** EFFECTIVE /berserk deathmode for this room: its own flag OR any
    * ancestor's (the flag lives only on the ROOT ancestor — see
    * RoomState.berserk). Ancestors are read fresh from disk (one small JSON

@@ -858,6 +858,13 @@ export class Daemon {
     return this.refreshRoomList(workspaceId);
   }
 
+  /** Promote a child room to root; its former parent becomes its subroom. */
+  async promoteRoom(workspaceId: string, roomId: string): Promise<{ promotedRoomId: string; demotedRoomId: string; rooms: Snapshot["rooms"] }> {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    const swap = await service.promote();
+    return { ...swap, ...(await this.refreshRoomList(workspaceId)) };
+  }
+
   /** Mark/unmark a room as a favorite. This is display metadata only: no
    * transcript, memory, sandbox, or harness behaviour changes. */
   async setRoomFavorite(workspaceId: string, roomId: string, favorite: boolean): Promise<{ rooms: Snapshot["rooms"] }> {

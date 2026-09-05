@@ -927,6 +927,10 @@ export class GaiaWebServer {
       return this.respond(response, () => this.daemon.renameRoom(params![0], params![1], title, source));
     }
 
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/promote$/))) {
+      return this.respond(response, () => this.daemon.promoteRoom(params![0], params![1]));
+    }
+
     if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/favorite$/))) {
       const favorite = (await parseBody(request) as { favorite?: unknown }).favorite === true;
       return this.respond(response, () => this.daemon.setRoomFavorite(params![0], params![1], favorite));

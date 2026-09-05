@@ -3576,6 +3576,150 @@ test("/queue: parks mid-turn instead of steering; pause holds it through settle,
   assert.equal(transcript.filter((event) => event.author === "gaia").length, 2, "the parked idea ran as its own second turn");
 });
 
+async function makePromotionTree(options: { otherChild?: boolean } = {}): Promise<{
+  rootService: RoomService;
+  childService: RoomService;
+  root: string;
+  rootEvents: UiEvent[];
+  childEvents: UiEvent[];
+}> {
+  const peers = new Map<string, RoomService>();
+  const { service: rootService, workspace, root, events: rootEvents } = await makeService({
+    roomPeer: async (roomId) => {
+      const peer = peers.get(roomId);
+      if (!peer) throw new Error(`missing peer ${roomId}`);
+      return peer;
+    },
+  });
+  peers.set("default", rootService);
+  await rootService.init();
+  await rootService.setTitle("Parent mission", "manual");
+  await mkdir(join(root, ".gaia", "rooms", "child"), { recursive: true });
+  await writeFile(
+    workspacePaths.roomState(root, "child"),
+    JSON.stringify({
+      activeRoles: {},
+      agentCursors: {},
+      thinkingOverrides: {},
+      parentRoomId: "default",
+      subroom: true,
+      title: "Child investigation",
+      titleSource: "auto",
+      contextUsage: { gaia: { usedTokens: 321, maxTokens: 1000 } },
+    }),
+    "utf8",
+  );
+  if (options.otherChild) {
+    await mkdir(join(root, ".gaia", "rooms", "sibling"), { recursive: true });
+    await writeFile(
+      workspacePaths.roomState(root, "sibling"),
+      JSON.stringify({ activeRoles: {}, agentCursors: {}, thinkingOverrides: {}, parentRoomId: "default", subroom: true, title: "Sibling" }),
+      "utf8",
+    );
+  }
+  const childService = await RoomService.open({
+    workspaceId: "ws1",
+    workspace,
+    roomId: "child",
+    memoryStore: new MemoryStore(),
+    runtimeFactory: (agent) => scriptedRuntime(agent, () => [{ type: "text-delta", delta: "hi" } as AgentEvent]),
+    roomPeer: async (roomId) => {
+      const peer = peers.get(roomId);
+      if (!peer) throw new Error(`missing peer ${roomId}`);
+      return peer;
+    },
+  });
+  const childEvents: UiEvent[] = [];
+  childService.subscribe((event) => childEvents.push(event));
+  peers.set("child", childService);
+  await childService.init();
+  return { rootService, childService, root, rootEvents, childEvents };
+}
+
+test("room promote: child becomes root, parent becomes subroom, titles transfer with cross prefix, durable notes + live updates land", async () => {
+  const { rootService, childService, root, rootEvents, childEvents } = await makePromotionTree();
+  const beforeRoot = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  const beforeChild = normalizeRoomState(await readJson(workspacePaths.roomState(root, "child")));
+
+  const result = await childService.promote();
+  assert.deepEqual(result, { promotedRoomId: "child", demotedRoomId: "default" });
+
+  const promoted = normalizeRoomState(await readJson(workspacePaths.roomState(root, "child")));
+  const demoted = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(promoted.parentRoomId, undefined);
+  assert.equal(promoted.subroom, undefined);
+  assert.equal(demoted.parentRoomId, "child");
+  assert.equal(demoted.subroom, true);
+  assert.equal(promoted.title, "Parent mission");
+  assert.equal(promoted.titleSource, "manual", "manual parent title source survives verbatim");
+  assert.equal(demoted.title, "† Child investigation");
+  assert.equal(demoted.titleSource, "auto", "demoted room keeps its former title source");
+  assert.equal(promoted.refCode, beforeChild.refCode);
+  assert.equal(demoted.refCode, beforeRoot.refCode);
+  assert.deepEqual(promoted.contextUsage, beforeChild.contextUsage);
+
+  const promotedTranscript = (await (await RoomHandle.open(root, "child")).eventsFrom(0)).events;
+  const demotedTranscript = (await (await RoomHandle.open(root, "default")).eventsFrom(0)).events;
+  assert.match(promotedTranscript.at(-1)?.text ?? "", /promoted to main.*default now subroom/);
+  assert.match(demotedTranscript.at(-1)?.text ?? "", /child promoted to main.*former main/);
+  assert.ok(childEvents.some((event) => event.type === "snapshot"));
+  assert.ok(childEvents.some((event) => event.type === "rooms"));
+  assert.ok(rootEvents.some((event) => event.type === "snapshot"));
+  assert.ok(rootEvents.some((event) => event.type === "rooms"));
+  await rootService.dispose();
+  await childService.dispose();
+});
+
+test("room promote: former parent's other children stay attached and follow it down", async () => {
+  const { rootService, childService, root } = await makePromotionTree({ otherChild: true });
+  await childService.promote();
+  const sibling = normalizeRoomState(await readJson(workspacePaths.roomState(root, "sibling")));
+  const formerParent = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(sibling.parentRoomId, "default", "sibling edge is untouched");
+  assert.equal(formerParent.parentRoomId, "child", "sibling now reaches the promoted root through its old parent");
+  await rootService.dispose();
+  await childService.dispose();
+});
+
+test("room promote: root promotion is rejected without state or transcript mutation", async () => {
+  const { service, root, events } = await makeService();
+  await service.init();
+  const beforeState = await readFileText(workspacePaths.roomState(root, "default"), "utf8");
+  await assert.rejects(() => service.promote(), /Only a room with a parent/);
+  assert.equal(await readFileText(workspacePaths.roomState(root, "default"), "utf8"), beforeState);
+  const transcript = (await (await RoomHandle.open(root, "default")).eventsFrom(0)).events;
+  assert.deepEqual(transcript, []);
+  assert.equal(events.length, 0);
+  await service.dispose();
+});
+
+test("room promote: love and berserk root walks target the promoted room after the swap", async () => {
+  const { rootService, childService, root } = await makePromotionTree();
+  await childService.promote();
+
+  await rootService.runBerserkCommand();
+  await rootService.runLoveCommand();
+  let promoted = normalizeRoomState(await readJson(workspacePaths.roomState(root, "child")));
+  let demoted = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(promoted.berserk, true);
+  assert.equal(promoted.love, true);
+  assert.equal(demoted.berserk, undefined);
+  assert.equal(demoted.love, undefined);
+  assert.equal((await rootService.getSnapshot()).room.berserk, true);
+  assert.equal((await rootService.getSnapshot()).room.love, true);
+
+  await rootService.runBerserkCommand(true);
+  await rootService.runLoveCommand(true);
+  promoted = normalizeRoomState(await readJson(workspacePaths.roomState(root, "child")));
+  demoted = normalizeRoomState(await readJson(workspacePaths.roomState(root, "default")));
+  assert.equal(promoted.berserk, undefined);
+  assert.equal(promoted.love, undefined);
+  assert.equal(demoted.berserk, undefined);
+  assert.equal(demoted.love, undefined);
+  await rootService.dispose();
+  await childService.dispose();
+});
+
 test("/berserk: flag lives on the ROOT ancestor; subroom inherits via the walk; off from the child stands the whole tree down", async () => {
   const { service: rootService, workspace, root } = await makeService();
   await rootService.init();
