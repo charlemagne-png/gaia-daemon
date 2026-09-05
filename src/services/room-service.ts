@@ -59,6 +59,7 @@ import { ensureWorkspaceRoom } from "../domain/workspace.js";
 import { effectiveAgentSkills, effectiveAgentTools, effectiveRoleName, listAgentRoles, resolveAgentRole } from "../domain/roles.js";
 import { resolveSkillRefs } from "../domain/skills.js";
 import type { MemoryStore, MemoryAction, MemoryMutationResult } from "../domain/memory.js";
+import type { ApplicationCatalog } from "../domain/applications.js";
 import { formatMemoryHits, type ActiveContextRef, type MemorySearchHit } from "../domain/workspace-index.js";
 import type { AgentRuntime, HarnessHost } from "../harness/spec.js";
 import { capabilitiesFor, contextWindowFor, findHarness, harnessIdFor, nativeCommandsFor, usageAccountFor } from "../harness/spec.js";
@@ -72,6 +73,7 @@ import type { EpisodeCapture } from "./memory-service.js";
 import { formatDreamProposal } from "./consolidate.js";
 import type { ConsolidateLlm, ConsolidateLlmInput, ConsolidateResult } from "./consolidate.js";
 import { allowSummonForTurn, effectiveTrust, type SummonHost, type SummonResultDelivery } from "./summons.js";
+import type { ResumeEpoch } from "./resume-epoch.js";
 import { HOOK_TEXT_CAP, runHooks, type HookEvent } from "./hooks.js";
 import { MonadEngine } from "./monad.js";
 import { activateSetup, deactivateMonad, discoverSetups } from "./setups.js";
@@ -116,6 +118,8 @@ export interface RoomServiceOptions {
   /** Memory v3 hooks (auto-recall, episodic capture, consolidation). Absent →
    * turns run exactly as before; the hooks are additive. */
   memory?: RoomMemoryHooks;
+  /** Workspace catalog snapshot; read-only in Applications Wave 0. */
+  applications?: () => Promise<ApplicationCatalog>;
   /** One-shot LLM call (same caller consolidation uses) for the context-gate
    * "compact" option — summarizes the room to seed a new agent. Absent → the
    * compact choice degrades to a raw transcript slice. */
@@ -1426,30 +1430,49 @@ export class RoomService {
    * rides the durable queue when it can't run now. */
   async deliverAgentResult(fromAgentId: string, reply: string, delivery: SummonResultDelivery): Promise<void> {
     await this.init();
-    await this.postAgentNote(fromAgentId, reply, {
-      summonResult: { childRoomId: delivery.childRoomId, failed: delivery.failed },
-    });
-    const target = delivery.triggerTarget;
-    if (target && this.workspace.agents[target]) {
-      await this.triggerSummonCallback(target, reply, delivery);
-      return;
-    }
+    const deliveryId = `${delivery.childRoomId}:${delivery.deliveryId ?? "initial"}`;
+    await this.postAgentNote(
+      fromAgentId,
+      reply,
+      { summonResult: { childRoomId: delivery.childRoomId, failed: delivery.failed } },
+      `summon-result:${deliveryId}`,
+    );
 
-    // deliver:"note" used to stop at the collapsed note, leaving autonomous
-    // steward rooms asleep. Wake their explicitly active agent through the same
-    // durable callback queue as agent dialogue. No active agent → human-read
-    // note. A live WAL turn already sees the appended note; a queued pointer
-    // for this child is the idempotence key across delivery retries.
-    if (delivery.childRoomId === this.roomId) return;
     const state = await this.room.state();
-    const active = state.activeAgent;
-    if (!active || !this.workspace.agents[active] || state.pendingTurn) return;
-    const pointer = delivery.failed
-      ? `Child lane '${delivery.childRoomId}' FAILED — its error is in the message just above. Triage it and continue.`
-      : `Child lane '${delivery.childRoomId}' finished — its result is in the message just above. Triage it and continue.`;
-    if (state.queue?.some((queued) => queued.fromAgentDialogue && queued.text === pointer)) return;
-    await this.appendSystemNote(`⚙ child-lane wake: @${active} queued to triage '${delivery.childRoomId}'.`);
-    await this.enqueueAgentDialogue([active], pointer);
+    const explicit = delivery.triggerTarget;
+    const target = delivery.childRoomId === this.roomId
+      ? undefined
+      : explicit && this.workspace.agents[explicit]
+        ? explicit
+        : state.activeAgent && this.workspace.agents[state.activeAgent]
+          ? state.activeAgent
+          : undefined;
+    const pointer = target
+      ? explicit
+        ? delivery.failed
+          ? `Your summon '${delivery.childRoomId}' FAILED — its error is in the message just above. Decide how to proceed (retry, work around, or report it).`
+          : `Your summon '${delivery.childRoomId}' finished — its result is in the message just above. Continue from it.`
+        : delivery.failed
+          ? `Child lane '${delivery.childRoomId}' FAILED — its error is in the message just above. Triage it and continue.`
+          : `Child lane '${delivery.childRoomId}' finished — its result is in the message just above. Triage it and continue.`
+      : undefined;
+    const task = target && pointer ? this.createTask(pointer, [target]) : undefined;
+    if (task) {
+      task.status = "queued";
+      task.callback = true;
+    }
+    const accepted = await this.room.acceptSummonDelivery(
+      deliveryId,
+      task && pointer
+        ? { taskId: task.id, text: pointer, targets: [target!], fromAgentDialogue: true, queuedAt: task.startedAt }
+        : undefined,
+    );
+    if (!accepted || !task || !target) return;
+    this.queuedTasks.push(task);
+    this.emit({ type: "task-start", workspaceId: this.workspaceId, roomId: this.roomId, task });
+    await this.appendSystemNote(`⚙ child-lane wake: @${target} queued to triage '${delivery.childRoomId}'.`);
+    void this.emitSnapshot();
+    if (!this.activeTask) void this.drain();
   }
 
   /** Periodic daemon backstop: stale WAL marker + no live task/runner → preserve
@@ -1494,29 +1517,6 @@ export class RoomService {
     await this.emitRoomsChanged();
   }
 
-  /** Re-invoke a caller agent after its summon returned — steer its live turn if
-   * it has one (the harness picks up the nudge at the next tool boundary), else
-   * a fresh turn. Never records a "user →" bubble. Two paths, two shapes:
-   * - STEER: the running turn began before the result note existed and can't
-   *   re-read the transcript, so the steer carries the FULL result inline.
-   * - FRESH TURN: the note is already on disk and loads as context (past the
-   *   caller's cursor), so the prompt is a short pointer, not a re-paste
-   *   (recordUserMessage:false / callback:true → no user ghost). */
-  private async triggerSummonCallback(target: string, reply: string, delivery: SummonResultDelivery): Promise<void> {
-    const runtime = this.runtimes[target];
-    if (this.activeAgentTurn?.targets.includes(target) && runtime?.capabilities.supportsSteer) {
-      const header = delivery.failed
-        ? `Your summon '${delivery.childRoomId}' FAILED (decide how to proceed):`
-        : `Your summon '${delivery.childRoomId}' returned:`;
-      const ok = (await runtime.steer?.(this.roomId, `${header}\n\n${reply}`)) ?? false;
-      if (ok) return; // else the turn just ended — fall through to a fresh turn
-    }
-    const pointer = delivery.failed
-      ? `Your summon '${delivery.childRoomId}' FAILED — its error is in the message just above. Decide how to proceed (retry, work around, or report it).`
-      : `Your summon '${delivery.childRoomId}' finished — its result is in the message just above. Continue from it.`;
-    await this.enqueueAgentDialogue([target], pointer);
-  }
-
   /** Resolves when the room has FULLY settled: no running task, no durable
    * pending turn, an empty queue — stable across two consecutive checks
    * (init() resumes a prior process's turn asynchronously, so a single
@@ -1553,6 +1553,15 @@ export class RoomService {
     await this.init();
     await this.room.updateState((state) => {
       if (state.summon) state.summon.status = "delivered";
+    });
+  }
+
+  /** Close exactly the resumed-turn delivery contract that settled. */
+  async markSummonResumeDelivered(token: ResumeEpoch): Promise<void> {
+    await this.init();
+    await this.room.updateState((state) => {
+      if (state.summon?.resumeStartedAt !== token) return;
+      state.summon.resumeStatus = "delivered";
     });
   }
 
@@ -3383,11 +3392,12 @@ export class RoomService {
   /** Append an agent-authored event WITHOUT running a turn — how the scheduler
    * delivers an isolated run's result into its target room, and how a summon
    * result lands as a collapsed note (details.summonResult). */
-  async postAgentNote(agentId: string, text: string, details?: EventDetails): Promise<void> {
+  async postAgentNote(agentId: string, text: string, details?: EventDetails, eventId?: string): Promise<void> {
     await this.init();
     if (!this.workspace.agents[agentId]) throw new Error(this.unknownAgentMessage(agentId));
+    if (eventId && await this.room.hasEvent(eventId)) return;
     const event: RoomEvent = {
-      id: newRoomEventId(),
+      id: eventId ?? newRoomEventId(),
       timestamp: new Date().toISOString(),
       author: agentId,
       text,
@@ -4330,7 +4340,7 @@ export class RoomService {
     return { events: events.slice(start, end), hasMore: start > 0 };
   }
 
-  async getSnapshot(): Promise<Snapshot> {
+  async getSnapshot(): Promise<Snapshot & { applications?: ApplicationCatalog }> {
     await this.init();
     const all = (await this.room.eventsFrom(0)).events;
     const events = all.slice(-this.workspace.config.transcriptWindow);
@@ -4354,6 +4364,7 @@ export class RoomService {
       .filter((account): account is string => Boolean(account));
     const voiceDispatcherAvailable = Boolean(await this.availableVoiceDispatcherId());
     return {
+      ...(this.options.applications ? { applications: await this.options.applications() } : {}),
       workspace: {
         id: this.workspaceId,
         rootDir: this.workspace.rootDir,

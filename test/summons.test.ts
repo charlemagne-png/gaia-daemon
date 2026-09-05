@@ -105,6 +105,7 @@ function fakeRoom(reply: string): SummonRoomAccess & {
   sent: string[];
   delivered: { from: string; reply: string; delivery: SummonResultDelivery }[];
   markedDelivered: number;
+  markedResume: string[];
   settle: (status?: string, error?: string) => void;
 } {
   const listeners = new Set<(event: SummonTaskEvent) => void>();
@@ -113,6 +114,7 @@ function fakeRoom(reply: string): SummonRoomAccess & {
     sent: [] as string[],
     delivered: [] as { from: string; reply: string; delivery: SummonResultDelivery }[],
     markedDelivered: 0,
+    markedResume: [] as string[],
     settle(status = "complete", error?: string) {
       task.status = status;
       task.error = error;
@@ -145,6 +147,9 @@ function fakeRoom(reply: string): SummonRoomAccess & {
     },
     async markSummonDelivered() {
       room.markedDelivered += 1;
+    },
+    async markSummonResumeDelivered(token: string) {
+      room.markedResume.push(token);
     },
     async broadcastRoomsChanged() {},
   };
@@ -337,6 +342,69 @@ test("recoverUndelivered re-arms a stranded summon and delivers its surviving re
   assert.match(parent.delivered[0].reply, /recovered result/);
   assert.equal(parent.delivered[0].delivery.triggerTarget, "gaia");
   assert.equal(child.markedDelivered, 1);
+});
+
+test("concurrent resumes of one lane produce one parent delivery", async () => {
+  const { workspace, path } = await makeWorkspace();
+  const childRoomId = "terry-resumed";
+  await mkdir(join(workspace.roomsDir, childRoomId), { recursive: true });
+  await writeJsonAtomic(workspacePaths.roomState(path, childRoomId), {
+    activeRoles: {},
+    agentCursors: {},
+    parentRoomId: "default",
+    summon: { agentId: "terry", deliver: "turn", callerAgentId: "gaia", status: "delivered", launchedAt: new Date().toISOString() },
+  });
+  const child = fakeRoom("resumed result");
+  let settled!: () => void;
+  const idle = new Promise<void>((resolve) => { settled = resolve; });
+  child.waitForSettled = async () => idle;
+  const originalSettle = child.settle;
+  child.settle = (status, error) => { originalSettle(status, error); settled(); };
+  const parent = fakeRoom("");
+  const coordinator = new SummonCoordinator(workspace, path, async (roomId) => roomId === "default" ? parent : child, async () => 8, () => {});
+
+  await Promise.all([
+    coordinator.resume(childRoomId, child, "first follow-up"),
+    coordinator.resume(childRoomId, child, "second follow-up"),
+  ]);
+  child.settle();
+  for (let i = 0; i < 100 && parent.delivered.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(parent.delivered.length, 1);
+  assert.equal(child.markedResume.length, 1);
+  const state = normalizeRoomState(await readJson(workspacePaths.roomState(path, childRoomId)));
+  assert.equal(state.summon?.resumeStatus, "running", "fake close does not mutate disk; epoch remains restart-recoverable");
+  assert.ok(state.summon?.resumeStartedAt);
+});
+
+test("restart recovery delivers a durably stamped resumed turn", async () => {
+  const { workspace, path } = await makeWorkspace();
+  const childRoomId = "terry-resume-recovery";
+  await mkdir(join(workspace.roomsDir, childRoomId), { recursive: true });
+  await writeJsonAtomic(workspacePaths.roomState(path, childRoomId), {
+    activeRoles: {},
+    agentCursors: {},
+    parentRoomId: "default",
+    summon: {
+      agentId: "terry",
+      deliver: "note",
+      status: "delivered",
+      launchedAt: new Date().toISOString(),
+      resumeStatus: "running",
+      resumeStartedAt: "2026-09-05T12:00:00.000Z#1",
+    },
+  });
+  const child = fakeRoom("survived restart");
+  child.settle();
+  const parent = fakeRoom("");
+  const coordinator = new SummonCoordinator(workspace, path, async (roomId) => roomId === "default" ? parent : child, async () => 8, () => {});
+
+  await coordinator.recoverUndelivered();
+  for (let i = 0; i < 100 && parent.delivered.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(parent.delivered.length, 1);
+  assert.match(parent.delivered[0].reply, /survived restart/);
+  assert.deepEqual(child.markedResume, ["2026-09-05T12:00:00.000Z#1"]);
 });
 
 test("recoverUndelivered skips delivered records and non-summon rooms", async () => {

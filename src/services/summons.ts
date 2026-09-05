@@ -39,16 +39,20 @@ export interface SummonResultDelivery {
   childRoomId: string;
   /** The worker turn errored rather than finishing cleanly. */
   failed: boolean;
+  /** Stable identity for this result attempt. Parent receipt dedupe uses it
+   * across retries/restarts; absent means the child's initial turn. */
+  deliveryId?: string;
   /** deliver:"turn" — the caller agent to re-invoke with the result. Unset for
    * deliver:"note" (a human reads the result; no agent is nudged). */
   triggerTarget?: string;
 }
 
-import { normalizeRoomState } from "../domain/rooms.js";
+import { normalizeRoomState, RoomHandle } from "../domain/rooms.js";
 import { ensureRoomWorktree, resolveRoomWorkDir } from "../domain/worktree.js";
 import { workspacePaths } from "../core/paths.js";
 import { readJson, writeJsonAtomic } from "../core/store.js";
 import { ensureWorkspaceRoom } from "../domain/workspace.js";
+import { ResumeEpochRegistry, type ResumeEpoch } from "./resume-epoch.js";
 
 export function isTrusted(agent: AgentDef): boolean {
   return agent.trust !== false;
@@ -117,7 +121,7 @@ export interface SummonTaskEvent {
 
 /** What the coordinator needs from a room service (narrow, injectable). */
 export interface SummonRoomAccess {
-  sendMessage(text: string, options: { targets: string[]; bypassContextGate?: boolean }): Promise<SummonTask>;
+  sendMessage(text: string, options: { targets?: string[]; bypassContextGate?: boolean; recordUserMessage?: boolean }): Promise<SummonTask>;
   subscribe(listener: (event: SummonTaskEvent) => void): () => void;
   latestReplyFrom(agentId: string): Promise<string>;
   /** Opt-in worker self-episode (AgentDef.selfEpisode): record ONE distilled
@@ -141,6 +145,8 @@ export interface SummonRoomAccess {
   deliverAgentResult(fromAgentId: string, reply: string, delivery: SummonResultDelivery): Promise<void>;
   /** Stamp this CHILD room's summon record delivered (idempotent). */
   markSummonDelivered(): Promise<void>;
+  /** Stamp exactly one resumed turn's delivery record delivered. */
+  markSummonResumeDelivered(token: ResumeEpoch): Promise<void>;
   /** Rebroadcast the workspace rooms list (see RoomService.broadcastRoomsChanged). */
   broadcastRoomsChanged(): Promise<void>;
   /** Panic-stop this room's active turn — the EXACT plumbing the /cancel
@@ -274,6 +280,8 @@ export interface SummonHost {
  * of leaving an orphaned turn running. */
 export const SUMMON_TIMEOUT_MS = 30 * 60_000; // 30 minutes
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 function levenshteinDistance(left: string, right: string): number {
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
   for (let leftIndex = 1; leftIndex <= left.length; leftIndex++) {
@@ -373,6 +381,11 @@ export class SummonCoordinator implements SummonHost {
   /** childRoomId -> info, for summons whose first turn is still running (the
    * cap + live snapshot). Completed summons live on as child rooms on disk. */
   private readonly running = new Map<string, SummonChild>();
+  private readonly completions = new Map<string, Promise<unknown>>();
+  private readonly resumeEpochs = new ResumeEpochRegistry();
+  private readonly resumeInFlight = new Set<string>();
+  private readonly resumeSealed = new Map<string, ResumeEpoch>();
+  private readonly deliveringResume = new Set<string>();
 
   constructor(
     private readonly workspace: Workspace,
@@ -477,8 +490,10 @@ export class SummonCoordinator implements SummonHost {
     );
     const done = ledgered.finally(() => {
       this.running.delete(childRoomId);
+      this.completions.delete(childRoomId);
       this.notifyParentRoomsChanged(parentRoomId);
     });
+    this.completions.set(childRoomId, done);
     // Don't crash on background summons whose result no one awaits.
     done.catch(() => {});
     return { roomId: childRoomId, done };
@@ -518,6 +533,21 @@ export class SummonCoordinator implements SummonHost {
     return reply;
   }
 
+  /** Keep an outer lane alive until every delegated child result and callback
+   * turn has settled. Repeat because callbacks may launch another wave. */
+  private async waitForDelegatedWork(room: SummonRoomAccess, roomId: string): Promise<void> {
+    for (;;) {
+      const direct = this.runningChildren(roomId);
+      const completions = direct
+        .map((child) => this.completions.get(child.roomId))
+        .filter((completion): completion is Promise<unknown> => completion !== undefined);
+      if (completions.length > 0) await Promise.allSettled(completions);
+      else if (direct.length > 0) await sleep(10);
+      await room.waitForSettled();
+      if (this.runningChildren(roomId).length === 0 && !(await room.hasPendingWork())) return;
+    }
+  }
+
   /** Summons run autonomously: the context gate (a human decision modal) must
    * never hold a worker's first turn. */
   private async runFirstTurn(child: SummonRoomAccess, agentId: string, task: string, roomId: string): Promise<string> {
@@ -535,6 +565,10 @@ export class SummonCoordinator implements SummonHost {
     }
     if (turn.status === "error" && (await child.hasPendingWork())) {
       await child.waitForSettled();
+      turn = (await child.getSnapshot()).tasks.at(-1) ?? turn;
+    }
+    if (turn.status !== "error" && turn.status !== "cancelled") {
+      await this.waitForDelegatedWork(child, roomId);
       turn = (await child.getSnapshot()).tasks.at(-1) ?? turn;
     }
     const worker = await inspectWorker(this.workspace.rootDir, roomId, agentId);
@@ -576,15 +610,43 @@ export class SummonCoordinator implements SummonHost {
     await parent.deliverAgentResult(info.agentId, reply, {
       childRoomId: info.roomId,
       failed,
+      deliveryId: "initial",
       ...(options.deliver === "turn" && options.callerAgentId && !cancelled ? { triggerTarget: options.callerAgentId } : {}),
     });
     await child.markSummonDelivered();
   }
 
-  /** Boot sweep: find child rooms whose delivery record is still "running" —
-   * a prior process launched them and died (mid-turn or between finishing and
-   * delivering) — reopen each (init resumes its turn from the WAL), wait for
-   * it to settle, and deliver. NO PROGRESS EVER LOST. */
+  /** Read one settled lane's final outcome without changing delivery state. */
+  private async settledOutcome(
+    child: SummonRoomAccess,
+    roomId: string,
+    agentId: string,
+    onIdleObserved?: () => void,
+  ): Promise<{ reply: string; failed: boolean; cancelled: boolean }> {
+    let lastTask = (await child.getSnapshot()).tasks.at(-1);
+    while (lastTask?.status === "error" && (await child.hasPendingWork())) {
+      await child.waitForSettled();
+      lastTask = (await child.getSnapshot()).tasks.at(-1);
+    }
+    onIdleObserved?.();
+    const worker = await inspectWorker(this.workspace.rootDir, roomId, agentId);
+    if (lastTask?.status === "error") {
+      return { reply: [lastTask.error || worker.failure || "summon turn failed", worker.digest].filter(Boolean).join("\n\n"), failed: true, cancelled: false };
+    }
+    if (lastTask?.status === "cancelled") {
+      return { reply: ["cancelled before completion", worker.digest].filter(Boolean).join("\n\n"), failed: true, cancelled: true };
+    }
+    const reply = (await child.latestReplyFrom(agentId)).trim();
+    if (reply) return { reply, failed: false, cancelled: false };
+    if (worker.active) return { reply: `(no final reply)\n\n${worker.digest}`, failed: false, cancelled: false };
+    return {
+      reply: [worker.lastText || worker.failure || "worker produced no output — likely out of usage or failed to start", worker.digest].filter(Boolean).join("\n\n"),
+      failed: true,
+      cancelled: false,
+    };
+  }
+
+  /** Re-arm every first-turn or resumed-turn delivery still durable on disk. */
   async recoverUndelivered(): Promise<void> {
     let roomIds: string[];
     try {
@@ -592,67 +654,177 @@ export class SummonCoordinator implements SummonHost {
     } catch {
       return;
     }
+    const firstTurns: Array<{ info: SummonChild; record: SummonDelivery }> = [];
+    const resumes: Array<{ info: SummonChild; epoch?: ResumeEpoch }> = [];
     for (const roomId of roomIds) {
       if (this.running.has(roomId)) continue;
-      let record: SummonDelivery | undefined;
-      let parentRoomId: string | undefined;
-      let untrusted = false;
       try {
         const state = normalizeRoomState(await readJson(workspacePaths.roomState(this.workspace.rootDir, roomId)));
-        record = state.summon;
-        parentRoomId = state.parentRoomId;
-        untrusted = state.summonUntrusted === true;
-      } catch {
-        continue;
+        const record = state.summon;
+        const parentRoomId = state.parentRoomId;
+        if (!record || !parentRoomId || this.running.has(roomId)) continue;
+        const info: SummonChild = { roomId, parentRoomId, agentId: record.agentId, prompt: "", untrusted: state.summonUntrusted === true };
+        if (record.status === "running") {
+          this.running.set(roomId, info);
+          firstTurns.push({ info, record });
+        } else if (record.resumeStatus === "running") {
+          this.running.set(roomId, info);
+          this.resumeEpochs.observe(roomId, record.resumeStartedAt);
+          resumes.push({ info, ...(record.resumeStartedAt ? { epoch: record.resumeStartedAt } : {}) });
+        }
+      } catch (error) {
+        this.log(`summon recovery skipped unsafe '${roomId}': ${error instanceof Error ? error.message : String(error)}`);
       }
-      if (!record || record.status !== "running" || !parentRoomId) continue;
-      const info: SummonChild = { roomId, parentRoomId, agentId: record.agentId, prompt: "", untrusted };
-      this.running.set(roomId, info);
-      this.log(`summon recovery: re-arming '${roomId}' (@${record.agentId} → '${parentRoomId}')`);
-      void this.recoverOne(info, record)
-        .catch((error) => this.log(`summon recovery for '${roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
-        .finally(() => {
-          this.running.delete(roomId);
-          this.notifyParentRoomsChanged(parentRoomId);
-        });
+    }
+    for (const { info, record } of firstTurns) {
+      this.trackRecovery(info, this.recoverOne(info, record), "summon");
+    }
+    for (const { info, epoch } of resumes) {
+      this.trackRecovery(info, this.recoverResumeOne(info, epoch), "resume");
     }
   }
 
+  private trackRecovery(info: SummonChild, work: Promise<void>, kind: "summon" | "resume"): void {
+    this.log(`${kind} recovery: re-arming '${info.roomId}' (@${info.agentId} → '${info.parentRoomId}')`);
+    const completion = work
+      .catch((error) => this.log(`${kind} recovery for '${info.roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => {
+        if (this.completions.get(info.roomId) === completion) {
+          this.running.delete(info.roomId);
+          this.completions.delete(info.roomId);
+        }
+        this.notifyParentRoomsChanged(info.parentRoomId);
+      });
+    this.completions.set(info.roomId, completion);
+    completion.catch(() => {});
+  }
+
   private async recoverOne(info: SummonChild, record: SummonDelivery): Promise<void> {
-    const child = await this.serviceForRoom(info.roomId); // init() resumes the WAL turn / queue
-    await child.waitForSettled();
-    let lastTask = (await child.getSnapshot()).tasks.at(-1);
-    while (lastTask?.status === "error" && (await child.hasPendingWork())) {
-      await child.waitForSettled();
-      lastTask = (await child.getSnapshot()).tasks.at(-1);
+    const child = await this.serviceForRoom(info.roomId);
+    await this.waitForDelegatedWork(child, info.roomId);
+    const { reply, failed, cancelled } = await this.settledOutcome(child, info.roomId, info.agentId);
+    await this.deliver(child, info, record, reply, failed, cancelled);
+  }
+
+  /** Resume a delivered summon child and durably promise its result upstream. */
+  async resume(roomId: string, room: SummonRoomAccess, message: string): Promise<{ tracked: boolean }> {
+    const handle = await RoomHandle.open(this.workspace.rootDir, roomId);
+    const state = await handle.state();
+    const record = state.summon;
+    const parentRoomId = state.parentRoomId;
+    if (!record || !parentRoomId || record.status !== "delivered") {
+      await room.sendMessage(message, { recordUserMessage: true });
+      return { tracked: false };
     }
-    const worker = await inspectWorker(this.workspace.rootDir, info.roomId, info.agentId);
-    let reply: string;
-    let failed: boolean;
-    let cancelled = false;
-    if (lastTask?.status === "error") {
-      reply = [lastTask.error || worker.failure || "summon turn failed", worker.digest].filter(Boolean).join("\n\n");
-      failed = true;
-    } else if (lastTask?.status === "cancelled") {
-      reply = ["cancelled before completion", worker.digest].filter(Boolean).join("\n\n");
-      failed = true;
-      cancelled = true;
-    } else {
-      const raw = (await child.latestReplyFrom(info.agentId)).trim();
-      if (raw) {
-        reply = raw;
-        failed = false;
-      } else if (worker.active) {
-        // Did something, wrote no closing prose — progress, not failure.
-        reply = `(no final reply)\n\n${worker.digest}`;
-        failed = false;
-      } else {
-        // Never got going at all — same empty-completion failure bar as
-        // runFirstTurn.
-        reply = [worker.lastText || worker.failure || "worker produced no output — likely out of usage or failed to start", worker.digest].filter(Boolean).join("\n\n");
-        failed = true;
+
+    const predecessor = this.completions.get(roomId);
+    if (predecessor || this.resumeInFlight.has(roomId) || record.resumeStatus === "running") {
+      let predecessorSettled = false;
+      predecessor?.finally(() => { predecessorSettled = true; }).catch(() => {});
+      await room.sendMessage(message, { recordUserMessage: true });
+      const sealed = this.resumeSealed.has(roomId);
+      if (!sealed && this.resumeInFlight.has(roomId)) return { tracked: true };
+      if (!sealed && predecessor && !predecessorSettled) return { tracked: true };
+      return this.armResume(handle, state, roomId, room, message, record.agentId, parentRoomId, false);
+    }
+    return this.armResume(handle, state, roomId, room, message, record.agentId, parentRoomId, true);
+  }
+
+  private async armResume(
+    handle: RoomHandle,
+    state: Awaited<ReturnType<RoomHandle["state"]>>,
+    roomId: string,
+    room: SummonRoomAccess,
+    message: string,
+    agentId: string,
+    parentRoomId: string,
+    send: boolean,
+  ): Promise<{ tracked: boolean }> {
+    this.resumeInFlight.add(roomId);
+    this.resumeEpochs.observe(roomId, state.summon?.resumeStartedAt);
+    const token = this.resumeEpochs.mint(roomId);
+    await handle.updateState((next) => {
+      if (next.summon) {
+        next.summon.resumeStatus = "running";
+        next.summon.resumeStartedAt = token;
+      }
+    });
+    const info: SummonChild = { roomId, parentRoomId, agentId, prompt: message, untrusted: state.summonUntrusted === true };
+    this.running.set(roomId, info);
+    if (send) {
+      try {
+        await room.sendMessage(message, { recordUserMessage: true });
+      } catch (error) {
+        this.running.delete(roomId);
+        this.resumeInFlight.delete(roomId);
+        await handle.updateState((next) => {
+          if (next.summon?.resumeStartedAt === token) next.summon.resumeStatus = "delivered";
+        }).catch(() => {});
+        throw error;
       }
     }
-    await this.deliver(child, info, record, reply, failed, cancelled);
+    const completion = this.runResume(room, info, token)
+      .catch((error) => this.log(`resume delivery for '${roomId}' failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => {
+        if (this.running.get(roomId) === info) this.running.delete(roomId);
+        if (this.completions.get(roomId) === completion) {
+          this.completions.delete(roomId);
+          this.resumeInFlight.delete(roomId);
+        }
+        this.notifyParentRoomsChanged(parentRoomId);
+      });
+    this.completions.set(roomId, completion);
+    completion.catch(() => {});
+    return { tracked: true };
+  }
+
+  private async runResume(child: SummonRoomAccess, info: SummonChild, token: ResumeEpoch): Promise<void> {
+    await this.waitForDelegatedWork(child, info.roomId);
+    const seal = () => this.resumeSealed.set(info.roomId, token);
+    const { reply, failed, cancelled } = await this.settledOutcome(child, info.roomId, info.agentId, seal);
+    seal();
+    try {
+      await this.deliverResume(child, info, reply, failed, cancelled, token);
+    } finally {
+      if (this.resumeSealed.get(info.roomId) === token) this.resumeSealed.delete(info.roomId);
+    }
+  }
+
+  private async deliverResume(child: SummonRoomAccess, info: SummonChild, reply: string, failed: boolean, cancelled: boolean, token: ResumeEpoch): Promise<void> {
+    const record = (await (await RoomHandle.open(this.workspace.rootDir, info.roomId)).state()).summon;
+    if (!record) return;
+    const claim = `${info.roomId}\u0000${token}`;
+    if (this.deliveringResume.has(claim)) return;
+    this.deliveringResume.add(claim);
+    try {
+      const parent = await this.serviceForRoom(info.parentRoomId);
+      await parent.deliverAgentResult(info.agentId, reply, {
+        childRoomId: info.roomId,
+        failed,
+        deliveryId: token,
+        ...(record.deliver === "turn" && record.callerAgentId && !cancelled ? { triggerTarget: record.callerAgentId } : {}),
+      });
+      await child.markSummonResumeDelivered(token);
+    } finally {
+      this.deliveringResume.delete(claim);
+    }
+  }
+
+  private async recoverResumeOne(info: SummonChild, epoch?: ResumeEpoch): Promise<void> {
+    const token = epoch ?? (await this.mintRecoveryEpoch(info.roomId));
+    const child = await this.serviceForRoom(info.roomId);
+    await this.runResume(child, info, token);
+  }
+
+  private async mintRecoveryEpoch(roomId: string): Promise<ResumeEpoch> {
+    const minted = this.resumeEpochs.mint(roomId);
+    const handle = await RoomHandle.open(this.workspace.rootDir, roomId);
+    let adopted = minted;
+    await handle.updateState((state) => {
+      if (!state.summon) return;
+      if (state.summon.resumeStartedAt) adopted = state.summon.resumeStartedAt;
+      else state.summon.resumeStartedAt = minted;
+    });
+    return adopted;
   }
 }

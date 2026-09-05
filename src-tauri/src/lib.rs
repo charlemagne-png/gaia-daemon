@@ -239,6 +239,29 @@ mod webkit {
         Ok(label)
     }
 
+    fn close_disposable_windows(app: &tauri::AppHandle) {
+        for (label, window) in app.webview_windows() {
+            if label.starts_with("web-") {
+                let _ = window.close();
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn disable_window_restoration(window: &tauri::WebviewWindow) {
+        use objc2::{msg_send, runtime::AnyObject};
+
+        if let Ok(ptr) = window.ns_window() {
+            unsafe {
+                let window = &*ptr.cast::<AnyObject>();
+                let _: () = msg_send![window, setRestorable: false];
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn disable_window_restoration(_window: &tauri::WebviewWindow) {}
+
     /// Open an external web target in an actual native window. This bypasses
     /// WKWebView's ambiguous `window.open` disposition (which can reuse the
     /// current tab/surface). External pages receive neither GAIA's init script
@@ -251,13 +274,15 @@ mod webkit {
             return Err("web window URL must use http or https".to_string());
         }
         let label = format!("web-{}", WINDOW_SEQ.fetch_add(1, Ordering::Relaxed));
-        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+        let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
             .title("GAIA — Link")
             .inner_size(1180.0, 820.0)
             .min_inner_size(560.0, 420.0)
             .resizable(true)
+            .focused(false)
             .build()
             .map_err(|e| e.to_string())?;
+        disable_window_restoration(&window);
         Ok(label)
     }
 
@@ -611,6 +636,10 @@ mod webkit {
 
         builder
             .setup(|app| {
+                // External previews are per-gesture surfaces, never launch state.
+                // This also removes windows restored from an older shell build.
+                close_disposable_windows(app.handle());
+
                 let port = resolve_port();
                 let url = resolve_url();
 
@@ -716,7 +745,11 @@ mod webkit {
                             // Let the fresh daemon settle before we reload onto it.
                             std::thread::sleep(std::time::Duration::from_millis(600));
                             let w = win.clone();
+                            let app = handle.clone();
                             let _ = handle.run_on_main_thread(move || {
+                                // External preview/link windows are disposable. Keeping them
+                                // through a daemon rebuild reloads and focuses them over GAIA.
+                                close_disposable_windows(&app);
                                 let _ = w.eval("window.location.reload()");
                             });
                             // The page takes seconds to boot; a SINGLE early

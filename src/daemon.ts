@@ -64,6 +64,7 @@ import { SttCallBridge } from "./services/voice-stt-bridge.js";
 import { KeepAwakeManager, keepAwakeCapability, migrateLegacyLaunchdAgent, readKeepAwakeSetting, writeKeepAwakeSetting } from "./services/keep-awake.js";
 import { readUserNameSetting, writeUserNameSetting } from "./services/user-name.js";
 import { StudioNotFoundError, StudioService } from "./services/studio-service.js";
+import { ApplicationService } from "./services/application-service.js";
 import { listArtifacts, readArtifact, type ArtifactLocation } from "./services/artifacts.js";
 import type { ArtifactManifest, StoredArtifact } from "./domain/artifacts.js";
 
@@ -193,6 +194,9 @@ export class Daemon {
     broadcast: (event) => this.broadcast(event),
     baseUrl: () => this.baseUrl,
   });
+  readonly applications = new ApplicationService({
+    workspaceFor: (workspaceId) => this.registry.find(workspaceId),
+  });
   readonly accountLogins = new AccountLoginService();
   private hintSourcesCache: { toolNames: string[]; models: ModelChoice[] } | undefined;
   private bridge: HarnessBridge | undefined;
@@ -313,6 +317,11 @@ export class Daemon {
   async petBindings(workspaceId: string): Promise<PetBinding[]> {
     const record = await this.registry.find(workspaceId);
     return record ? listWorkspacePetBindings(workspaceId, record.path) : [];
+  }
+
+  /** Validated read-only application catalog for one initialized workspace. */
+  async applicationCatalog(workspaceId: string) {
+    return this.applications.catalog(workspaceId);
   }
 
   /** Current cached usage as replayable events — used to seed a client the
@@ -514,6 +523,7 @@ export class Daemon {
       roomId: resolvedRoom,
       memoryStore: this.memoryStoreFor(workspaceId),
       memory: this.memoryServiceFor(workspaceId, workspace, record.path),
+      applications: () => this.applicationCatalog(workspaceId),
       // Same LLM caller consolidation uses — backs the context-gate compact.
       llm: consolidateLlm(),
       titleLlmAccount: (provider) => resolveTitleLlmAccount(provider),

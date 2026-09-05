@@ -42,6 +42,7 @@ import type { ReadAloudDelivery } from "../services/read-aloud.js";
 import { completionChunk, completionDone, completionPayload, isStreamingRequest, modelListPayload, newCompletionId } from "../services/voice.js";
 import { checkCredential, importCredential, normalizeWorkspaceId, readKeymakerState, setRoomWorkspaceBinding } from "../services/keymaker.js";
 import { StudioConflictError, StudioNotFoundError } from "../services/studio-service.js";
+import { ApplicationWorkspaceNotFoundError } from "../services/application-service.js";
 
 export interface WebServerOptions {
   cwd: string;
@@ -785,6 +786,15 @@ export class GaiaWebServer {
         json(response, 400, { error: error instanceof Error ? error.message : String(error) });
       }
       return;
+    }
+
+    if (method === "GET" && (params = match(/^\/api\/workspaces\/([^/]+)\/applications$/))) {
+      try {
+        return json(response, 200, await this.daemon.applicationCatalog(params[0]));
+      } catch (error) {
+        if (error instanceof ApplicationWorkspaceNotFoundError) return json(response, 404, { error: error.message });
+        return json(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
     }
 
     if (method === "GET" && (params = match(/^\/api\/workspaces\/([^/]+)\/snapshot$/))) {
@@ -1756,8 +1766,12 @@ export class GaiaWebServer {
       if (!room || !message) return json(response, 400, { error: "Missing room or message" });
       try {
         const service = await this.daemon.serviceFor(claims.workspaceId, room);
-        await service.sendMessage(message, { recordUserMessage: true });
-        json(response, 200, { roomId: room, result: `Resumed room '${room}' with a follow-up message.` });
+        const coordinator = await this.daemon.coordinatorFor(claims.workspaceId);
+        const { tracked } = await coordinator.resume(room, service, message);
+        json(response, 200, {
+          roomId: room,
+          result: `Resumed room '${room}' with a follow-up message.${tracked ? " Its result will post back to the parent room when the turn settles." : ""}`,
+        });
       } catch (error) {
         json(response, 400, { error: error instanceof Error ? error.message : String(error) });
       }

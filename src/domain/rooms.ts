@@ -404,12 +404,15 @@ function summonDeliveryFrom(value: unknown): SummonDelivery | undefined {
   if (typeof value.agentId !== "string" || !value.agentId.trim()) return undefined;
   const deliver = value.deliver === "turn" ? "turn" : value.deliver === "note" ? "note" : undefined;
   if (!deliver) return undefined;
+  const resumeStatus = value.resumeStatus === "running" || value.resumeStatus === "delivered" ? value.resumeStatus : undefined;
   return {
     agentId: value.agentId,
     deliver,
     ...(typeof value.callerAgentId === "string" && value.callerAgentId.trim() ? { callerAgentId: value.callerAgentId } : {}),
     status: value.status === "delivered" ? "delivered" : "running",
     launchedAt: typeof value.launchedAt === "string" ? value.launchedAt : new Date().toISOString(),
+    ...(resumeStatus ? { resumeStatus } : {}),
+    ...(resumeStatus && typeof value.resumeStartedAt === "string" ? { resumeStartedAt: value.resumeStartedAt } : {}),
   };
 }
 
@@ -536,6 +539,9 @@ export function normalizeRoomState(value: unknown): RoomState {
     ...(typeof value.parentRoomId === "string" && value.parentRoomId.trim() ? { parentRoomId: value.parentRoomId } : {}),
     ...(value.subroom === true ? { subroom: true } : {}),
     ...(summon ? { summon } : {}),
+    ...(Array.isArray(value.summonDeliveryReceipts)
+      ? { summonDeliveryReceipts: value.summonDeliveryReceipts.filter((entry): entry is string => typeof entry === "string") }
+      : {}),
     ...(value.summonUntrusted === true ? { summonUntrusted: true } : {}),
     ...(typeof value.workDir === "string" && value.workDir.trim() ? { workDir: value.workDir } : {}),
     ...(typeof value.title === "string" && value.title.trim() ? { title: value.title } : {}),
@@ -893,6 +899,19 @@ export class RoomHandle {
     await this.updateState((state) => {
       state.queue = [...(state.queue ?? []), message];
     });
+  }
+
+  /** Atomically accept one child result and, when needed, place its callback
+   * under durable queue custody. Retries observe the receipt and do nothing. */
+  async acceptSummonDelivery(deliveryId: string, callback?: QueuedMessage): Promise<boolean> {
+    let accepted = false;
+    await this.updateState((state) => {
+      if (state.summonDeliveryReceipts?.includes(deliveryId)) return;
+      state.summonDeliveryReceipts = [...(state.summonDeliveryReceipts ?? []), deliveryId];
+      if (callback) state.queue = [...(state.queue ?? []), callback];
+      accepted = true;
+    });
+    return accepted;
   }
 
   /** The head of the durable queue WITHOUT removing it. The entry stays queued
