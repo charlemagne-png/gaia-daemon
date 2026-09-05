@@ -88,6 +88,13 @@ async function roomFavorite(ctx: RouteContext): Promise<boolean> {
   await respond(ctx.response, () => ctx.daemon.setRoomFavorite(params[0], params[1], favorite));
   return true;
 }
+async function roomProject(ctx: RouteContext): Promise<boolean> {
+  const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/project$/);
+  if (ctx.request.method !== "POST" || !params) return false;
+  const project = stringField(await parseBody(ctx.request), "project") ?? "";
+  await respond(ctx.response, () => ctx.daemon.setRoomProject(params[0], params[1], project));
+  return true;
+}
 async function roomBookmarks(ctx: RouteContext): Promise<boolean> {
   const params = matchPath(ctx.url.pathname, /^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/bookmarks$/);
   if (ctx.request.method !== "POST" || !params) return false;
@@ -441,6 +448,7 @@ const roomHandlers = [
   roomAgentDialogue,
   roomTitle,
   roomFavorite,
+  roomProject,
   roomBookmarks,
   roomBookmarkDelete,
   roomHumansGet,

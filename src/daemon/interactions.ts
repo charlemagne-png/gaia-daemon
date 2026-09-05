@@ -112,6 +112,12 @@ export class RoomInteractionLifecycle {
     return this.refreshRoomList(workspaceId);
   }
 
+  async setRoomProject(workspaceId: string, roomId: string, project: string): Promise<{ rooms: Snapshot["rooms"] }> {
+    const service = await this.serviceForExistingRoom(workspaceId, roomId);
+    await service.setProject(project);
+    return this.refreshRoomList(workspaceId);
+  }
+
   async setRoomBookmark(workspaceId: string, roomId: string, eventId: string, name: string): Promise<{ bookmark: RoomBookmark; rooms: Snapshot["rooms"] }> {
     const service = await this.serviceForExistingRoom(workspaceId, roomId);
     const bookmark = await service.setBookmark(eventId, name);

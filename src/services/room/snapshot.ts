@@ -215,6 +215,15 @@ export class RoomSnapshotMixin {
     await this.emitRoomsChanged();
   }
 
+  async setProject(rawProject: string): Promise<void> {
+    const project = rawProject.replace(/\s+/g, " ").trim();
+    await this.room.updateState((state: any) => {
+      if (project) state.project = project;
+      else delete state.project;
+    });
+    await this.emitRoomsChanged();
+  }
+
   /** Human-membership allowlist (RoomState.humans). Absent/empty = today's
    * unrestricted default — enforcement (server/http.ts) only kicks in once a
    * room has at least one human explicitly added. */

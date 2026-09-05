@@ -2,7 +2,7 @@
 // child room nests under its parent (via room.parentRoomId) and is collapsed
 // by default behind a twisty. Nesting is unbounded — grandchildren summon
 // their own children.
-import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, openSubroom, renameRoom, reorderWorkspaces, selectRoom, setRoomFavorite, setWorkspaceFavorite, summonAgentInRoom } from "./actions.js";
+import { addRoom, addWorkspace, deleteWorkspace, loadWorkspace, openSubroom, renameRoom, reorderWorkspaces, selectRoom, setRoomFavorite, setRoomProject, setWorkspaceFavorite, summonAgentInRoom } from "./actions.js";
 import { UI } from "./glyphs.js";
 import { closeSidebarOverlay } from "./chrome.js";
 import { $, h } from "./dom.js";
@@ -549,6 +549,14 @@ function RoomContextMenu() {
         void setRoomFavorite(room.id, !room.favorite);
       },
       text: room.favorite ? "Remove favorite" : "Add favorite",
+    }),
+    h("button", {
+      type: "button",
+      onclick: () => {
+        close();
+        void setRoomProject(room.id, room.project ?? "");
+      },
+      text: room.project ? `Set project… (${room.project})` : "Set project…",
     }),
     h("button", {
       type: "button",
