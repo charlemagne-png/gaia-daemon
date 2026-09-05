@@ -63,6 +63,7 @@
   --text-primary: var(--fg);
   --text-secondary: var(--muted);
   --text-tertiary: color-mix(in srgb, var(--muted) 60%, transparent);
+  --sel: color-mix(in srgb, var(--fg) 7%, transparent);
   --border-subtle: var(--border);
   --border-emphasis: var(--accent);
   --interactive-rest: var(--surface-2);
@@ -262,7 +263,7 @@ small, time { color: var(--muted); overflow-wrap: anywhere; }
   min-width: 0;
 }
 
-.sidebar { border-right: 1px solid var(--border); }
+.sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: calc(var(--sp-1) * 1.25); }
 .right { border-left: 1px solid var(--border); }
 
 .main {
@@ -418,7 +419,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* ============================================================
    sidebar: workspaces + rooms tree
    ============================================================ */
-.nav-title, h3 { margin: var(--sp-3) 0 var(--sp-2); color: var(--text-secondary); font-size: var(--text-sm); font-weight: var(--fw-semibold); text-transform: none; letter-spacing: 0.02em; }
+.nav-search { flex: 0 0 28px; display: flex; align-items: center; gap: calc(var(--sp-1) * 1.75); height: 28px; padding: 0 var(--sp-1); color: var(--muted); background: transparent; border: none; box-shadow: none; text-align: left; }
+.nav-search:hover { color: var(--fg); background: transparent; }
+.nav-title, h3 { margin: var(--sp-4) 0 calc(var(--sp-1) * 1.5); color: var(--text-secondary); font-size: var(--text-xs); font-weight: var(--fw-medium); text-transform: uppercase; letter-spacing: 0.12em; }
 /* A section header with an inline affordance (e.g. rooms + new-room button). */
 .nav-title-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
 .nav-title-add {
@@ -427,16 +430,23 @@ body.resizing { cursor: col-resize; user-select: none; }
   box-shadow: none;
   padding: 0 var(--sp-1);
   line-height: var(--lh-solid);
-  font-size: 1.15em;
+  font-size: 1.1em;
   color: var(--muted);
-  transition: color var(--dur-fast) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
-.nav-title-add:hover, .nav-title-add.active { color: var(--accent); }
+.nav-title-add:hover, .nav-title-add.active { color: var(--accent); background: transparent; }
 .nav-title-actions { display: inline-flex; align-items: center; gap: var(--sp-1); }
-.workspace-list, .file-tabs { display: grid; gap: var(--sp-2); }
+.tree-section { min-width: 0; }
+.workspace-list, .room-tree { position: relative; }
+.workspace-list, .room-tree, .room-node, .room-children { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
 .agent-list, .task-list { display: grid; gap: var(--sp-1); }
 .nav-item, .nav-action, .file-tabs button, .segmented-tabs button { width: 100%; text-align: left; }
+.nav-item, .nav-action { min-height: 26px; padding: calc(var(--sp-1) * 0.75) var(--sp-2); border: 1px solid transparent; background: transparent; box-shadow: none; white-space: nowrap; overflow: hidden; }
+.nav-item:hover, .nav-action:hover { background: var(--sel); }
+.nav-item.active, .room-row.active .nav-item { border-color: var(--accent); background: var(--sel); color: var(--accent); }
 .nav-item span, .file-tabs span, .segmented-tabs span { display: block; }
+.favorites-empty { padding: var(--sp-1) var(--sp-2) var(--sp-2); color: var(--muted); font-size: var(--text-xs); white-space: normal; }
+.ws-item, .fav-item, .room-item { user-select: none; touch-action: pan-y; }
 
 /* Workspace group header in agent panel */
 .workspace-group-header {
@@ -471,11 +481,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .sidebar .nav-item small { display: none; }
 
 /* Rooms are a nested tree: a summon's child room collapses under its parent
-   behind a twisty, indented by depth. */
-/* minmax(0,1fr): pin every grid track to the sidebar width so a long room id
-   (e.g. a nested whale-* child) can't blow the column past the pane and shove
-   the trailing twisty off-screen. min-width:0 lets the row shrink to match. */
-.room-tree, .room-node, .room-children { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
+   behind a twisty, indented by depth. Shared tree geometry lives with the
+   workspace/favorites lists above so every sidebar row keeps one rhythm. */
 /* Day → project grouping of the top-level room list (sidebar.js GroupedRooms). */
 .room-day-head { margin: var(--sp-3) 0 var(--sp-1); padding: 0 var(--sp-2); font-size: var(--text-xs); font-weight: var(--fw-medium); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); }
 .room-tree > .room-day-head:first-child { margin-top: 0; }
@@ -512,9 +519,8 @@ body.resizing { cursor: col-resize; user-select: none; }
    focused ROOM; there's no per-row delete button for it. Workspaces are never
    removed by this chord — that's right-click -> "Remove workspace" only. */
 .nav-item.focused { box-shadow: inset 0 0 0 1px var(--danger); }
-.room-label { display: flex; align-items: center; gap: var(--sp-1); }
-.room-item .room-star,
-.room-item .room-incognito,
+.room-label { display: flex; align-items: center; gap: calc(var(--sp-1) * 1.5); min-width: 0; }
+.room-icon-slot { display: flex; flex: 0 0 14px; align-items: center; justify-content: center; }
 .room-item .room-berserk,
 .room-item .room-love,
 .room-item .room-agent,
@@ -522,20 +528,14 @@ body.resizing { cursor: col-resize; user-select: none; }
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-out);
 }
-.room-item:hover .room-star,
-.room-item:hover .room-incognito,
 .room-item:hover .room-berserk,
 .room-item:hover .room-love,
 .room-item:hover .room-agent,
 .room-item:hover .room-ref,
-.room-item:focus-visible .room-star,
-.room-item:focus-visible .room-incognito,
 .room-item:focus-visible .room-berserk,
 .room-item:focus-visible .room-love,
 .room-item:focus-visible .room-agent,
 .room-item:focus-visible .room-ref,
-.room-item.active .room-star,
-.room-item.active .room-incognito,
 .room-item.active .room-berserk,
 .room-item.active .room-love,
 .room-item.active .room-agent,
@@ -579,6 +579,8 @@ body.resizing { cursor: col-resize; user-select: none; }
   text-align: left;
 }
 .room-menu button:hover { background: var(--bg3); color: var(--accent); }
+.side-bottom { margin-top: auto; padding: var(--sp-3) var(--sp-1) 0; }
+.side-bottom .nav-action { color: var(--muted); }
 /* Inline agent picker under "Summon agent" — scrolls past ~8 agents. */
 .room-menu-sub {
   max-height: 240px;

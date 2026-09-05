@@ -37,8 +37,12 @@ import { isNative, isNativeWindowFocused } from "./native.js";
  *   expandedActivities: Set<string>,
  *   expandedRooms: Set<string>,
  *   expandedWorkspaceGroups: Set<string>,
+ *   workspacesShown: number,
+ *   workspacesCollapsed: boolean,
  *   roomsShown: number,
+ *   roomsCollapsed: boolean,
  *   roomsFavoritesOnly: boolean,
+ *   workspaceFavorites: string[],
  *   older: {roomId: string, events: RoomEvent[], loading: boolean, lastTotal: number},
  *   openTabs: string[],
  *   sidebarCollapsed: boolean,
@@ -119,12 +123,21 @@ export const state = {
   expandedRooms: new Set(),
   // Which workspace groups are expanded in the panel's agent list. All expanded by default.
   expandedWorkspaceGroups: new Set(["FENYX", "PERSONAL", "PALOPTIC", "General"]),
+  // How many workspaces the sidebar renders before "show more" — long-lived
+  // installs accumulate enough roots to bury the rooms tree.
+  workspacesShown: 8,
+  // Sidebar section minimizers. Persisted per app.
+  workspacesCollapsed: loadBoolean("gaia.workspacesCollapsed"),
   // How many top-level rooms the sidebar list renders before "show more" —
   // rooms are chats, and a 100-chat history import must not flood the list.
-  roomsShown: 25,
+  roomsShown: 8,
+  roomsCollapsed: loadBoolean("gaia.roomsCollapsed"),
   // Sidebar room-list filter: show just favorited rooms (plus their ancestor
   // containers so favorite summon subrooms stay reachable). Persisted per app.
   roomsFavoritesOnly: loadBoolean("gaia.roomsFavoritesOnly"),
+  // Client-side workspace pins for the sidebar favorites tree. Rooms keep using
+  // the daemon-backed RoomState.favorite bit; WorkspaceRecord has no such field.
+  workspaceFavorites: loadStringList("gaia.workspaceFavorites"),
   // Older committed events paged in by the transcript's "load older" button,
   // strictly preceding the snapshot's tail window. Cleared on room switch and
   // whenever the transcript shrinks (rewind/truncate → lastTotal drops).
@@ -263,6 +276,16 @@ function loadBoolean(key) {
   }
 }
 
+/** @param {string} key @returns {string[]} */
+function loadStringList(key) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? "[]");
+    return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** @returns {Record<string, number>} */
 function loadReadMarks() {
   try {
@@ -302,6 +325,30 @@ export function persistRoomsFavoritesOnly() {
     localStorage.setItem("gaia.roomsFavoritesOnly", state.roomsFavoritesOnly ? "true" : "false");
   } catch {
     // storage disabled — the filter just won't survive a reload.
+  }
+}
+
+export function persistWorkspacesCollapsed() {
+  try {
+    localStorage.setItem("gaia.workspacesCollapsed", state.workspacesCollapsed ? "true" : "false");
+  } catch {
+    // storage disabled — the section just won't stay collapsed.
+  }
+}
+
+export function persistRoomsCollapsed() {
+  try {
+    localStorage.setItem("gaia.roomsCollapsed", state.roomsCollapsed ? "true" : "false");
+  } catch {
+    // storage disabled — the section just won't stay collapsed.
+  }
+}
+
+export function persistWorkspaceFavorites() {
+  try {
+    localStorage.setItem("gaia.workspaceFavorites", JSON.stringify(state.workspaceFavorites));
+  } catch {
+    // storage disabled — workspace pins just won't survive a reload.
   }
 }
 

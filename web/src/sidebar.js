@@ -11,7 +11,7 @@ import { refreshAttention } from "./attention.js";
 import { markDirty, registerRegion, setError } from "./render.js";
 import { openSearch } from "./search.js";
 import { openSettings } from "./settings.js";
-import { effectiveSidebarFocus, markRoomRead, markRoomUnread, persistRoomsFavoritesOnly, roomUnread, state, workspaceActivity } from "./state.js";
+import { effectiveSidebarFocus, markRoomRead, markRoomUnread, persistRoomsCollapsed, persistRoomsFavoritesOnly, persistWorkspaceFavorites, persistWorkspacesCollapsed, roomUnread, state, workspaceActivity } from "./state.js";
 
 /** @typedef {import("./types.js").RoomSummary} RoomSummary */
 
@@ -19,115 +19,317 @@ function renderSidebar() {
   const nav = $("#sidebar");
   if (!nav) return;
   const scrollTop = nav.scrollTop;
-  const current = state.snapshot?.workspace.id;
-  // The delete target: which workspace/room the OS delete chord will remove.
-  const focus = effectiveSidebarFocus();
   /** @type {(HTMLElement|null)[]} */
   const children = [
     h("button", {
       class: "nav-search",
       title: "search across all chats (⌘K)",
       onclick: () => openSearch("chatwide"),
-      text: "🔍 search chats",
+      text: "⌕ search chats",
     }),
+    FavoritesSection(),
     h(
       "div",
-      { class: "nav-title nav-title-row" },
-      h("span", { text: "workspaces" }),
-      // Inline + next to the header, same UI element as "rooms"'s new-room +
-      // — one click from the top, no separate full-width button buried under
-      // the workspace list.
+      { class: "tree-section workspaces-section" },
       h(
-        "span",
-        { class: "nav-title-actions" },
-        h("button", { class: "nav-title-add", title: "add workspace", onclick: () => void addWorkspace(), text: "+" }),
-      ),
-    ),
-    h(
-      "div",
-      { class: "workspace-list" },
-      state.workspaces.map((workspace) => {
-        // Roll the workspace's rooms up to one dot so activity in a workspace
-        // you're NOT viewing is still visible: green (pulsing) while any room in
-        // it has an agent running, else accent while any has unread replies.
-        const act = workspaceActivity(workspace.id);
-        return h(
-          "button",
-          {
-            class: `nav-item ${workspace.id === current ? "active" : ""} ${workspace.isInitialized ? "" : "muted"} ${focus?.kind === "workspace" && focus.id === workspace.id ? "focused" : ""}`,
-            title: workspace.path,
-            // Clicking selects/opens it. The muted state means its .gaia is
-            // missing. Removing a workspace is right-click -> "Remove
-            // workspace" ONLY — never the ⌘⌫/Del chord (that's rooms only,
-            // see keys.js), so an accidental keypress can't nuke a workspace.
+        "div",
+        { class: "nav-title nav-title-row" },
+        h("span", { text: "workspaces" }),
+        h(
+          "span",
+          { class: "nav-title-actions" },
+          h("button", {
+            class: "nav-title-add nav-title-collapse",
+            title: state.workspacesCollapsed ? "show workspaces" : "collapse workspaces",
             onclick: () => {
-              state.sidebarFocus = { kind: "workspace", id: workspace.id };
-              if (workspace.isInitialized) void loadWorkspace(workspace.id);
-              else setError(`Missing .gaia workspace: ${workspace.path}`);
+              state.workspacesCollapsed = !state.workspacesCollapsed;
+              persistWorkspacesCollapsed();
               markDirty("sidebar");
             },
-            oncontextmenu: (/** @type {MouseEvent} */ event) => {
-              event.preventDefault();
-              state.workspaceContextMenu = { workspaceId: workspace.id, x: event.clientX, y: event.clientY };
-              markDirty("sidebar");
-            },
-          },
-          h(
-            "span",
-            { class: "room-label" },
-            act.running
-              ? h("span", { class: "room-dot running", title: "agent running in this workspace" })
-              : act.unread
-                ? h("span", { class: "room-dot unread", title: "unread messages in this workspace" })
-                : null,
-            h("span", { class: act.unread && !act.running ? "room-name unread" : "room-name", text: workspace.name }),
-          ),
-          h("small", {}, PathText(workspace.path)),
-        );
-      }),
+            text: state.workspacesCollapsed ? "▸" : "▾",
+          }),
+          h("button", { class: "nav-title-add", title: "add workspace", onclick: () => void addWorkspace(), text: "+" }),
+        ),
+      ),
+      state.workspacesCollapsed ? null : WorkspaceList(),
+      WorkspaceContextMenu(),
     ),
-    WorkspaceContextMenu(),
     h(
       "div",
-      { class: "nav-title nav-title-row" },
-      h("span", { text: "rooms" }),
-      // Inline + next to the header, so a new room is one click from the top —
-      // not a button buried under the whole (possibly 100-chat) room list.
-      state.snapshot
-        ? h(
-            "span",
-            { class: "nav-title-actions" },
-            h("button", {
-              class: `nav-title-add ${state.roomsFavoritesOnly ? "active" : ""}`,
-              title: state.roomsFavoritesOnly ? "show all rooms" : "show favorites only",
-              onclick: () => {
-                state.roomsFavoritesOnly = !state.roomsFavoritesOnly;
-                persistRoomsFavoritesOnly();
-                markDirty("sidebar");
-              },
-              text: "★",
-            }),
-            h("button", { class: "nav-title-add", title: "new room (Ctrl+T) · ⌥-click = incognito 🕶", onclick: (/** @type {MouseEvent} */ e) => void addRoom({ incognito: e.altKey }), text: "+" }),
-          )
-        : null,
+      { class: "tree-section rooms-section" },
+      h(
+        "div",
+        { class: "nav-title nav-title-row" },
+        h("span", { text: "rooms" }),
+        state.snapshot
+          ? h(
+              "span",
+              { class: "nav-title-actions" },
+              h("button", {
+                class: "nav-title-add nav-title-collapse",
+                title: state.roomsCollapsed ? "show rooms" : "collapse rooms",
+                onclick: () => {
+                  state.roomsCollapsed = !state.roomsCollapsed;
+                  persistRoomsCollapsed();
+                  markDirty("sidebar");
+                },
+                text: state.roomsCollapsed ? "▸" : "▾",
+              }),
+              h("button", {
+                class: `nav-title-add ${state.roomsFavoritesOnly ? "active" : ""}`,
+                title: state.roomsFavoritesOnly ? "show all rooms" : "show favorites only",
+                onclick: () => {
+                  state.roomsFavoritesOnly = !state.roomsFavoritesOnly;
+                  persistRoomsFavoritesOnly();
+                  markDirty("sidebar");
+                },
+                text: "★",
+              }),
+              h("button", { class: "nav-title-add", title: "new room (Ctrl+T) · ⌥-click = incognito ⊚", onclick: (/** @type {MouseEvent} */ e) => void addRoom({ incognito: e.altKey }), text: "+" }),
+            )
+          : null,
+      ),
+      state.roomsCollapsed ? null : RoomTree(),
+      RoomContextMenu(),
     ),
-    RoomTree(),
-    RoomContextMenu(),
     h("div", { class: "nav-title nav-title-row applications-title" },
       h("button", { class: "applications-title-button", type: "button", onclick: () => openApplicationLauncher(), text: "Applications" }),
       h("span", { class: "nav-title-actions" }, h("button", { class: "nav-title-add", type: "button", disabled: true, title: "Create app arrives in Wave 2", text: "+" }))),
     ApplicationsLauncher(),
-    h("div", { class: "spacer" }),
-    h("button", { class: "nav-action", onclick: () => openSettings(), text: "settings" }),
+    h(
+      "div",
+      { class: "side-bottom" },
+      h("button", { class: "nav-action", onclick: () => openSettings(), text: "settings" }),
+    ),
   ];
   nav.replaceChildren(...children.filter((child) => child !== null));
   if (scrollTop) nav.scrollTop = scrollTop;
 }
 
+// How many workspaces each "show more" click adds to the list.
+const WORKSPACES_CHUNK = 8;
+
+/** @param {string} workspaceId @returns {boolean} */
+function workspaceFavorite(workspaceId) {
+  return state.workspaceFavorites.includes(workspaceId);
+}
+
+/** @param {string} workspaceId @param {boolean} favorite */
+function setWorkspaceFavoriteLocal(workspaceId, favorite) {
+  if (favorite && !state.workspaceFavorites.includes(workspaceId)) state.workspaceFavorites.push(workspaceId);
+  if (!favorite) state.workspaceFavorites = state.workspaceFavorites.filter((id) => id !== workspaceId);
+  persistWorkspaceFavorites();
+  markDirty("sidebar");
+}
+
+/**
+ * Favorite/running/unread/incognito marks live in fixed slots so row labels
+ * share a single x-axis across workspaces, rooms, favorites, and subrooms.
+ * @param {{favorite?: boolean, running?: boolean, unread?: boolean, incognito?: boolean, runningTitle?: string, unreadTitle?: string}} opts
+ * @returns {(HTMLElement|null)[]}
+ */
+function StatusIcons({ favorite, running, unread, incognito, runningTitle = "agent running", unreadTitle = "unread messages" }) {
+  return [
+    h("span", { class: "room-icon-slot" }, favorite ? h("span", { class: "room-star", title: "favorite", text: "★" }) : null),
+    h(
+      "span",
+      { class: "room-icon-slot" },
+      running
+        ? h("span", { class: "room-dot running", title: runningTitle })
+        : unread
+          ? h("span", { class: "room-dot unread unread-dot", title: unreadTitle })
+          : null,
+    ),
+    incognito === undefined
+      ? null
+      : h("span", { class: "room-icon-slot" }, incognito ? h("span", { class: "room-incognito", title: "incognito — no memory", text: "⊚" }) : null),
+  ];
+}
+
+/** @param {RoomSummary} room @returns {HTMLElement|null} */
+function RoomAgentChip(room) {
+  const snapshot = state.snapshot;
+  if (!room.agent) return null;
+  const info = snapshot?.agents?.find((agent) => agent.id === room.agent);
+  const model = info?.modelLabel ?? "";
+  return h("span", {
+    class: "room-agent",
+    title: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
+    text: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
+  });
+}
+
+/** @typedef {{kind: "workspace", workspace: import("./types.js").WorkspaceRecord}|{kind: "room", room: RoomSummary}} FavoriteEntry */
+
+/** @returns {FavoriteEntry[]} */
+function favoriteEntries() {
+  return [
+    ...state.workspaces.filter((workspace) => workspaceFavorite(workspace.id)).map((workspace) => /** @type {FavoriteEntry} */ ({ kind: "workspace", workspace })),
+    ...(state.snapshot?.rooms ?? []).filter((room) => room.favorite && !room.voiceSession).map((room) => /** @type {FavoriteEntry} */ ({ kind: "room", room })),
+  ];
+}
+
+function FavoritesSection() {
+  const entries = favoriteEntries();
+  return h(
+    "div",
+    { class: "tree-section favorites-section" },
+    h("div", { class: "nav-title nav-title-row" }, h("span", { text: "favorites" })),
+    h(
+      "div",
+      { class: "workspace-list favorites-list" },
+      entries.length === 0
+        ? h("div", { class: "favorites-empty", text: "Right-click a room or workspace → Add favorite." })
+        : entries.map((entry) => FavoriteRow(entry)),
+    ),
+  );
+}
+
+/** @param {FavoriteEntry} entry */
+function FavoriteRow(entry) {
+  if (entry.kind === "workspace") return FavoriteWorkspaceRow(entry.workspace);
+  return FavoriteRoomRow(entry.room);
+}
+
+/** @param {import("./types.js").WorkspaceRecord} workspace */
+function FavoriteWorkspaceRow(workspace) {
+  const current = state.snapshot?.workspace.id;
+  const focus = effectiveSidebarFocus();
+  const act = workspaceActivity(workspace.id);
+  return h(
+    "button",
+    {
+      class: `nav-item fav-item ws-item ${workspace.id === current ? "active" : ""} ${workspace.isInitialized ? "" : "muted"} ${focus?.kind === "workspace" && focus.id === workspace.id ? "focused" : ""}`,
+      title: workspace.path,
+      onclick: () => {
+        state.sidebarFocus = { kind: "workspace", id: workspace.id };
+        if (workspace.isInitialized) void loadWorkspace(workspace.id);
+        else setError(`Missing .gaia workspace: ${workspace.path}`);
+        markDirty("sidebar");
+      },
+      oncontextmenu: (/** @type {MouseEvent} */ event) => {
+        event.preventDefault();
+        state.workspaceContextMenu = { workspaceId: workspace.id, x: event.clientX, y: event.clientY };
+        markDirty("sidebar");
+      },
+    },
+    h(
+      "span",
+      { class: "room-label" },
+      ...StatusIcons({ favorite: true, running: act.running, unread: act.unread, runningTitle: "agent running in this workspace", unreadTitle: "unread messages in this workspace" }),
+      h("span", { class: act.unread && !act.running ? "room-name unread" : "room-name", text: workspace.name }),
+    ),
+    h("small", {}, PathText(workspace.path)),
+  );
+}
+
+/** @param {RoomSummary} room */
+function FavoriteRoomRow(room) {
+  const snapshot = state.snapshot;
+  const focus = effectiveSidebarFocus();
+  const focused = focus?.kind === "room" && focus.id === room.id;
+  const label = room.title ?? room.id;
+  return h(
+    "button",
+    {
+      class: `nav-item fav-item room-item ${room.isCurrent ? "active" : ""} ${focused ? "focused" : ""} ${room.berserk ? "berserk" : ""} ${room.love ? "love" : ""} ${room.teleport ? "teleport" : ""}`,
+      title: `${label} — ${room.path}`,
+      onclick: !snapshot
+        ? null
+        : () => {
+            state.roomContextMenu = null;
+            state.sidebarFocus = { kind: "room", id: room.id };
+            if (room.isCurrent) markRoomRead(snapshot.workspace.id, room.id, room.lastActivity ?? 0);
+            if (!room.isCurrent) void selectRoom(snapshot.workspace.id, room.id);
+            else markDirty("sidebar");
+            closeSidebarOverlay();
+          },
+      oncontextmenu: snapshot
+        ? (/** @type {MouseEvent} */ event) => {
+            event.preventDefault();
+            state.sidebarFocus = { kind: "room", id: room.id };
+            state.roomContextMenu = { roomId: room.id, x: event.clientX, y: event.clientY };
+            markDirty("sidebar");
+          }
+        : undefined,
+      ondblclick: !snapshot
+        ? null
+        : (/** @type {MouseEvent} */ event) => {
+            event.preventDefault();
+            void renameRoom(room.id, label);
+          },
+    },
+    h(
+      "span",
+      { class: "room-label" },
+      ...StatusIcons({ favorite: true, running: room.running, unread: roomUnread(room), incognito: room.incognito }),
+      room.berserk ? h("span", { class: "room-berserk", title: "BERSERK — adversarial deathmode", text: "⚔\uFE0F" }) : null,
+      room.love ? h("span", { class: "room-love", title: "LOVE — lovemode", text: "💗" }) : null,
+      RoomAgentChip(room),
+      room.refCode ? h("span", { class: "room-ref", title: `room reference ${room.refCode}`, text: room.refCode }) : null,
+      h("span", { class: roomUnread(room) && !room.running ? "room-name unread" : "room-name", text: label }),
+    ),
+    h("small", {}, room.imported ? document.createTextNode(room.imported.slice(0, 10)) : PathText(room.path)),
+  );
+}
+
+function WorkspaceList() {
+  const current = state.snapshot?.workspace.id;
+  const focus = effectiveSidebarFocus();
+  const all = state.workspaces;
+  const visible = all.slice(0, state.workspacesShown);
+  const currentWorkspace = all.find((workspace) => workspace.id === current);
+  if (currentWorkspace && !visible.includes(currentWorkspace)) visible.push(currentWorkspace);
+  const remaining = all.length - visible.length;
+  return h(
+    "div",
+    { class: "workspace-list" },
+    visible.map((workspace) => {
+      const act = workspaceActivity(workspace.id);
+      const pinned = workspaceFavorite(workspace.id);
+      return h(
+        "button",
+        {
+          class: `nav-item ws-item ${workspace.id === current ? "active" : ""} ${workspace.isInitialized ? "" : "muted"} ${focus?.kind === "workspace" && focus.id === workspace.id ? "focused" : ""}`,
+          title: workspace.path,
+          onclick: () => {
+            state.sidebarFocus = { kind: "workspace", id: workspace.id };
+            if (workspace.isInitialized) void loadWorkspace(workspace.id);
+            else setError(`Missing .gaia workspace: ${workspace.path}`);
+            markDirty("sidebar");
+          },
+          oncontextmenu: (/** @type {MouseEvent} */ event) => {
+            event.preventDefault();
+            state.workspaceContextMenu = { workspaceId: workspace.id, x: event.clientX, y: event.clientY };
+            markDirty("sidebar");
+          },
+        },
+        h(
+          "span",
+          { class: "room-label" },
+          ...StatusIcons({ favorite: pinned, running: act.running, unread: act.unread, runningTitle: "agent running in this workspace", unreadTitle: "unread messages in this workspace" }),
+          h("span", { class: act.unread && !act.running ? "room-name unread" : "room-name", text: workspace.name }),
+        ),
+        h("small", {}, PathText(workspace.path)),
+      );
+    }),
+    remaining > 0
+      ? h("button", {
+          class: "nav-action rooms-more",
+          text: `↓ show ${Math.min(WORKSPACES_CHUNK, remaining)} more (${remaining} left)`,
+          onclick: () => {
+            state.workspacesShown += WORKSPACES_CHUNK;
+            markDirty("sidebar");
+          },
+        })
+      : null,
+  );
+}
+
 registerRegion("sidebar", renderSidebar);
 
 // How many top-level rooms each "show more" click adds to the list.
-const ROOMS_CHUNK = 25;
+const ROOMS_CHUNK = 8;
 
 function RoomTree() {
   /** @type {RoomSummary[]} */
@@ -309,20 +511,6 @@ function RoomNode(room, childrenOf, depth) {
   const focus = effectiveSidebarFocus();
   const focused = focus?.kind === "room" && focus.id === room.id;
   const label = room.title ?? room.id;
-  /** Agent + model chip for the room card — the id/operator info the title no
-   * longer carries under the living-titles law. Model comes from the agents
-   * roster (AgentStatus.modelLabel) so it tracks what turns actually run.
-   * @param {import("../../src/core/types.ts").RoomSummary} room */
-  const RoomAgentChip = (room) => {
-    if (!room.agent) return null;
-    const info = snapshot?.agents?.find((agent) => agent.id === room.agent);
-    const model = info?.modelLabel ?? "";
-    return h("span", {
-      class: "room-agent",
-      title: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
-      text: model ? `@${room.agent} · ${model}` : `@${room.agent}`,
-    });
-  };
   return h(
     "div",
     { class: "room-node" },
@@ -367,15 +555,7 @@ function RoomNode(room, childrenOf, depth) {
         h(
           "span",
           { class: "room-label" },
-          // One status slot: a green blinking dot while an agent is working in
-          // the room, else an accent dot when it has unread replies, else empty.
-          room.running
-            ? h("span", { class: "room-dot running", title: "agent running" })
-            : roomUnread(room)
-              ? h("span", { class: "room-dot unread", title: "unread messages" })
-              : null,
-          room.favorite ? h("span", { class: "room-star", title: "favorite", text: "★" }) : null,
-          room.incognito ? h("span", { class: "room-incognito", title: "incognito — no memory", text: "🕶" }) : null,
+          ...StatusIcons({ favorite: room.favorite, running: room.running, unread: roomUnread(room), incognito: room.incognito }),
           room.berserk ? h("span", { class: "room-berserk", title: "BERSERK — adversarial deathmode", text: "⚔\uFE0F" }) : null,
           room.love ? h("span", { class: "room-love", title: "LOVE — lovemode", text: "💗" }) : null,
           // Living-titles law: titles carry purpose, so the card itself names the
@@ -514,6 +694,14 @@ function WorkspaceContextMenu() {
     "div",
     { class: "room-menu", style: `left:${open.x}px;top:${open.y}px`, oncontextmenu: (/** @type {MouseEvent} */ event) => event.preventDefault() },
     h("div", { class: "room-menu-title", text: workspace.name }),
+    h("button", {
+      type: "button",
+      onclick: () => {
+        close();
+        setWorkspaceFavoriteLocal(workspace.id, !workspaceFavorite(workspace.id));
+      },
+      text: workspaceFavorite(workspace.id) ? "Remove favorite" : "Add favorite",
+    }),
     h("button", {
       type: "button",
       class: "danger",
