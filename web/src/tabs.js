@@ -71,13 +71,14 @@ export function restoreTabs(workspaceId) {
  * Ensure a room is present as a tab (used whenever a room becomes current).
  * @param {string} roomId
  * @param {string} workspaceId
+ * @returns {boolean} true when the tab was newly added.
  */
 export function openTab(roomId, workspaceId) {
-  if (!roomId) return;
-  if (!state.openTabs.includes(roomId)) {
-    state.openTabs.push(roomId);
-    persist(workspaceId);
-  }
+  if (!roomId) return false;
+  if (state.openTabs.includes(roomId)) return false;
+  state.openTabs.push(roomId);
+  persist(workspaceId);
+  return true;
 }
 
 /**

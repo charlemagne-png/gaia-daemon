@@ -13,6 +13,7 @@
 //   Alt+T  theme palette   Alt+Shift+T  cycle theme   Esc  close overlays
 import { deleteRoom, renameRoom } from "./actions.js";
 import { jumpTab, newIncognitoRoom, newTab, nextTab, prevTab, togglePanel, toggleSidebar } from "./chrome.js";
+import { artifactPanelOpen, setArtifactPanelOpen } from "./design/artifacts.js";
 import { isNative } from "./native.js";
 import { markDirty } from "./render.js";
 import { closeSearch, openSearch } from "./search.js";
@@ -64,6 +65,7 @@ function sidebarActionBlocked() {
     state.dario.open ||
     state.bgTasksOpen ||
     state.usagePopoverOpen ||
+    artifactPanelOpen() ||
     Boolean(state.roomContextMenu) ||
     Boolean(state.workspaceContextMenu)
   );
@@ -130,6 +132,13 @@ export function installKeybindings() {
       if (event.key === "Escape" && state.settingsOpen) {
         event.preventDefault();
         closeSettings();
+        return;
+      }
+      // Then the room-local artifact drawer.
+      if (event.key === "Escape" && artifactPanelOpen()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setArtifactPanelOpen(false);
         return;
       }
       // Delete the focused ROOM with the OS-native delete chord (⌘⌫ on macOS,
