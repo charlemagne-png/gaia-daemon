@@ -143,6 +143,9 @@ function fakeRoom(reply: string): SummonRoomAccess & {
     async deliverAgentResult(from: string, reply: string, delivery: SummonResultDelivery) {
       room.delivered.push({ from, reply, delivery });
     },
+    async armSummonDelivery() {
+      return false;
+    },
     async markSummonDeliverySettled(deliveryId: string) {
       room.markedDeliveryIds.push(deliveryId);
     },
@@ -395,6 +398,18 @@ test("resumed turn enters the settlement funnel once under a double-settle", asy
     summon: { agentId: "terry", deliver: "turn", callerAgentId: "gaia", status: "delivered", launchedAt: new Date().toISOString() },
   });
   const child = fakeRoom("resumed result");
+  const residentHandle = await RoomHandle.open(path, childRoomId);
+  await residentHandle.state(); // reproduce RoomService's cached single writer
+  child.armSummonDelivery = async (deliveryId) => {
+    let armed = false;
+    await residentHandle.updateState((state) => {
+      if (!state.summon || state.summon.status !== "delivered") return;
+      state.summon.status = "running";
+      state.summon.deliveryId = deliveryId;
+      armed = true;
+    });
+    return armed;
+  };
   let settled!: () => void;
   const idle = new Promise<void>((resolve) => { settled = resolve; });
   child.waitForSettled = async () => idle;

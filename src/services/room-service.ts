@@ -1545,6 +1545,19 @@ export class RoomService {
     }
   }
 
+  /** Re-arm a delivered child through this room's resident state writer. */
+  async armSummonDelivery(deliveryId: string): Promise<boolean> {
+    await this.init();
+    let armed = false;
+    await this.room.updateState((state) => {
+      if (!state.summon || state.summon.status !== "delivered") return;
+      state.summon.status = "running";
+      state.summon.deliveryId = deliveryId;
+      armed = true;
+    });
+    return armed;
+  }
+
   /** Close exactly the child-turn settlement that reached its parent. A stale
    * settle cannot close a newer turn's contract. */
   async markSummonDeliverySettled(deliveryId: string): Promise<void> {

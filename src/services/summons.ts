@@ -149,6 +149,8 @@ export interface SummonRoomAccess {
    * — nudge that caller agent to react (steer its running turn, else a fresh
    * turn). Never a queued "user →" bubble. */
   deliverAgentResult(fromAgentId: string, reply: string, delivery: SummonResultDelivery): Promise<void>;
+  /** Arm this CHILD room's next delivery through its resident state writer. */
+  armSummonDelivery(deliveryId: string): Promise<boolean>;
   /** Close exactly one CHILD turn's durable settlement contract. */
   markSummonDeliverySettled(deliveryId: string): Promise<void>;
   /** Best-effort model refinement for a machine-owned title already seeded on
@@ -707,8 +709,7 @@ export class SummonCoordinator implements SummonHost {
   /** Resume a summon lane. The same durable status/id contract used at launch
    * is armed before dispatch; settleTask calls settleChildTurn when it ends. */
   async resume(roomId: string, room: SummonRoomAccess, message: string): Promise<{ tracked: boolean }> {
-    const handle = await RoomHandle.open(this.workspace.rootDir, roomId);
-    const state = await handle.state();
+    const state = await (await RoomHandle.open(this.workspace.rootDir, roomId)).state();
     if (!state.summon || !state.parentRoomId) {
       await room.sendMessage(message, { recordUserMessage: true });
       return { tracked: false };
@@ -718,12 +719,10 @@ export class SummonCoordinator implements SummonHost {
     let armed = false;
     if (state.summon.status === "delivered") {
       deliveryId = newId("delivery");
-      await handle.updateState((next) => {
-        if (!next.summon || next.summon.status !== "delivered") return;
-        next.summon.status = "running";
-        next.summon.deliveryId = deliveryId;
-        armed = true;
-      });
+      // RoomService owns this room's cached RoomHandle. Arming through that
+      // writer prevents sendMessage's next state write from restoring stale
+      // `delivered:initial` state over the new contract.
+      armed = await room.armSummonDelivery(deliveryId);
     }
     this.running.set(roomId, {
       roomId,
@@ -737,9 +736,7 @@ export class SummonCoordinator implements SummonHost {
     } catch (error) {
       if (armed) {
         this.running.delete(roomId);
-        await handle.updateState((next) => {
-          if (next.summon?.deliveryId === deliveryId) next.summon.status = "delivered";
-        }).catch(() => {});
+        await room.markSummonDeliverySettled(deliveryId).catch(() => {});
       }
       throw error;
     }
