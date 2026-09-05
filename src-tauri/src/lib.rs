@@ -716,7 +716,15 @@ mod webkit {
                             // Let the fresh daemon settle before we reload onto it.
                             std::thread::sleep(std::time::Duration::from_millis(600));
                             let w = win.clone();
+                            let app = handle.clone();
                             let _ = handle.run_on_main_thread(move || {
+                                // External preview/link windows are disposable. Keeping them
+                                // through a daemon rebuild reloads and focuses them over GAIA.
+                                for (label, window) in app.webview_windows() {
+                                    if label.starts_with("web-") {
+                                        let _ = window.close();
+                                    }
+                                }
                                 let _ = w.eval("window.location.reload()");
                             });
                             // The page takes seconds to boot; a SINGLE early
