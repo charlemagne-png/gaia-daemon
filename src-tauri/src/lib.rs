@@ -647,8 +647,9 @@ mod webkit {
 
         builder
             .setup(|app| {
-                // Only the main window survives launch. Remove every secondary
-                // window restored by this or an older shell build.
+                // Launch state = main only; all secondary windows are per-gesture
+                // surfaces. Remove every secondary window restored by this or an
+                // older shell build.
                 close_secondary_windows(app.handle());
 
                 let port = resolve_port();
@@ -706,6 +707,8 @@ mod webkit {
                 }
 
                 let main_window = main_window_builder.build()?;
+                disable_window_restoration(&main_window);
+                close_secondary_windows(app.handle());
                 install_ios_scroll_inset_fix(&main_window);
                 crate::debug_server::spawn(app.handle().clone());
 

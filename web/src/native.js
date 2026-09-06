@@ -17,6 +17,12 @@ export function isNative() {
   return typeof window !== "undefined" && Boolean(T());
 }
 
+function hasWindowOpenGesture() {
+  if (!isNative()) return false;
+  const activation = globalThis.navigator?.userActivation;
+  return activation === undefined || activation.isActive;
+}
+
 // Whether the native window is the active (key) window. `document.hasFocus()` is
 // unreliable in a background WKWebView — it keeps returning true even when the
 // GAIA app isn't frontmost — so the shell's real focus/blur events are the only
@@ -85,6 +91,10 @@ export async function invoke(cmd, args) {
  * @param {{ mode: "new"|"torn"|"studio", room?: string|null, x?: number|null, y?: number|null, projectId?: string|null, viewId?: string|null, artifactId?: string|null }} opts
  */
 export async function openWindow({ mode, room = null, x = null, y = null, projectId = null, viewId = null, artifactId = null }) {
+  if (!hasWindowOpenGesture()) {
+    console.warn("[native] blocked secondary window without user gesture", { mode });
+    return undefined;
+  }
   return invoke("open_window", { mode, room, x, y, projectId, viewId, artifactId });
 }
 
