@@ -665,6 +665,22 @@ export interface AgentTtsConfig {
  * full contract (decree 2026-07-28). */
 export type InsightLevel = "none" | "line" | "full";
 
+export type FeedbackVerdict = "good" | "bad";
+
+export interface FeedbackRemark {
+  ts: string;
+  room: string;
+  verdict: FeedbackVerdict;
+  quote: string;
+}
+
+export interface AgentFeedbackScore {
+  score: number;
+  lastRemarks: FeedbackRemark[];
+}
+
+export type FeedbackScores = Record<string, AgentFeedbackScore>;
+
 export interface AgentDef {
   id: string;
   displayName: string;

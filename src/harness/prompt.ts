@@ -1,6 +1,6 @@
 // Prompt assembly — the one place a turn's words are put together, shared by
 // every harness. Layering (identical for all three adapters):
-//   system prompt = soul → project intent → AGENTS.md chain → active role
+//   system prompt = soul → Charles feedback → protocols → project intent → AGENTS.md chain → active role
 //   turn prompt   = room header → voice hints → memory (only when changed)
 //                   → new room events → newest message
 // CLI harnesses additionally inline role-skill text + a `gaia` CLI pointer
@@ -12,6 +12,7 @@ import { globalPaths } from "../core/paths.js";
 import type { AgentDef, ContextFile, MessageAttachment, RoomBookmark, RoomEvent, Workspace } from "../core/types.js";
 import type { MemoryStore } from "../domain/memory.js";
 import type { ResolvedRole } from "../domain/roles.js";
+import { feedbackPromptBlock } from "../domain/feedback.js";
 import { discoverContextFiles } from "../domain/workspace.js";
 import { agentSkillNames, loadSkillText } from "../domain/skills.js";
 import type { AgentInput } from "./spec.js";
@@ -27,6 +28,8 @@ export interface SystemPromptInput {
   /** Concatenated verbatim text of ~/.gaia/protocols/*.md (buildBaseSystemPrompt
    * reads it). ""/undefined = no `# Protocols` section at all (zero change). */
   protocolsText?: string;
+  /** Charles taste canon + this agent's score/feedback; preassembled uniformly. */
+  feedbackText?: string;
   /** Room-scoped GAIA-THINK level 0-10. Only affects the trailing line of the
    * Protocols section, and only when protocolsText is present. Unset = 0. */
   thinkingLevel?: number;
@@ -233,6 +236,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     // measured to suppress native thinking only at char 0, not at the end.
     input.agent.promptLaw?.trim() ?? "",
     `# Agent Soul\n\n${input.soulText.trim()}`,
+    input.feedbackText?.trim() ?? "",
     buildProtocolsSection(input.protocolsText, input.thinkingLevel),
     input.intentText?.trim() ? `# Project Agent Intent\n\n${input.intentText.trim()}` : "",
     `# Project Context (AGENTS.md)\n\n${renderProjectContext(input.contextFiles)}`,
@@ -269,12 +273,17 @@ export async function buildBaseSystemPrompt(params: {
   thinkingLevel?: number;
   /** Override the protocols source dir (tests); defaults to ~/.gaia/protocols. */
   protocolsDir?: string;
+  /** Override the Charles-feedback source dir (tests); defaults to ~/.gaia/feedback. */
+  feedbackDir?: string;
 }): Promise<string> {
-  const [soulText, intentText, contextFiles, protocolsText] = await Promise.all([
+  const [soulText, intentText, contextFiles, protocolsText, feedbackText] = await Promise.all([
     readFile(params.agent.soulPath, "utf8"),
     readOptional(params.agent.projectIntentPath),
     discoverContextFiles(params.workspaceRoot),
     readProtocolsText(params.protocolsDir),
+    params.agent.id && params.agent.dir
+      ? feedbackPromptBlock({ agentId: params.agent.id, agentDir: params.agent.dir, feedbackDir: params.feedbackDir })
+      : "",
   ]);
   return buildSystemPrompt({
     agent: params.agent,
@@ -283,6 +292,7 @@ export async function buildBaseSystemPrompt(params: {
     intentText,
     contextFiles,
     protocolsText,
+    feedbackText,
     thinkingLevel: params.thinkingLevel,
   });
 }

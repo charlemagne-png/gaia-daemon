@@ -29,6 +29,9 @@ export const globalPaths = {
    * filename) loads verbatim into EVERY agent's system prompt as a
    * `# Protocols` section. Missing/empty dir = section omitted, zero change. */
   protocolsDir: () => join(gaiaHome(), "protocols"),
+  feedbackDir: () => join(gaiaHome(), "feedback"),
+  tasteCanon: () => join(gaiaHome(), "feedback", "TASTE-CANON.md"),
+  feedbackScores: () => join(gaiaHome(), "feedback", "scores.json"),
   agentDir: (agentId: string) => join(gaiaHome(), "agents", agentId),
   /** Shared role definitions available to every agent. Agent-local and project
    * role files may layer on top of these defaults. */
@@ -71,6 +74,7 @@ export const agentPaths = {
   intent: (dir: string) => join(dir, "persona", "INTENT.md"),
   rolesDir: (dir: string) => join(dir, "persona", "roles"),
   memoryDir: (dir: string) => join(dir, "persona", "memory"),
+  feedback: (dir: string) => join(dir, "FEEDBACK.md"),
 };
 
 // --- workspace layout --------------------------------------------------------

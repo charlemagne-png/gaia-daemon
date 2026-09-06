@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildBaseSystemPrompt,
   buildProtocolsSection,
   buildSystemPrompt,
   buildTurnPrompt,
@@ -58,6 +59,31 @@ test("buildSystemPrompt: protocols section sits right after Agent Soul", () => {
   const ctxIdx = prompt.indexOf("# Project Context");
   assert.ok(soulIdx >= 0 && protoIdx > soulIdx && ctxIdx > protoIdx, "order: soul < protocols < context");
   assert.match(prompt, /Current thinking level: 3\/10/);
+});
+
+test("buildBaseSystemPrompt: injects taste canon + own feedback standing; missing files stay silent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gaia-feedback-prompt-"));
+  const feedbackDir = join(dir, "feedback");
+  const agentDir = join(dir, "agents", "tester");
+  const workspaceRoot = join(dir, "workspace");
+  await mkdir(feedbackDir, { recursive: true });
+  await mkdir(agentDir, { recursive: true });
+  await mkdir(workspaceRoot, { recursive: true });
+  const soulPath = join(agentDir, "SOUL.md");
+  await writeFile(soulPath, "test soul");
+  await writeFile(join(feedbackDir, "TASTE-CANON.md"), "- proof → artifact");
+  await writeFile(join(feedbackDir, "scores.json"), JSON.stringify({ tester: { score: 4, lastRemarks: [] } }));
+  await writeFile(join(agentDir, "FEEDBACK.md"), "- tighten openings");
+  const agent = { id: "tester", dir: agentDir, soulPath } as AgentDef;
+
+  const prompt = await buildBaseSystemPrompt({ agent, role: undefined, workspaceRoot, feedbackDir });
+  assert.match(prompt, /# Charles Taste Canon\n\n- proof → artifact/);
+  assert.match(prompt, /# Charles Feedback — @tester\n\nStanding → 4\n\n- tighten openings/);
+  assert.ok(prompt.indexOf("# Charles Taste Canon") < prompt.indexOf("# Project Context"));
+
+  const missing = await buildBaseSystemPrompt({ agent, role: undefined, workspaceRoot, feedbackDir: join(dir, "missing") });
+  assert.doesNotMatch(missing, /Charles Taste Canon/);
+  assert.match(missing, /# Charles Feedback — @tester\n\nStanding → 0/);
 });
 
 test("promptCacheKey: level is part of the cache key so a change invalidates it", () => {
