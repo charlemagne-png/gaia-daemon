@@ -75,13 +75,13 @@ function pathId(path: string, length: number): string {
   return createHash("sha256").update(resolve(path)).digest("hex").slice(0, length);
 }
 
-function normalizeRecord(path: string, lastOpenedAt = new Date().toISOString()): WorkspaceRecord {
+function normalizeRecord(path: string, lastOpenedAt = new Date().toISOString(), storedName?: string): WorkspaceRecord {
   const resolved = resolve(path);
   const parts = resolved.split(/[\\/]/).filter(Boolean);
   return {
     id: pathId(resolved, 16),
     path: resolved,
-    name: parts[parts.length - 1] ?? resolved,
+    name: storedName ?? parts[parts.length - 1] ?? resolved,
     lastOpenedAt,
     isInitialized: existsSync(workspacePath(resolved)),
   };
@@ -93,7 +93,7 @@ export class WorkspaceRegistry {
   async list(): Promise<WorkspaceRecord[]> {
     const config = ((await readJson(this.configPath)) ?? {}) as { recentWorkspaces?: WorkspaceRecord[] };
     return (config.recentWorkspaces ?? [])
-      .map((record) => normalizeRecord(record.path, record.lastOpenedAt))
+      .map((record) => normalizeRecord(record.path, record.lastOpenedAt, record.name))
       .sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   }
 
@@ -608,7 +608,12 @@ export class Daemon {
     if (!key) return undefined;
     const records = (await this.registry.list()).filter((record) => record.isInitialized);
     const lowered = key.toLowerCase();
-    return records.find((record) => record.name.toLowerCase() === lowered) ?? records.find((record) => record.id === key);
+    // Name match first, then id, then basename alias (for renamed workspaces)
+    return (
+      records.find((record) => record.name.toLowerCase() === lowered) ??
+      records.find((record) => record.id === key) ??
+      records.find((record) => record.path.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase() === lowered)
+    );
   }
 
   /** Cross-workspace home pin: RoomService asks; daemon owns registry lookup,
