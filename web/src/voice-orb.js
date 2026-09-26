@@ -89,10 +89,11 @@ export function startOrb(canvas, getState, opts = {}) {
   requestAnimationFrame(draw);
 }
 
-/** Fill the silhouette between sampled points with jittered satellites so a
- * large orb reads as a dense figure, not a sparse constellation. Each source
- * point spawns two dimmer neighbours; the pigment/depth is inherited so the
- * form and shading hold. @param {VoiceOrbPoint[]} base @returns {VoiceOrbPoint[]} */
+/** Fill the silhouette between sampled points with luminance-weighted jittered
+ * satellites. Bright areas spawn 4 satellites, dark areas spawn 1–2, creating
+ * SOLID presence with optical density matching the source figure. The pigment
+ * and depth are inherited so form and shading hold.
+ * @param {VoiceOrbPoint[]} base @returns {VoiceOrbPoint[]} */
 function densify(base) {
   /** @type {VoiceOrbPoint[]} */
   const out = [];
@@ -100,17 +101,23 @@ function densify(base) {
     const p = base[i];
     out.push(p);
     if (p.kind !== "hermes") continue;
-    for (let k = 0; k < 2; k += 1) {
-      const jitterSeed = seededUnit(i * 2 + k + 3.1);
+    // Luminance-weighted satellite count: bright points → more density
+    // Target ~5500 total from 5200 base: avg ~1 satellite/source
+    const lum = (0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b) / 255;
+    const satCount = lum < 0.50 ? 0 : lum < 0.75 ? 1 : 2;
+    for (let k = 0; k < satCount; k += 1) {
+      const jitterSeed = seededUnit(i * 6 + k + 3.1);
       const angle = jitterSeed * Math.PI * 2;
-      const radius = 0.004 + seededUnit(i * 2 + k + 7.7) * 0.006;
+      // Larger radius to fill silhouette more aggressively
+      const radiusMax = 0.008 + seededUnit(i * 6 + k + 7.7) * 0.012;
+      const radius = radiusMax * (1 - k / (satCount + 1));
       out.push({
         ...p,
         nx: clamp01(p.nx + Math.cos(angle) * radius),
         ny: clamp01(p.ny + Math.sin(angle) * radius / p.aspect),
-        seed: seededUnit(i * 5 + k + 11.3),
-        size: p.size * 0.82,
-        audio: p.audio * 0.9,
+        seed: seededUnit(i * 7 + k + 11.3),
+        size: p.size * (0.85 - k * 0.08),
+        audio: p.audio * (0.92 - k * 0.06),
       });
     }
   }
