@@ -27,6 +27,8 @@
  * @property {string} story_id
  */
 
+import { isNative, openWebWindow } from "./native.js";
+
 // Hyperscript helper (inline for no-import pattern)
 /** @param {string} tag @param {object} [attrs] @param {...*} children @returns {HTMLElement} */
 function h(tag, attrs = {}, ...children) {
@@ -125,17 +127,29 @@ async function fetchHNStories() {
 /**
  * Render a single HN story as a tile row.
  * FORM: avatar-first structure → source chip + title/meta stack → click opens story.
+ * Native mode: click handler calls openWebWindow() for Tauri IPC.
+ * Browser mode: default anchor behavior with window.open.
  * @param {HNStory} story
  * @returns {HTMLElement}
  */
 function renderHNStory(story) {
+  const url = story.url || "https://news.ycombinator.com";
   const tile = h(
     "a",
     {
       class: "hn-widget-tile",
-      href: story.url || "https://news.ycombinator.com",
+      href: url,
       target: "_blank",
       rel: "noopener noreferrer",
+      onclick: async (event) => {
+        // In native mode, intercept click and use Tauri IPC for external navigation.
+        // In browser mode, allow default anchor behavior.
+        if (isNative()) {
+          event.preventDefault();
+          event.stopPropagation();
+          await openWebWindow(url);
+        }
+      },
     }
   );
 
