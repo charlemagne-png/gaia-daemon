@@ -108,6 +108,8 @@ interface RoleState {
   childModel?: string;
   idleTimer?: NodeJS.Timeout;
   ensuring?: Promise<{ baseUrl: string; model: string } | undefined>;
+  /** Actual port in use — preferred or ephemeral fallback when preferred is squatted. */
+  actualPort?: number;
 }
 
 export class EmbedSidecar {
@@ -133,7 +135,9 @@ export class EmbedSidecar {
   }
 
   private baseUrl(role: SidecarRole): string {
-    return `http://127.0.0.1:${this.port(role)}/v1`;
+    const state = this.state(role);
+    const port = state.actualPort ?? this.port(role);
+    return `http://127.0.0.1:${port}/v1`;
   }
 
   /** Bring the embedding server up (reuse → spawn → download+spawn) and return
@@ -174,6 +178,17 @@ export class EmbedSidecar {
     // Someone else's server on the port → reuse, don't manage.
     if (!state.child && (await this.healthy(role))) return { baseUrl: this.baseUrl(role), model: modelId };
 
+    // Port-squat immunity: if preferred port occupied by foreign process (health fails but port listens),
+    // pick ephemeral port instead. Detect via net module bind-check.
+    const preferredPort = this.port(role);
+    let actualPort = preferredPort;
+    if (!state.child && !(await this.healthy(role)) && (await this.portOccupied(preferredPort))) {
+      actualPort = await this.pickEphemeralPort();
+      this.log(`port ${preferredPort} occupied by foreign process — spawning on :${actualPort}`);
+      this.options.onProgress?.("starting", `port ${preferredPort} squatted — using :${actualPort}`, role);
+    }
+    state.actualPort = actualPort;
+
     const binary = (this.options.binaryPath ?? defaultBinaryPath)();
     if (!binary) return undefined;
 
@@ -189,7 +204,7 @@ export class EmbedSidecar {
     // the worst case (rerank inputs are query+document, still well under).
     const child = spawnImpl(
       binary,
-      ["-m", modelPath, ...ROLE_SPECS[role].args, "--host", "127.0.0.1", "--port", String(this.port(role)), "--ctx-size", "4096", "--batch-size", "4096", "--ubatch-size", "4096"],
+      ["-m", modelPath, ...ROLE_SPECS[role].args, "--host", "127.0.0.1", "--port", String(actualPort), "--ctx-size", "4096", "--batch-size", "4096", "--ubatch-size", "4096"],
       { stdio: "ignore" },
     );
     state.child = child;
@@ -204,8 +219,8 @@ export class EmbedSidecar {
     const started = Date.now();
     while (Date.now() - started < SPAWN_HEALTH_TIMEOUT_MS) {
       if (await this.healthy(role)) {
-        this.log(`llama-server up on :${this.port(role)} (${row.id})`);
-        this.options.onProgress?.("ready", `${row.id} on 127.0.0.1:${this.port(role)}`, role);
+        this.log(`llama-server up on :${actualPort} (${row.id})`);
+        this.options.onProgress?.("ready", `${row.id} on 127.0.0.1:${actualPort}`, role);
         this.touch(role);
         return { baseUrl: this.baseUrl(role), model: modelId };
       }
@@ -261,11 +276,47 @@ export class EmbedSidecar {
   private async healthy(role: SidecarRole): Promise<boolean> {
     try {
       const fetchImpl = this.options.fetchImpl ?? fetch;
-      const response = await fetchImpl(`http://127.0.0.1:${this.port(role)}/health`, { signal: AbortSignal.timeout(1_000) });
+      const state = this.state(role);
+      const port = state.actualPort ?? this.port(role);
+      const response = await fetchImpl(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1_000) });
       return response.ok;
     } catch {
       return false;
     }
+  }
+
+  /** Check if a port is occupied (listening) via net module bind attempt. */
+  private async portOccupied(port: number): Promise<boolean> {
+    const { createServer } = await import("node:net");
+    return new Promise<boolean>((resolve) => {
+      const server = createServer();
+      server.once("error", () => resolve(true)); // EADDRINUSE → occupied
+      server.once("listening", () => {
+        server.close();
+        resolve(false); // Bind succeeded → free
+      });
+      server.listen(port, "127.0.0.1");
+    });
+  }
+
+  /** Pick a free ephemeral port via bind-zero + immediate close. */
+  private async pickEphemeralPort(): Promise<number> {
+    const { createServer } = await import("node:net");
+    return new Promise<number>((resolve, reject) => {
+      const server = createServer();
+      server.once("error", reject);
+      server.once("listening", () => {
+        const addr = server.address();
+        if (!addr || typeof addr === "string") {
+          server.close();
+          return reject(new Error("unexpected address format"));
+        }
+        const port = addr.port;
+        server.close();
+        resolve(port);
+      });
+      server.listen(0, "127.0.0.1"); // port 0 → OS assigns ephemeral
+    });
   }
 
   /** Bump a role's idle clock; its server dies quietly after IDLE_SHUTDOWN_MS
@@ -285,7 +336,8 @@ export class EmbedSidecar {
     if (!child) return;
     state.child = undefined;
     state.childModel = undefined;
-    this.log(`stopping llama-server :${this.port(role)} (${reason})`);
+    state.actualPort = undefined;
+    this.log(`stopping llama-server :${state.actualPort ?? this.port(role)} (${reason})`);
     try {
       child.kill("SIGTERM");
     } catch {
