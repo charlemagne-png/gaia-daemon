@@ -7,7 +7,7 @@
 // rebuilding the whole transcript. v1's author+text merge heuristic is gone:
 // when the final room-event commits under the same id, the stream entry is
 // dropped and the keyed node swaps to the committed version in place.
-import { deleteQueuedMessage, retryMessage, setRoomBookmark } from "./actions.js";
+import { deleteQueuedMessage, redactMessages, retryMessage, setRoomBookmark } from "./actions.js";
 import { api } from "./api.js";
 import { attachmentUrl } from "./attachments.js";
 import { detectArtifacts } from "./design/artifacts.js";
@@ -483,6 +483,63 @@ function restoreActivityScroll(container, offsets) {
   }
 }
 
+// Empty-room state. Every theme falls back to a quiet "no messages" line; the
+// Apple themes replace it with a constellation of planets + stars (varying-
+// thickness ink lines) behind a centered keynote-grade invitation. The SVG is
+// static markup drawn in currentColor so light → near-black ink, dark → near-
+// white; CSS ([data-theme="apple"|"apple-dark"] .empty-newchat) does the swap.
+function emptyState() {
+  const svg = `<svg class="newchat-constel" viewBox="0 0 900 560" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <g class="constel-lines" stroke="currentColor" stroke-linecap="round">
+      <line x1="120" y1="96" x2="210" y2="210" stroke-width="0.6"/>
+      <line x1="210" y1="210" x2="432" y2="150" stroke-width="1.3"/>
+      <line x1="432" y1="150" x2="506" y2="70" stroke-width="0.5"/>
+      <line x1="432" y1="150" x2="716" y2="300" stroke-width="1.7"/>
+      <line x1="716" y1="300" x2="806" y2="196" stroke-width="0.6"/>
+      <line x1="716" y1="300" x2="566" y2="430" stroke-width="1.0"/>
+      <line x1="566" y1="430" x2="338" y2="476" stroke-width="0.8"/>
+      <line x1="338" y1="476" x2="150" y2="384" stroke-width="1.35"/>
+      <line x1="150" y1="384" x2="210" y2="210" stroke-width="0.5"/>
+      <line x1="628" y1="432" x2="566" y2="430" stroke-width="0.7"/>
+    </g>
+    <g class="constel-planets" stroke="currentColor" fill="none">
+      <circle cx="210" cy="210" r="22" stroke-width="1.4"/>
+      <ellipse cx="210" cy="210" rx="38" ry="13" stroke-width="0.8" transform="rotate(-22 210 210)"/>
+      <circle cx="716" cy="300" r="13" stroke-width="1.2"/>
+      <circle cx="566" cy="430" r="18" stroke-width="1.1"/>
+      <ellipse cx="566" cy="430" rx="30" ry="10" stroke-width="0.7" transform="rotate(16 566 430)"/>
+      <circle cx="432" cy="150" r="8" stroke-width="1"/>
+    </g>
+    <g class="constel-stars" fill="currentColor">
+      <circle cx="120" cy="96" r="2.4"/>
+      <circle cx="506" cy="70" r="1.6"/>
+      <circle cx="806" cy="196" r="2.2"/>
+      <circle cx="150" cy="384" r="2"/>
+      <circle cx="338" cy="476" r="2.6"/>
+      <circle cx="628" cy="432" r="1.8"/>
+      <circle cx="70" cy="250" r="1.4"/>
+      <circle cx="770" cy="392" r="1.5"/>
+      <path class="spark" d="M796 96 l3 9 9 3 -9 3 -3 9 -3 -9 -9 -3 9 -3 z"/>
+      <path class="spark" d="M262 120 l2 6 6 2 -6 2 -2 6 -2 -6 -6 -2 6 -2 z"/>
+      <path class="spark" d="M470 500 l2.4 7 7 2.4 -7 2.4 -2.4 7 -2.4 -7 -7 -2.4 7 -2.4 z"/>
+    </g>
+  </svg>`;
+  const art = h("div", { class: "newchat-art" });
+  art.innerHTML = svg;
+  return h(
+    "div",
+    { class: "empty empty-newchat" },
+    art,
+    h(
+      "div",
+      { class: "newchat-copy" },
+      h("div", { class: "newchat-title", text: "Creation is at your fingertips." }),
+      h("div", { class: "newchat-sub", text: "How will you use it?" }),
+    ),
+    h("span", { class: "newchat-fallback", text: "no messages" }),
+  );
+}
+
 function renderTranscript() {
   const container = $("#transcript");
   if (!container) return;
@@ -502,7 +559,7 @@ function renderTranscript() {
 
   const views = messageViews();
   if (views.length === 0) {
-    container.replaceChildren(h("div", { class: "empty", text: "no messages" }));
+    container.replaceChildren(emptyState());
     return;
   }
 
@@ -690,6 +747,24 @@ function Message(view) {
           text: "✕",
           onclick: () => {
             if (view.queuedTaskId) void deleteQueuedMessage(view.queuedTaskId);
+          },
+        })
+      : null,
+    // Surgical redaction for committed messages — rewrites text in place, preserves in redactions.jsonl.
+    !view.streaming && !view.queued && view.author !== "system"
+      ? h("button", {
+          type: "button",
+          class: "msg-action delete",
+          title: "redact this message — replaces with '[message removed]' across all histories (original preserved in redactions.jsonl)",
+          text: "✕",
+          onclick: async () => {
+            const confirmed = await import("./prompt.js").then((m) =>
+              m.confirmDialog("Redact this message?", {
+                detail: "Rewrites it to '[message removed]' in place across all histories. Original preserved in redactions.jsonl. Sessions will be reset.",
+                danger: true,
+              }),
+            );
+            if (confirmed) void redactMessages(view.id);
           },
         })
       : null,

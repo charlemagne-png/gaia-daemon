@@ -130,7 +130,7 @@ export const workspacePaths = {
   piSessionsDir: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "pi-sessions"),
   /** Rewound-away transcript lines (edit/retry fork), append-only beside the transcript. */
   roomRewound: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "rewound.jsonl"),
-  /** Original lines of sanitize-redacted events, appended BEFORE each rewrite. */
+  /** Original lines of sanitize-redacted events (Dario heals + UI redact button), appended BEFORE each rewrite. */
   roomRedactions: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "redactions.jsonl"),
   /** Durable compaction summary, floor-keyed (fed as [summary + tail] on session loss). */
   roomCompaction: (rootDir: string, roomId: string) => join(rootDir, ".gaia", "rooms", roomId, "compaction.json"),

@@ -13,6 +13,8 @@ import {
 } from "./voice-control-readout.js";
 
 const voiceSource = await Bun.file(new URL("./voice-control.js", import.meta.url)).text();
+const orbSource = await Bun.file(new URL("./voice-orb.js", import.meta.url)).text();
+const voiceWindowSource = await Bun.file(new URL("./voice-window.js", import.meta.url)).text();
 const eventsSource = await Bun.file(new URL("./events.js", import.meta.url)).text();
 const actionsSource = await Bun.file(new URL("./actions.js", import.meta.url)).text();
 
@@ -131,11 +133,24 @@ test("streaming readout seams consume text deltas and finalize on room-event", (
 });
 
 test("Hermes embodiment uses the copied splat asset and keeps sphere as fallback only", () => {
-  expect(voiceSource).toContain('const HERMES_SPLAT_URL = "/img/hermes-splat-samples.json";');
-  expect(voiceSource).toContain("data?.hermes");
-  expect(voiceSource).toContain('kind: "hermes"');
-  expect(voiceSource).toContain("drawHermesPoint(ctx, p, w, hgt, t, level, pulse)");
-  expect(voiceSource).toContain("points = orbPoints();");
+  expect(orbSource).toContain('const HERMES_SPLAT_URL = "/img/hermes-splat-samples.json";');
+  expect(orbSource).toContain("data?.hermes");
+  expect(orbSource).toContain('kind: "hermes"');
+  expect(orbSource).toContain("drawHermesPoint(ctx, p, w, hgt, t, level, pulse)");
+  expect(orbSource).toContain("points = orbPoints();");
+});
+
+test("shared orb module drives both the inline panel and the torn-off window", () => {
+  expect(orbSource).toContain("export function startOrb(canvas, getState)");
+  expect(voiceSource).toContain('import { startOrb } from "./voice-orb.js";');
+  expect(voiceWindowSource).toContain('import { startOrb } from "./voice-orb.js";');
+});
+
+test("popout button opens the full-screen voice window from the session target", () => {
+  expect(voiceSource).toContain("openVoiceWindow(voiceSessionTarget)");
+  expect(voiceSource).toContain("publishVoiceTelemetry");
+  expect(voiceWindowSource).toContain("VOICE_TELEMETRY_CHANNEL");
+  expect(voiceWindowSource).toContain("/events?");
 });
 
 test("GaiaVoice transcript renders under the splat and autoscrolls newest visible", () => {

@@ -1,6 +1,6 @@
 {
   "id": "monad",
-  "displayName": "Monad (Gaia · Terry · Sidia)",
+  "displayName": "Monad (Hugr · Terry · Sidia)",
   "description": "Dynamic Thinker/Worker/Verifier coordination loop. Answers as one; every step runs in a visible summoned child room.",
   "version": "0.1.0",
 
@@ -11,7 +11,7 @@
     "maxTurns": 5,
     "roles": ["thinker", "worker", "verifier"],
     "slots": [
-      { "index": 0, "agentId": "gaia",  "label": "thinker",  "defaultRole": "thinker" },
+      { "index": 0, "agentId": "hugr",  "label": "thinker",  "defaultRole": "thinker" },
       { "index": 1, "agentId": "terry", "label": "worker",   "defaultRole": "worker" },
       { "index": 2, "agentId": "sidia", "label": "verifier", "defaultRole": "verifier" }
     ],
@@ -19,13 +19,13 @@
   },
 
   "agents": [
-    { "ref": "gaia",  "role": "thinker" },
+    { "ref": "hugr",  "role": "thinker" },
     { "ref": "terry", "role": "worker" },
     { "ref": "sidia", "role": "verifier" }
   ],
 
   "roles": {
-    "gaia":  "./roles/thinker.md",
+    "hugr":  "./roles/thinker.md",
     "terry": "./roles/worker.md",
     "sidia": "./roles/verifier.md"
   },

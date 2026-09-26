@@ -3238,6 +3238,23 @@ export class RoomService {
     });
   }
 
+  /** Redact specific messages in place — rewrite their text while preserving
+   * the transcript line count (like Dario sanitize, but on-demand per message).
+   * Originals preserved in redactions.jsonl, sessions reset for affected agents.
+   * Returns the count of redacted events. */
+  async redactMessages(edits: Map<string, string>): Promise<{ redacted: number }> {
+    if (this.activeTask) throw new Error("A turn is running — cancel it first, then redact messages.");
+    if (edits.size === 0) return { redacted: 0 };
+    const { events } = await this.room.eventsFrom(0);
+    const firstAffected = events.findIndex((e) => edits.has(e.id));
+    if (firstAffected < 0) return { redacted: 0 };
+    const redactedIds = await this.room.redactEvents(edits);
+    // Reset sessions for agents that read past the first redacted message
+    await this.resetAfterTruncation("reset-keep-context", firstAffected);
+    await this.emitSnapshot();
+    return { redacted: redactedIds.length };
+  }
+
   /** The fork-from-message primitive behind edit and retry: truncate the
    * transcript at the originating USER message (dropped events are preserved
    * in rewound.jsonl) and cap cursors that pointed past the cut. Claude.ai-style

@@ -1,0 +1,222 @@
+/* Full-screen Hermes voice window. Apple-keynote split: a deep graphite stage
+   where the luminous Hermes orb reads, beside a calm ice-white transcript.
+   Inter, hairline dividers, generous whitespace, structural depth. */
+:root {
+  --font: "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --ink: #0b0d12;
+  --ink-2: #14171d;
+  --sidebar: #fbfbfd;
+  --sidebar-line: rgba(0, 0, 0, 0.08);
+  --text: #1d1d1f;
+  --text-soft: #6e6e73;
+  --mine: #0a84ff;
+  --hermes-tint: #f2f2f4;
+  --radius: 18px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background: var(--ink);
+  color: var(--text);
+  overflow: hidden;
+}
+
+#voice-window {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 34%);
+  height: 100vh;
+}
+
+/* -- Stage ---------------------------------------------------------------- */
+#voice-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(120% 90% at 50% 42%, #191d26 0%, var(--ink-2) 42%, var(--ink) 100%);
+  overflow: hidden;
+}
+#voice-stage::after {
+  /* Subtle top sheen — structural light, not a decorative gradient. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(80% 55% at 50% 8%, rgba(255, 255, 255, 0.05), transparent 60%);
+  pointer-events: none;
+}
+#voice-stage-orb {
+  width: min(78vh, 86%);
+  height: min(78vh, 86%);
+  display: block;
+}
+#voice-stage-caption {
+  position: absolute;
+  bottom: clamp(24px, 5vh, 56px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+#voice-stage-caption strong {
+  color: #f5f5f7;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+#voice-stage-status {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: rgba(245, 245, 247, 0.55);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+#voice-stage-status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(245, 245, 247, 0.35);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+#voice-stage-status[data-phase="listening"]::before {
+  background: #30d158;
+  box-shadow: 0 0 0 4px rgba(48, 209, 88, 0.18);
+}
+#voice-stage-status[data-phase="processing"]::before {
+  background: #ffd60a;
+  box-shadow: 0 0 0 4px rgba(255, 214, 10, 0.18);
+}
+
+/* -- Transcript ----------------------------------------------------------- */
+#voice-transcript {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--sidebar);
+  border-left: 1px solid var(--sidebar-line);
+}
+#voice-transcript-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 22px 26px 16px;
+  border-bottom: 1px solid var(--sidebar-line);
+}
+#voice-transcript-head strong {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+#voice-transcript-sub {
+  font-size: 12px;
+  color: var(--text-soft);
+  letter-spacing: 0.02em;
+}
+#voice-transcript-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 22px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scroll-behavior: smooth;
+}
+.voice-transcript-empty {
+  margin-top: 12px;
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+.voice-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: 100%;
+}
+.voice-msg-who {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  padding: 0 4px;
+}
+.voice-msg-body {
+  border-radius: var(--radius);
+  padding: 12px 15px;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.003em;
+  overflow-wrap: anywhere;
+}
+.voice-msg.hermes .voice-msg-body {
+  background: var(--hermes-tint);
+  color: var(--text);
+  border-top-left-radius: 6px;
+}
+.voice-msg.mine {
+  align-items: flex-end;
+}
+.voice-msg.mine .voice-msg-who { padding-right: 4px; }
+.voice-msg.mine .voice-msg-body {
+  background: var(--mine);
+  color: #fff;
+  border-top-right-radius: 6px;
+  max-width: 92%;
+}
+
+.voice-p { margin: 0 0 8px; }
+.voice-p:last-child { margin-bottom: 0; }
+.voice-list { margin: 4px 0 8px; padding-left: 20px; }
+.voice-list li { margin: 3px 0; }
+.voice-inline-code, .voice-code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+.voice-inline-code {
+  font-size: 0.88em;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 5px;
+  border-radius: 6px;
+}
+.voice-msg.mine .voice-inline-code { background: rgba(255, 255, 255, 0.2); }
+.voice-code {
+  margin: 6px 0;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+@media (max-width: 720px) {
+  #voice-window { grid-template-columns: 1fr; grid-template-rows: 46% 54%; }
+  #voice-transcript { border-left: 0; border-top: 1px solid var(--sidebar-line); }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sidebar: #16181d;
+    --sidebar-line: rgba(255, 255, 255, 0.1);
+    --text: #f5f5f7;
+    --text-soft: #8e8e93;
+    --hermes-tint: #24272e;
+  }
+  .voice-inline-code { background: rgba(255, 255, 255, 0.1); }
+  .voice-code { background: rgba(255, 255, 255, 0.06); }
+}

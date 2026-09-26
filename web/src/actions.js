@@ -778,6 +778,30 @@ export async function deleteQueuedMessage(taskId) {
 }
 
 /**
+ * Redact committed messages in place (the ✕ on a message bubble). Rewrites
+ * message text to "[message removed]" (or custom text), preserves originals in
+ * redactions.jsonl, resets sessions. Accepts a single event ID or an array.
+ * @param {string|string[]} eventIds
+ * @param {string} [text] Optional replacement text (defaults to "[message removed]")
+ */
+export async function redactMessages(eventIds, text) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  const ids = Array.isArray(eventIds) ? eventIds : [eventIds];
+  if (ids.length === 0) return;
+  try {
+    await api(`/api/workspaces/${encodeURIComponent(snapshot.workspace.id)}/rooms/${encodeURIComponent(snapshot.room.id)}/redact`, {
+      method: "POST",
+      body: JSON.stringify({ eventIds: ids, ...(text ? { text } : {}) }),
+    });
+    // Snapshot refresh will show the redacted text
+    markDirty("transcript", "panel");
+  } catch (error) {
+    setError(error);
+  }
+}
+
+/**
  * Dismiss a sticky note (the ✕ on a /note card in the tasks panel). Display
  * metadata only — no runtime, no queue; idempotent server-side.
  * @param {string} noteId

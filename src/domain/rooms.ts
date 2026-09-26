@@ -760,11 +760,12 @@ export class RoomHandle {
   }
 
   /** Rewrite the text of specific events in place (backs the thanks-dario
-   * context sanitize). Each edited event's ORIGINAL line is appended to
-   * redactions.jsonl beside the transcript BEFORE the rewrite — a redaction
-   * changes what replays into prompts, never what exists on disk. The line
-   * count is unchanged, so every existing cursor stays valid. Returns the
-   * ids actually edited (unknown ids and no-op texts are ignored). */
+   * context sanitize AND the UI's per-message redact button). Each edited
+   * event's ORIGINAL line is appended to redactions.jsonl beside the transcript
+   * BEFORE the rewrite — a redaction changes what replays into prompts, never
+   * what exists on disk. The line count is unchanged, so every existing cursor
+   * stays valid. Returns the ids actually edited (unknown ids and no-op texts
+   * are ignored). */
   async redactEvents(edits: Map<string, string>): Promise<string[]> {
     const { events } = await this.eventsFrom(0);
     const edited = new Set<string>();

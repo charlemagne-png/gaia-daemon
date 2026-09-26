@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hermes · GaiaVoice</title>
+    <link rel="stylesheet" href="/src/voice-window.css" />
+  </head>
+  <body>
+    <main id="voice-window">
+      <section id="voice-stage" aria-label="Hermes">
+        <canvas id="voice-stage-orb"></canvas>
+        <div id="voice-stage-caption">
+          <strong>Hermes</strong>
+          <span id="voice-stage-status">connecting…</span>
+        </div>
+      </section>
+      <aside id="voice-transcript" aria-label="Conversation transcript">
+        <header id="voice-transcript-head">
+          <strong>Transcript</strong>
+          <span id="voice-transcript-sub">GaiaVoice</span>
+        </header>
+        <div id="voice-transcript-scroll" aria-live="polite">
+          <div class="voice-transcript-empty">Waiting for the conversation…</div>
+        </div>
+      </aside>
+    </main>
+    <script type="module" src="/src/voice-window.js"></script>
+  </body>
+</html>

@@ -9,7 +9,7 @@ import { workspacePaths } from "../core/paths.js";
 import { readJson } from "../core/store.js";
 import type { PetBinding } from "../core/types.js";
 
-export const DEFAULT_PET_NAME = "gaia";
+export const DEFAULT_PET_NAME = "hugr";
 const PET_PACKAGE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 const AGENT_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
