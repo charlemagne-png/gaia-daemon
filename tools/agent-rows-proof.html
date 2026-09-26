@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Rows Component Proof</title>
+  <link rel="stylesheet" href="/web/src/styles.css">
+  <link rel="stylesheet" href="/web/src/agent-rows.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif; }
+    body { 
+      width: 100%; 
+      height: 100vh; 
+      background: var(--color-bg-root, #ffffff);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .proof-header {
+      padding: 16px;
+      background-color: var(--color-bg-secondary, #f6f8fa);
+      border-bottom: 1px solid var(--color-border-subtle, #d0d7de);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .proof-header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--color-text-primary, #0f1b33);
+      margin: 0;
+    }
+
+    .proof-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .proof-controls button {
+      padding: 6px 12px;
+      border: 1px solid var(--color-border, #b0b9c3);
+      border-radius: 6px;
+      background-color: var(--color-bg-surface, #ffffff);
+      color: var(--color-text-primary, #0f1b33);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease-out;
+    }
+
+    .proof-controls button:hover {
+      background-color: var(--color-bg-tertiary, #eaeef2);
+      border-color: var(--color-border, #b0b9c3);
+    }
+
+    .proof-controls button.active {
+      background-color: var(--brand-bg, #e9f6f4);
+      border-color: var(--brand, #00c2a8);
+      color: var(--brand, #00c2a8);
+    }
+
+    #root {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    .proof-section {
+      background-color: var(--color-bg-secondary, #f6f8fa);
+      border: 1px solid var(--color-border-subtle, #d0d7de);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .proof-section h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text-secondary, #6e7681);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      margin-top: 0;
+    }
+
+    .proof-note {
+      font-size: 11px;
+      color: var(--color-text-tertiary, #8b949e);
+      margin-top: 8px;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+<div class="proof-header">
+  <h1>Agent Rows Component Proof</h1>
+  <div class="proof-controls">
+    <button id="theme-light">Light</button>
+    <button id="theme-dark">Dark</button>
+    <button id="scroll-reset">Reset Scroll</button>
+  </div>
+</div>
+
+<div id="root"></div>
+
+<script type="module">
+  // Error logging
+  window.addEventListener('error', (e) => {
+    console.error('Uncaught error:', e.message, e.filename, e.lineno);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    console.error('Unhandled rejection:', e.reason);
+  });
+
+  // Import agent-rows module
+  console.log('Importing agent-rows module...');
+  let agentRowsModule;
+  try {
+    agentRowsModule = await import('/web/src/agent-rows.js');
+    console.log('✓ Loaded agent-rows.js');
+  } catch (e) {
+    console.error('Failed to load agent-rows.js:', e.message);
+    throw e;
+  }
+
+  const { mountAgentRows } = agentRowsModule;
+
+  // Theme control
+  const themeLight = document.getElementById('theme-light');
+  const themeDark = document.getElementById('theme-dark');
+  const html = document.documentElement;
+  
+  function setTheme(theme) {
+    html.dataset.theme = theme;
+    themeLight.classList.toggle('active', theme === 'light');
+    themeDark.classList.toggle('active', theme === 'dark');
+    console.log(`Theme switched to: ${theme}`);
+  }
+
+  themeLight.addEventListener('click', () => setTheme('light'));
+  themeDark.addEventListener('click', () => setTheme('dark'));
+  setTheme('light');
+
+  // Reset scroll
+  document.getElementById('scroll-reset').addEventListener('click', () => {
+    document.querySelectorAll('.agent-rows-strip').forEach(strip => {
+      strip.scrollLeft = 0;
+    });
+    console.log('Scroll reset');
+  });
+
+  // Fake agent factory
+  const avatarChars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+  const models = ['claude-opus', 'claude-sonnet', 'gpt-4', 'gemini-pro', 'llama-2'];
+  const accounts = ['anthropic', 'openai', 'google', 'meta', 'huggingface'];
+  const statuses = ['idle', 'running', 'waiting', 'complete'];
+
+  function fakeAgent(id, name, workspace) {
+    return {
+      id: `agent-${id}`,
+      name,
+      workspace,
+      model: models[id % models.length],
+      account: accounts[id % accounts.length],
+      status: statuses[id % statuses.length],
+      avatar: undefined, // No avatar in proof; rely on fallback
+    };
+  }
+
+  // Build test dataset: ≥8 agents across ≥3 groups, including excluded ones
+  const testAgents = [
+    // Group: RESEARCH (visible)
+    fakeAgent(0, 'claude-1', 'RESEARCH'),
+    fakeAgent(1, 'gpt-4-turbo', 'RESEARCH'),
+    fakeAgent(2, 'sonnet-pro', 'RESEARCH'),
+    
+    // Group: GENERAL (visible)
+    fakeAgent(3, 'luna', 'GENERAL'),
+    fakeAgent(4, 'ghoul', 'GENERAL'),
+    
+    // Group: FENYX (EXCLUDED)
+    fakeAgent(5, 'fenyx-agent', 'FENYX'),
+    
+    // Group: WORK (EXCLUDED)
+    fakeAgent(6, 'work-bot', 'WORK'),
+    
+    // Group: gaia-daemon (EXCLUDED)
+    fakeAgent(7, 'daemon-core', 'gaia-daemon'),
+    
+    // Group: EXPERIMENTAL (visible)
+    fakeAgent(8, 'exp-one', 'EXPERIMENTAL'),
+    fakeAgent(9, 'exp-two', 'EXPERIMENTAL'),
+  ];
+
+  const root = document.getElementById('root');
+
+  // Test Case 1: Basic rendering with all agents
+  const section1 = document.createElement('div');
+  section1.className = 'proof-section';
+  section1.innerHTML = '<h2>Test: Basic Rendering (excluded groups filtered)</h2>';
+  const container1 = document.createElement('div');
+  container1.style.minHeight = '200px';
+  const handle1 = mountAgentRows(container1, {
+    agents: testAgents,
+    activeAgent: 'agent-3',
+    onSelect: (agent) => console.log(`Selected: ${agent.name}`),
+    onEdit: (agent) => console.log(`Edit: ${agent.name}`),
+  });
+  section1.appendChild(container1);
+  section1.appendChild(
+    (() => {
+      const p = document.createElement('p');
+      p.className = 'proof-note';
+      p.textContent = 'Visible groups: RESEARCH, GENERAL, EXPERIMENTAL. Excluded: FENYX, WORK, gaia-daemon.';
+      return p;
+    })()
+  );
+  root.appendChild(section1);
+
+  // Test Case 2: Hover popover (manually trigger by hovering)
+  const section2 = document.createElement('div');
+  section2.className = 'proof-section';
+  section2.innerHTML = '<h2>Test: Hover Popover (hover over any tile)</h2>';
+  const container2 = document.createElement('div');
+  container2.style.minHeight = '200px';
+  const handle2 = mountAgentRows(container2, {
+    agents: testAgents.slice(0, 5),
+    activeAgent: 'agent-0',
+    onSelect: (agent) => console.log(`Selected: ${agent.name}`),
+    onEdit: (agent) => console.log(`Edit: ${agent.name}`),
+  });
+  section2.appendChild(container2);
+  section2.appendChild(
+    (() => {
+      const p = document.createElement('p');
+      p.className = 'proof-note';
+      p.textContent = 'Hover over any agent tile to see the popover with name, model, account, status.';
+      return p;
+    })()
+  );
+  root.appendChild(section2);
+
+  // Test Case 3: Scrolling and edge auto-scroll
+  const section3 = document.createElement('div');
+  section3.className = 'proof-section';
+  section3.innerHTML = '<h2>Test: Horizontal Scroll & Edge Auto-Scroll</h2>';
+  const container3 = document.createElement('div');
+  container3.style.minHeight = '200px';
+  const manyAgents = Array.from({ length: 20 }, (_, i) =>
+    fakeAgent(i, `agent-${i + 10}`, 'SCROLL_TEST')
+  );
+  const handle3 = mountAgentRows(container3, {
+    agents: manyAgents,
+    activeAgent: undefined,
+    onSelect: (agent) => console.log(`Selected: ${agent.name}`),
+    onEdit: (agent) => console.log(`Edit: ${agent.name}`),
+  });
+  section3.appendChild(container3);
+  section3.appendChild(
+    (() => {
+      const p = document.createElement('p');
+      p.className = 'proof-note';
+      p.textContent = 'Scroll the strip horizontally. Hover near left/right edge (~48px) for auto-scroll.';
+      return p;
+    })()
+  );
+  root.appendChild(section3);
+
+  // Test Case 4: Double-click edit affordance
+  const section4 = document.createElement('div');
+  section4.className = 'proof-section';
+  section4.innerHTML = '<h2>Test: Double-Click Edit Callback</h2>';
+  const container4 = document.createElement('div');
+  container4.style.minHeight = '200px';
+  let editLog = 'No edits yet. Double-click an agent tile.';
+  const editLogEl = document.createElement('div');
+  editLogEl.style.marginTop = '12px';
+  editLogEl.style.padding = '8px';
+  editLogEl.style.backgroundColor = 'var(--color-bg-surface, #fff)';
+  editLogEl.style.borderRadius = '4px';
+  editLogEl.style.fontSize = '12px';
+  editLogEl.style.fontFamily = 'monospace';
+  editLogEl.style.color = 'var(--color-text-primary, #0f1b33)';
+  editLogEl.textContent = editLog;
+
+  const handle4 = mountAgentRows(container4, {
+    agents: testAgents.slice(0, 5),
+    activeAgent: undefined,
+    onSelect: (agent) => console.log(`Selected: ${agent.name}`),
+    onEdit: (agent) => {
+      editLog = `Edited: ${agent.name} (${agent.id}) at ${new Date().toLocaleTimeString()}`;
+      editLogEl.textContent = editLog;
+      console.log(editLog);
+    },
+  });
+  section4.appendChild(container4);
+  section4.appendChild(editLogEl);
+  root.appendChild(section4);
+
+  // Logging summary
+  console.log('✓ Agent Rows Proof rendered successfully');
+  console.log('Test agents count:', testAgents.length);
+  console.log('Excluded groups: FENYX, WORK, gaia-daemon');
+  const visibleGroups = new Set();
+  testAgents.forEach(a => {
+    const ws = a.workspace || 'GENERAL';
+    if (!['FENYX', 'WORK', 'gaia-daemon'].some(e => e.toLowerCase() === ws.toLowerCase())) {
+      visibleGroups.add(ws);
+    }
+  });
+  console.log('Visible groups:', Array.from(visibleGroups).sort());
+  console.log('Ready for theme testing and screenshot capture');
+</script>
+</body>
+</html>

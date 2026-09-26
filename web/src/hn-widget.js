@@ -70,6 +70,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Fetch top HN stories from Algolia API.
+ * Returns top 5 stories as tile rows within one carousel slide.
  * Falls back to cached results if network fails.
  * @returns {Promise<Array<HNStory>>}
  */
@@ -82,7 +83,7 @@ async function fetchHNStories() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
-    const stories = (data.hits || []).slice(0, 1); // Ship ONE slide initially
+    const stories = (data.hits || []).slice(0, 5); // Top 5 stories as tile rows
 
     // Cache successful fetch
     try {
@@ -99,7 +100,6 @@ async function fetchHNStories() {
     // Graceful offline fallback: return cached stories if available
     try {
       const cached = localStorage.getItem(CACHE_KEY_STORIES);
-      const timestamp = localStorage.getItem(CACHE_KEY_TIMESTAMP);
       if (cached) {
         console.log("Using cached HN stories");
         return JSON.parse(cached);
@@ -123,35 +123,41 @@ async function fetchHNStories() {
 }
 
 /**
- * Render a single HN story as a slide card.
+ * Render a single HN story as a tile row.
+ * FORM: avatar-first structure → source chip + title/meta stack → click opens story.
  * @param {HNStory} story
  * @returns {HTMLElement}
  */
 function renderHNStory(story) {
-  const card = h("div", { class: "hn-widget-story" });
-
-  const header = h("div", { class: "hn-widget-header" });
-  const title = h(
+  const tile = h(
     "a",
     {
-      class: "hn-widget-title",
+      class: "hn-widget-tile",
       href: story.url || "https://news.ycombinator.com",
       target: "_blank",
       rel: "noopener noreferrer",
-      text: story.title,
     }
   );
-  header.append(title);
+
+  // Avatar-first: source indicator (HN muted accent chip)
+  const avatar = h("div", { class: "hn-widget-avatar" }, "HN");
+
+  // Content stack: title + metadata row
+  const content = h("div", { class: "hn-widget-content" });
+
+  const title = h("div", { class: "hn-widget-title", text: story.title });
 
   const meta = h("div", { class: "hn-widget-meta" });
   const points = h("span", { class: "hn-widget-stat", text: `${story.points || 0} points` });
-  const comments = h("span", { class: "hn-widget-stat", text: `${story.num_comments || 0} comments` });
+  const comments = h("span", { class: "hn-widget-stat", text: `${story.num_comments || 0}` });
   const age = h("span", { class: "hn-widget-stat", text: formatAge(story.created_at_i) });
 
-  meta.append(points, h("span", { class: "hn-widget-dot", text: "•" }), comments, h("span", { class: "hn-widget-dot", text: "•" }), age);
+  meta.append(points, h("span", { class: "hn-widget-separator", text: "·" }), comments, h("span", { class: "hn-widget-separator", text: "·" }), age);
 
-  card.append(header, meta);
-  return card;
+  content.append(title, meta);
+  tile.append(avatar, content);
+
+  return tile;
 }
 
 /**
@@ -210,7 +216,15 @@ function createCarouselShell(container) {
   navRight.addEventListener("click", () => goToSlide(currentIndex + 1));
 
   carousel.append(navLeft, slideContainer, navRight);
-  if (slides.length > 1) carousel.append(dotsContainer);
+  // Only show dots for multi-slide carousels; hide nav for single slide
+  if (slides.length > 1) {
+    carousel.append(dotsContainer);
+    navLeft.style.display = "flex";
+    navRight.style.display = "flex";
+  } else {
+    navLeft.style.display = "none";
+    navRight.style.display = "none";
+  }
 
   container.append(carousel);
 
@@ -245,18 +259,31 @@ export async function mountHnCarousel(el, opts = {}) {
   let voicePanel = null;
 
   /**
-   * Render HN slide and update carousel.
+   * Render HN slide with all stories as tile rows.
    * @returns {void}
    */
   async function renderHNSlide() {
     stories = await fetchHNStories();
-    const storyEl = stories[0] ? renderHNStory(stories[0]) : h("div", { class: "hn-widget-story hn-widget-empty", text: "No stories available" });
+
+    // Create slide container with tile rows stacked
+    const slide = h("div", { class: "hn-widget-hn-slide" });
+
+    if (stories.length === 0) {
+      slide.append(
+        h("div", { class: "hn-widget-empty", text: "No stories available" })
+      );
+    } else {
+      // Render each story as a tile row
+      stories.forEach((story) => {
+        slide.append(renderHNStory(story));
+      });
+    }
 
     // Clear existing slides and re-add
     const slideContainer = widgetContainer.querySelector(".hn-widget-slides");
     if (slideContainer) slideContainer.innerHTML = "";
 
-    addSlide(storyEl);
+    addSlide(slide);
   }
 
   /**
