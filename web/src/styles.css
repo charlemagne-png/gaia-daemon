@@ -500,7 +500,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   border-right: 1px solid var(--border);
 }
 
-.tab-logo { color: var(--accent); text-shadow: 0 0 12px var(--glow); }
+.tab-logo { width:20px;height:20px;object-fit:contain;display:block; color: var(--accent); text-shadow: 0 0 12px var(--glow); }
 
 /* min-width:0 is what actually lets a flex item scroll: without it the item's
    min-width defaults to its content size, so overflow-x:auto never engages and
