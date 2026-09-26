@@ -352,7 +352,11 @@
   background: var(--surf-inset);
   border-color: transparent;
   box-shadow: var(--inset-1);
-  border-radius: var(--r-md);
+  border-radius: 4px;
+}
+[data-theme="apple"] .input-shell:focus-within, [data-theme="apple-dark"] .input-shell:focus-within {
+  border-color: transparent;
+  box-shadow: var(--inset-1), 0 0 0 1px var(--accent), 0 0 6px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 /* modern-Apple pill buttons — fully rounded, flat, solid-blue primary */
 [data-theme="apple"] .prompt-btn, [data-theme="apple-dark"] .prompt-btn { background: var(--surf-card); border-color: transparent; box-shadow: var(--inset-1); border-radius: var(--r-pill); font-weight: var(--fw-medium); }
@@ -1263,9 +1267,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The text input and send button read as one element: the shell carries the
    border/focus ring; the button stays fixed at the top right as the
    textarea grows. */
-.input-shell { display: flex; align-items: flex-start; gap: var(--sp-2); border: 1px solid var(--border-subtle); border-radius: var(--r-md); background: var(--ink); margin-bottom: var(--sp-2); padding: var(--sp-2) var(--sp-3); transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
-.input-shell:focus-within { border-color: var(--border-emphasis); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
-.input-shell .command-input, .input-shell .command-input:focus { flex: 1; border: none; background: transparent; box-shadow: none; padding: 0; }
+.input-shell { display: flex; align-items: flex-start; gap: var(--sp-2); border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--ink); margin-bottom: var(--sp-2); padding: var(--sp-2) var(--sp-3); transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.input-shell:focus-within { border-color: var(--border-emphasis); box-shadow: 0 0 0 1px var(--border-emphasis), 0 0 6px color-mix(in srgb, var(--accent) 20%, transparent); }
+.input-shell .command-input, .input-shell .command-input:focus { flex: 1; border: none; background: transparent; box-shadow: none; padding: 0 0 0 4px; }
 
 .send-button {
   border: none;
