@@ -5,7 +5,7 @@
  * Shipping ONE slide (HN); extensible for future slides via clean registration seam.
  *
  * HN SLIDE: Fetches top stories via HN Algolia API, displays title/points/comments/age.
- * Links open in new window (never navigate app). Refreshes every 5min with offline cache fallback.
+ * Links open in new window (never navigate app). Refreshes hourly with offline cache fallback, pauses when hidden.
  *
  * VOICE SEAM: `setVoiceMode(handle, on)` swaps carousel ↔ hermes placeholder panel.
  *
@@ -66,7 +66,7 @@ function formatAge(unixTimestamp) {
 // Local storage keys for caching
 const CACHE_KEY_STORIES = "hn-widget-stories-cache";
 const CACHE_KEY_TIMESTAMP = "hn-widget-cache-timestamp";
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 /**
  * Fetch top HN stories from Algolia API.
@@ -291,20 +291,37 @@ export async function mountHnCarousel(el, opts = {}) {
   }
 
   /**
-   * Schedule refresh every 5 minutes.
+   * Schedule refresh every hour, pausing when document is hidden.
    * @returns {void}
    */
   function scheduleRefresh() {
     if (refreshTimer) clearTimeout(refreshTimer);
+    // Skip scheduling if document is hidden (pause on hidden)
+    if (document.hidden) {
+      refreshTimer = setTimeout(scheduleRefresh, 1000); // Check again after 1s
+      return;
+    }
     refreshTimer = setTimeout(async () => {
       await renderHNSlide();
       scheduleRefresh();
-    }, 5 * 60 * 1000);
+    }, 60 * 60 * 1000); // 3600000ms = 1 hour
   }
 
   // Initial render
   await renderHNSlide();
   scheduleRefresh();
+
+  // Listen for visibility changes to pause/resume refresh
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      // Resume refresh when document becomes visible
+      scheduleRefresh();
+    } else if (refreshTimer) {
+      // Cancel pending refresh when document is hidden
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
+  });
 
   // Mount to DOM
   el.append(widgetContainer);
