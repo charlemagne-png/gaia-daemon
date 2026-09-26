@@ -1,7 +1,8 @@
 /**
- * @typedef {object} AgentStatus
+ * @typedef {object} AgentTile
  * @property {string} id
- * @property {string} name
+ * @property {string} name - display name (primary caption line)
+ * @property {string} [handle] - the at-handle (secondary caption line); falls back to id
  * @property {string} model
  * @property {string|undefined} [workspace]
  * @property {string|undefined} [avatar]
@@ -11,10 +12,10 @@
 
 /**
  * @typedef {object} AgentRowsConfig
- * @property {AgentStatus[]} agents
+ * @property {AgentTile[]} agents
  * @property {string|undefined} [activeAgent]
- * @property {(agent: AgentStatus) => void} onSelect
- * @property {(agent: AgentStatus) => void} onEdit
+ * @property {(agent: AgentTile) => void} onSelect
+ * @property {(agent: AgentTile) => void} onEdit
  */
 
 /**
@@ -34,12 +35,18 @@ const EXCLUDED_GROUPS = ['FENYX', 'WORK', 'gaia-daemon'];
  */
 export function mountAgentRows(el, config) {
   const { agents, activeAgent, onSelect, onEdit } = config;
+  // Live data — refreshed by update(); render() always reads these, never the
+  // construction-time closure (the panel re-renders on every snapshot).
+  /** @type {AgentTile[]} */
+  let currentAgents = agents;
+  /** @type {string|undefined} */
+  let currentActive = activeAgent;
   
   // State
   let scrollStates = new Map(); // workspace → scroll position
   /** @type {HTMLElement|null} */
   let hoverPopover = null;
-  /** @type {AgentStatus|null} */
+  /** @type {AgentTile|null} */
   let activeHoverAgent = null;
   /** @type {number|null} */
   let autoScrollRAF = null;
@@ -48,8 +55,8 @@ export function mountAgentRows(el, config) {
 
   /**
    * Group agents by workspace, excluding certain groups
-   * @param {AgentStatus[]} agents
-   * @returns {Map<string, AgentStatus[]>}
+   * @param {AgentTile[]} agents
+   * @returns {Map<string, AgentTile[]>}
    */
   function groupAgents(agents) {
     const agentsByWorkspace = new Map();
@@ -69,7 +76,7 @@ export function mountAgentRows(el, config) {
 
   /**
    * Create avatar element or icon fallback
-   * @param {AgentStatus} agent
+   * @param {AgentTile} agent
    * @returns {HTMLElement}
    */
   function createAvatar(agent) {
@@ -95,7 +102,7 @@ export function mountAgentRows(el, config) {
 
   /**
    * Create model chip
-   * @param {AgentStatus} agent
+   * @param {AgentTile} agent
    * @returns {HTMLElement}
    */
   function createModelChip(agent) {
@@ -108,29 +115,48 @@ export function mountAgentRows(el, config) {
 
   /**
    * Create agent tile: dominant avatar + minimal caption
-   * @param {AgentStatus} agent
+   * @param {AgentTile} agent
    * @returns {HTMLElement}
    */
   function createAgentTile(agent) {
     const tile = document.createElement('div');
     tile.className = 'agent-tile';
     tile.dataset.agentId = agent.id;
-    if (agent.id === activeAgent) {
+    if (agent.id === currentActive) {
       tile.classList.add('agent-tile-active');
     }
 
     // Avatar: main visual element
     tile.appendChild(createAvatar(agent));
 
-    // Caption: minimal name/handle underneath
+    // Caption underneath. A distinct display name reads as the strong primary
+    // line with the @handle beneath it; when the name only echoes the id (the
+    // common case), the @handle IS the primary line — no redundant second line.
     const caption = document.createElement('div');
     caption.className = 'agent-tile-caption';
-    
-    const name = document.createElement('div');
-    name.className = 'agent-tile-name';
-    name.textContent = `@${agent.name}`;
-    name.title = agent.name;
-    caption.appendChild(name);
+
+    const handleText = `@${agent.handle || agent.id}`;
+    const hasName = Boolean(agent.name) && agent.name.toLowerCase() !== (agent.handle || agent.id).toLowerCase();
+
+    if (hasName) {
+      const name = document.createElement('div');
+      name.className = 'agent-tile-name';
+      name.textContent = agent.name;
+      name.title = agent.name;
+      caption.appendChild(name);
+
+      const handle = document.createElement('div');
+      handle.className = 'agent-tile-handle';
+      handle.textContent = handleText;
+      handle.title = handleText;
+      caption.appendChild(handle);
+    } else {
+      const primary = document.createElement('div');
+      primary.className = 'agent-tile-name';
+      primary.textContent = handleText;
+      primary.title = handleText;
+      caption.appendChild(primary);
+    }
 
     tile.appendChild(caption);
 
@@ -156,7 +182,7 @@ export function mountAgentRows(el, config) {
 
   /**
    * Show hover popover
-   * @param {AgentStatus} agent
+   * @param {AgentTile} agent
    * @param {HTMLElement} tile
    */
   function showHoverPopover(agent, tile) {
@@ -296,7 +322,7 @@ export function mountAgentRows(el, config) {
     el.innerHTML = '';
     el.className = 'agent-rows-container';
 
-    const agentsByWorkspace = groupAgents(agents);
+    const agentsByWorkspace = groupAgents(currentAgents);
     const workspaces = Array.from(agentsByWorkspace.keys()).sort();
 
     for (const workspace of workspaces) {
@@ -349,11 +375,10 @@ export function mountAgentRows(el, config) {
    * @param {any} snapshot
    */
   function update(snapshot) {
-    // Update agents and activeAgent from snapshot if provided
-    if (snapshot?.agents) {
-      // Update agents array, re-render
-      render();
-    }
+    if (!snapshot) return;
+    if (snapshot.agents) currentAgents = snapshot.agents;
+    if ('activeAgent' in snapshot) currentActive = snapshot.activeAgent;
+    render();
   }
 
   /**
