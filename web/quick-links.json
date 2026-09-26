@@ -1,0 +1,27 @@
+[
+  {
+    "id": "cognios",
+    "label": "Cognios",
+    "url": "https://cognios.app"
+  },
+  {
+    "id": "paloptic",
+    "label": "Paloptic",
+    "url": "https://paloptic.com"
+  },
+  {
+    "id": "panopticon",
+    "label": "Panopticon",
+    "url": "http://localhost:8765"
+  },
+  {
+    "id": "hugr",
+    "label": "HUGR daemon",
+    "url": "http://localhost:9333"
+  },
+  {
+    "id": "xfeed",
+    "label": "X-Feed",
+    "url": "https://x.com"
+  }
+]

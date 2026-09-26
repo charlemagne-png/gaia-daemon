@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HUGR Quick-Links Proof</title>
+  <link rel="stylesheet" href="/web/src/styles.css">
+  <link rel="stylesheet" href="/web/src/quick-links.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif; }
+    body {
+      width: 100%;
+      min-height: 100vh;
+      background: var(--surface-0);
+      color: var(--text-primary);
+      padding: var(--sp-5);
+    }
+    .proof-section {
+      margin-bottom: var(--sp-6);
+      padding: var(--sp-4);
+      background: var(--surface-1);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--r-lg);
+    }
+    .proof-label {
+      font-size: var(--text-sm);
+      font-weight: var(--fw-semibold);
+      color: var(--text-secondary);
+      margin-bottom: var(--sp-3);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #quick-links-mount {
+      background: var(--surface-0);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--r-md);
+    }
+  </style>
+</head>
+<body>
+  <div class="proof-section">
+    <div class="proof-label">Quick-Links Component</div>
+    <div id="quick-links-mount"></div>
+  </div>
+
+<script type="module">
+  // Set theme from URL parameter if provided
+  const params = new URLSearchParams(location.search);
+  const theme = params.get('theme');
+  if (theme) {
+    document.documentElement.dataset.theme = theme;
+    console.log('Theme set to:', theme);
+  }
+
+  // Enable error logging
+  window.addEventListener('error', (e) => {
+    console.error('Uncaught error:', e.message, e.filename, e.lineno);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    console.error('Unhandled rejection:', e.reason);
+  });
+
+  console.log('Loading quick-links module...');
+  
+  let quickLinksModule;
+  try {
+    quickLinksModule = await import("/web/src/quick-links.js");
+    console.log('✓ Loaded quick-links.js');
+  } catch (e) {
+    console.error('Failed to load quick-links.js:', e.message);
+    throw e;
+  }
+
+  const { mountQuickLinks } = quickLinksModule;
+
+  // Mount the component
+  const mountEl = document.getElementById("quick-links-mount");
+  if (!mountEl) throw new Error("No mount element found");
+
+  console.log('Mounting quick-links...');
+  const handle = await mountQuickLinks(mountEl);
+
+  console.log("✓ Quick-links component rendered at", new Date().toISOString());
+  console.log("Theme:", document.documentElement.dataset.theme || "tokyo-night (default)");
+  
+  // Expose handle for manual cleanup if needed
+  window.quickLinksHandle = handle;
+</script>
+</body>
+</html>
