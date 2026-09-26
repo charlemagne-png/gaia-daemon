@@ -58,12 +58,12 @@ function rand(min, max) {
   return min + Math.random() * (max - min);
 }
 
-/** Theme-tuned rendering weights. Dark = luminous; light = restrained but visible. */
+/** Theme-tuned rendering weights. Dark = luminous; light = bold amber for contrast. */
 function themeWeights() {
   const dark = document.documentElement.dataset.theme === "apple-dark";
   return dark
     ? { alpha: 1, count: 132, headBoost: 1, additive: true, sizeMul: 1 }
-    : { alpha: 0.75, count: 128, headBoost: 0.9, additive: false, sizeMul: 1.05 };
+    : { alpha: 1, count: 128, headBoost: 0.9, additive: false, sizeMul: 1.05 };
 }
 
 /** @param {DustField} f @param {boolean} initial */
@@ -74,6 +74,17 @@ function seedParticle(f, initial) {
   const cy = f.h / 2.2;
   const spawnRadius = initial ? rand(150, 280) : rand(180, 320);
   const spawnAngle = rand(0, Math.PI * 2);
+  
+  // Hue selection: dark theme uses full ramp (0,1,2,3); light theme uses only deep amber (3) + core gold (0)
+  let hue;
+  const isDark = document.documentElement.dataset.theme === "apple-dark";
+  if (isDark) {
+    hue = g < 0.08 ? 2 : g < 0.4 ? 1 : g < 0.85 ? 0 : 3;
+  } else {
+    // Light theme: bias toward deep amber #c9922f (hue 3) for contrast on white
+    hue = g < 0.6 ? 3 : 0;
+  }
+  
   /** @type {Particle} */
   const p = {
     x: cx + Math.cos(spawnAngle) * spawnRadius,
@@ -82,7 +93,7 @@ function seedParticle(f, initial) {
     vy: rand(-2, 2),
     size: rand(0.6, 2.2),
     alpha: rand(0.35, 1),
-    hue: g < 0.08 ? 2 : g < 0.4 ? 1 : g < 0.85 ? 0 : 3,
+    hue: hue,
     seed: rand(0, Math.PI * 2),
     glint: 0,
     life: 0,
