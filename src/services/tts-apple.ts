@@ -80,7 +80,9 @@ export function setSaySpawnForTest(spawnImpl: SaySpawn): () => void {
 function runSay(text: string, voice: string | undefined, rate: number | undefined, signal: AbortSignal | undefined, generation: number): Promise<void> {
   if (signal?.aborted || generation !== speakGeneration) return Promise.reject(abortError());
   return new Promise((resolve, reject) => {
-    const args = [...(voice ? ["-v", voice] : []), ...(rate ? ["-r", String(rate)] : []), text];
+    // `--` ends option parsing so text starting with '-' (e.g. "---") is
+    // spoken verbatim instead of being mis-read as say flags.
+    const args = [...(voice ? ["-v", voice] : []), ...(rate ? ["-r", String(rate)] : []), "--", text];
     const child = spawnSay("/usr/bin/say", args, { stdio: ["ignore", "ignore", "pipe"] });
     currentSayChild = child;
     const err: Buffer[] = [];

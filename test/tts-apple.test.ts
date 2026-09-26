@@ -26,6 +26,28 @@ describe("apple tts", () => {
     expect(sanitizeSayVoice("Samantha")).toBe("Samantha");
   });
 
+  test("passes '--' before text so leading-dash utterances are not read as flags", async () => {
+    const calls: { file: string; args: string[] }[] = [];
+    const restore = setSaySpawnForTest(((file: string, args: string[]) => {
+      calls.push({ file, args });
+      const child = new FakeSayChild();
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    }) as never);
+    try {
+      await speak("---this starts with dashes");
+      expect(calls).toHaveLength(1);
+      const args = calls[0]!.args;
+      const sep = args.indexOf("--");
+      expect(sep).toBeGreaterThanOrEqual(0);
+      expect(args[sep + 1]).toBe("---this starts with dashes");
+      expect(args[args.length - 1]).toBe("---this starts with dashes");
+    } finally {
+      restore();
+      cancelSpeechQueue();
+    }
+  });
+
   test("cancelSpeechQueue kills active say child and drains queued utterances", async () => {
     const children: FakeSayChild[] = [];
     const restore = setSaySpawnForTest((() => {
