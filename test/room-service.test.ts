@@ -1451,8 +1451,8 @@ test("bare /pet (no package, no @agent) spawns the default pet for the agent you
   assert.equal((await service.sendMessage("@terry hey")).status, "running");
   await service.waitForIdle();
   assert.equal((await service.sendMessage("/pet")).status, "complete");
-  assert.deepEqual((await (await RoomHandle.open(root, "default")).state()).petBindings, { terry: "gaia" }, "defaults to DEFAULT_PET_NAME for the room's active agent, no package/mention required");
-  assert.deepEqual(loaded, ["gaia"]);
+  assert.deepEqual((await (await RoomHandle.open(root, "default")).state()).petBindings, { terry: "hugr" }, "defaults to DEFAULT_PET_NAME for the room's active agent, no package/mention required");
+  assert.deepEqual(loaded, ["hugr"]);
 });
 
 test("pet progress is room+agent scoped and derived from uniform AgentEvents", async () => {

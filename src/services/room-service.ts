@@ -3983,7 +3983,7 @@ export class RoomService {
     const rootDir = this.workspace.rootDir;
     const roomId = `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     await ensureWorkspaceRoom(rootDir, roomId, { parentRoomId: this.roomId });
-    const steward = this.workspace.agents.gaia ? "gaia" : this.workspace.config.defaultAgent;
+    const steward = this.workspace.config.defaultAgent;
     const title = deriveRoomTitle(taskText) || "Scaffolded task";
     const handle = await RoomHandle.open(rootDir, roomId);
     await handle.updateState((state) => {

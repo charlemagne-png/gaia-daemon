@@ -12,7 +12,7 @@ export const DEFAULTS = {
   // credential installed: every refine threw, the catch ate it, and rooms kept
   // the raw first-sentence fallback (living-titles law violated silently).
   roomTitleModel: { provider: "anthropic", name: "haiku" },
-  defaultAgent: "gaia",
+  defaultAgent: "hugr",
   room: "default",
   thinking: "medium",
   transcriptWindow: 20,
