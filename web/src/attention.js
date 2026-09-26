@@ -117,7 +117,7 @@ function postWebNotification(/** @type {string} */ title, /** @type {string} */ 
  */
 export function installAttention() {
   if (typeof window === "undefined") return;
-  baseTitle = document.title || "GAIA";
+  baseTitle = document.title || "HUGR";
 
   const onRefocus = () => {
     // Regaining focus reads the open room; recompute so its badge clears.

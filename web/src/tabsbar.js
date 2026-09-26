@@ -57,7 +57,7 @@ function renderTabs() {
       },
       text: state.sidebarCollapsed ? "▸" : "◂",
     }),
-    h("div", { class: "tab-brand" }, h("span", { class: "tab-logo", text: "◆" }), h("span", { text: "GAIA" })),
+    h("div", { class: "tab-brand" }, h("img", { class: "tab-logo", src: "img/hugr/hugr-mark.png", alt: "HUGR" }), h("span", { text: "HUGR" })),
     h(
       "div",
       { class: "tab-strip" },

@@ -629,7 +629,7 @@ export async function deleteWorkspace(workspaceId) {
   const workspace = state.workspaces.find((item) => item.id === workspaceId);
   const name = workspace?.name ?? workspaceId;
   const ok = await confirmDialog(`Remove workspace "${name}"?`, {
-    detail: "Removes it from GAIA's workspace list. Nothing on disk is deleted — its .gaia data and files stay put, and you can re-add the folder to restore it.",
+    detail: "Removes it from HUGR's workspace list. Nothing on disk is deleted — its .gaia data and files stay put, and you can re-add the folder to restore it.",
     okLabel: "Remove workspace",
     danger: true,
   });
