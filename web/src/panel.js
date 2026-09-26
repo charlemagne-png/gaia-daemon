@@ -1,110 +1,107 @@
-// The right-hand room panel: agents (role select, main-agent star, voice call
-// button) and recent tasks.
-import { accountsCatalog, deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, setActiveAgent, setAgentConfig, setAgentDefaultRole, setAgentRole, setDefaultAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
-import { armCompactTick, CompactBar, compactDetail } from "./compactprogress.js";
+// The right-hand room panel, Apple language: HN carousel widget (→ hermes when
+// a voice call is live), quick-links row, agent group rows, room header, and
+// tasks. The three stateful widgets are mounted ONCE into persistent slot
+// nodes; handing the same node references to replaceChildren on every render
+// MOVES them rather than recreating them, so the carousel's fetch timers, the
+// quick-links data and the strips' scroll positions all survive a re-render.
+import { deleteAgent, deleteNote, deleteQueuedMessage, deleteRoomBookmark, setActiveAgent, setQueuedPaused, setRoomAgentDialogue } from "./actions.js";
+import { mountAgentRows } from "./agent-rows.js";
 import { $, h } from "./dom.js";
+import { mountHnCarousel, setVoiceMode } from "./hn-widget.js";
 import { LinkedText, PathText } from "./links.js";
 import { shortModel } from "./models.js";
+import { mountQuickLinks } from "./quick-links.js";
 import { markDirty, registerRegion } from "./render.js";
 import { openAgentSettings } from "./settings.js";
 import { state } from "./state.js";
 import { jumpToEvent } from "./transcript.js";
-import { toggleCall } from "./voice.js";
 import { VoiceControlConsole, VoiceControlOrb } from "./voice-control.js";
 
-/** Account catalog for the per-agent picker below: fetched once (accountsCatalog()
- * caches the request itself), held here as the last resolved value so a render
- * pass stays synchronous. Guarded by `accountsCatalogRequested` so attaching
- * .then() doesn't re-fire markDirty on every render once it has resolved. */
-/** @type {import("./actions.js").AccountsCatalog | null} */
-let accountsCatalogValue = null;
-let accountsCatalogRequested = false;
+// Persistent widget slots (see file header). Created lazily on first render,
+// then reused for the life of the tab.
+/** @type {HTMLElement|null} */ let widgetSlot = null;
+/** @type {HTMLElement|null} */ let quickLinksSlot = null;
+/** @type {HTMLElement|null} */ let agentsSlot = null;
+/** @type {import("./hn-widget.js").CarouselHandle|null} */ let hnHandle = null;
+/** @type {import("./agent-rows.js").AgentRowsHandle|null} */ let agentRowsHandle = null;
+let lastVoiceOn = false;
 
-function ensureAccountsCatalog() {
-  if (accountsCatalogRequested) return;
-  accountsCatalogRequested = true;
-  void accountsCatalog()
-    .then((catalog) => {
-      accountsCatalogValue = catalog;
-      markDirty("panel");
-    })
-    .catch(() => {
-      accountsCatalogRequested = false; // let the next render retry
+function currentTheme() {
+  return document.documentElement.getAttribute("data-theme") || "apple";
+}
+
+/** Who this room is addressing: its remembered active agent, or the workspace
+ * default when it has none yet. */
+function activeAgentId() {
+  const snapshot = state.snapshot;
+  return snapshot ? (snapshot.room.activeAgent ?? snapshot.workspace.defaultAgent) : undefined;
+}
+
+/** Map snapshot agents to the agent-rows contract (avatar-first tiles).
+ * @param {import("./types.js").AgentStatus[]} agents
+ * @returns {import("./agent-rows.js").AgentTile[]}
+ */
+function mapAgents(agents) {
+  return agents.map((agent) => ({
+    id: agent.id,
+    name: agent.displayName && agent.displayName.toLowerCase() !== agent.id.toLowerCase() ? agent.displayName : agent.id,
+    handle: agent.id,
+    model: agent.modelLabel ? shortModel(agent.modelLabel) : "",
+    workspace: agent.workspace || "GENERAL",
+    avatar: agent.avatarUrl,
+    account: agent.account,
+    status: agent.status,
+  }));
+}
+
+/** Create + mount the three persistent widgets on first render. */
+function ensureWidgets() {
+  if (!widgetSlot) {
+    widgetSlot = h("div", { class: "panel-widget-slot" });
+    void mountHnCarousel(widgetSlot, { theme: currentTheme() }).then((handle) => {
+      hnHandle = handle;
+      lastVoiceOn = Boolean(state.voice);
+      setVoiceMode(handle, lastVoiceOn); // reflect any call already live at mount
     });
-}
-
-/**
- * The one-line agent subtitle (status / model), shown under the @id and mirrored
- * into the row's title so it survives ellipsis-truncation on a narrow panel.
- * @param {import("./types.js").AgentStatus} agent
- * @param {string | undefined} activeAgent
- */
-function agentSubtitle(agent, activeAgent) {
-  return [
-    // Only when it says more than the id already does.
-    agent.displayName && agent.displayName.toLowerCase() !== agent.id.toLowerCase() ? agent.displayName : "",
-    agent.id === activeAgent ? "active" : "",
-    agent.isDefault ? "default" : "",
-    agent.status === "running" ? "running" : "",
-    agent.status === "compacting" ? `compacting… ${agent.compact ? compactDetail(agent.compact) : ""}`.trim() : "",
-    agent.voice ? `voice:${agent.voice}` : "",
-    agent.modelLabel ? shortModel(agent.modelLabel) : "",
-  ]
-    .filter(Boolean)
-    .join(" / ");
-}
-
-/** @param {import("./actions.js").AccountHarnessSummary | undefined} harness @returns {string[]} */
-function harnessProviders(harness) {
-  return harness?.modelProviderIds ?? (harness?.lockedProvider ? [harness.lockedProvider] : []);
-}
-
-/** Model datalist suggestions from harness/account data, with the current
- * configured value kept even when the catalog is narrower than reality.
- * @param {import("./types.js").AgentStatus} agent
- * @param {import("./actions.js").AccountHarnessSummary | undefined} harness
- * @param {import("./actions.js").AccountRecordSummary[]} accounts
- */
-function modelSuggestions(agent, harness, accounts) {
-  const values = new Set();
-  if (agent.configuredModel && agent.configuredModel !== "default") values.add(agent.configuredModel);
-  const providers = new Set([...harnessProviders(harness), ...accounts.flatMap((account) => account.providers ?? [])]);
-  const names = harness?.modelNameOptions ?? [];
-  for (const provider of providers) for (const name of names) values.add(`${provider}/${name}`);
-  if (agent.configuredModel?.includes("/")) {
-    const name = agent.configuredModel.slice(agent.configuredModel.indexOf("/") + 1);
-    for (const provider of providers) values.add(`${provider}/${name}`);
   }
-  return [...values].sort();
+  if (!quickLinksSlot) {
+    quickLinksSlot = h("div", { class: "panel-quicklinks-slot" });
+    void mountQuickLinks(quickLinksSlot, {});
+  }
+  if (!agentsSlot) {
+    agentsSlot = h("div", { class: "panel-agents-slot" });
+    agentRowsHandle = mountAgentRows(agentsSlot, {
+      agents: mapAgents(state.snapshot?.agents ?? []),
+      activeAgent: activeAgentId(),
+      onSelect: (agent) => void setActiveAgent(agent.id),
+      onEdit: (agent) => void openAgentSettings(agent.id),
+    });
+    // Preserve the right-click → delete affordance the old rows had. Delegated
+    // on the container so it survives the component re-rendering its tiles.
+    agentsSlot.addEventListener("contextmenu", (event) => {
+      const target = event.target instanceof HTMLElement ? event.target.closest(".agent-tile") : null;
+      if (!(target instanceof HTMLElement) || !target.dataset.agentId) return;
+      event.preventDefault();
+      state.agentContextMenu = { agentId: target.dataset.agentId, x: event.clientX, y: event.clientY };
+      markDirty("panel");
+    });
+  }
 }
 
 function renderPanel() {
   const panel = $("#room-panel");
   if (!panel) return;
-  ensureAccountsCatalog();
+  ensureWidgets();
   const snapshot = state.snapshot;
   const agents = snapshot?.agents ?? [];
   const tasks = snapshot?.tasks ?? [];
   const notes = snapshot?.notes ?? [];
-  // The agent this room is currently addressing: its remembered active agent,
-  // or the workspace default when it has none yet. Marks the "active" row and
-  // is who a bare next message goes to.
-  const activeAgent = snapshot ? (snapshot.room.activeAgent ?? snapshot.workspace.defaultAgent) : undefined;
+  const activeAgent = activeAgentId();
   const currentRoom = snapshot?.rooms.find((room) => room.isCurrent);
   const bookmarks = currentRoom?.bookmarks ?? [];
   const roomId = snapshot?.room.id ?? "";
   const voiceControlOrb = VoiceControlOrb();
   const voiceControlConsole = VoiceControlConsole();
-  
-  // Group agents by workspace
-  const agentsByWorkspace = new Map();
-  for (const agent of agents) {
-    const ws = agent.workspace || "GENERAL";
-    if (!agentsByWorkspace.has(ws)) agentsByWorkspace.set(ws, []);
-    agentsByWorkspace.get(ws).push(agent);
-  }
-  const workspaces = Array.from(agentsByWorkspace.keys()).sort();
-  
   const agentMenu = AgentContextMenu();
   panel.replaceChildren(
     ...(voiceControlOrb ? [voiceControlOrb] : []),
@@ -160,170 +157,12 @@ function renderPanel() {
           ),
         ]
       : []),
-    h("h3", { text: "agents" }),
-    h(
-      "div",
-      { class: "agent-list" },
-      workspaces.flatMap((workspace) => {
-        const wsAgents = agentsByWorkspace.get(workspace) || [];
-        const expanded = state.expandedWorkspaceGroups.has(workspace);
-        return [
-          h(
-            "button",
-            {
-              class: "workspace-group-header",
-              onclick: () => {
-                if (expanded) state.expandedWorkspaceGroups.delete(workspace);
-                else state.expandedWorkspaceGroups.add(workspace);
-                markDirty("panel");
-              },
-            },
-            h("span", { text: expanded ? "\u25bc" : "\u25b6" }),
-            h("strong", { text: workspace }),
-            h("small", { text: ` (${wsAgents.length})` }),
-          ),
-          ...(expanded ? wsAgents.map((/** @type {import("./types.js").AgentStatus} */ agent) => {
-        const onCall = state.voice?.agentId === agent.id;
-        const connecting = state.voicePendingAgentId === agent.id;
-        const roles = agent.roles ?? [];
-        // "none" is an explicit opt-out; otherwise a room override wins, falling
-        // back to the agent's global default role.
-        const effectiveRole = agent.activeRole === "none" ? undefined : (agent.activeRole ?? agent.defaultRole);
-        const agentAccounts = (accountsCatalogValue?.accounts ?? []).filter((account) => account.harness === agent.harness);
-        const agentHarness = accountsCatalogValue?.harnesses.find((harness) => harness.id === agent.harness);
-        const modelOptionId = `agent-model-options-${agent.id}`;
-        const modelValue = agent.configuredModel && agent.configuredModel !== "default" ? agent.configuredModel : "";
-        const suggestedModels = modelSuggestions(agent, agentHarness, agentAccounts);
-        return h(
-          "div",
-          {
-            class: `agent-row ${onCall ? "on-call" : ""} ${agent.status === "running" || agent.status === "compacting" ? "running" : ""} ${effectiveRole ? "has-role" : ""} ${agent.id === activeAgent ? "active-agent" : ""}`,
-            oncontextmenu: (/** @type {MouseEvent} */ event) => {
-              event.preventDefault();
-              state.agentContextMenu = { agentId: agent.id, x: event.clientX, y: event.clientY };
-              markDirty("panel");
-            },
-          },
-          h(
-            "div",
-            { class: `agent-cell ${roles.length > 0 ? "with-role" : ""} ${agentAccounts.length > 0 ? "with-account" : ""}` },
-            h(
-              "button",
-              { class: "agent-main", title: `open @${agent.id} settings`, onclick: () => void openAgentSettings(agent.id) },
-              h("span", { class: `dot ${agent.status}` }),
-              h(
-                "strong",
-                {},
-                agent.avatarUrl
-                  ? h("img", { class: "agent-avatar", src: agent.avatarUrl, alt: agent.displayName || agent.id, loading: "lazy" })
-                  : h("span", { class: "agent-icon", text: agent.icon }),
-                h("span", { text: `@${agent.id}` }),
-              ),
-              h("small", {
-                // One line, ellipsized when narrow — mirror the full text into
-                // title so it stays recoverable on hover.
-                title: agentSubtitle(agent, activeAgent),
-                text: agentSubtitle(agent, activeAgent),
-              }),
-              agent.description
-                ? h("small", {
-                    class: "agent-description",
-                    title: agent.description,
-                    text: agent.description,
-                  })
-                : null,
-              agent.status === "compacting" && agent.compact ? CompactBar(agent.compact) : null,
-            ),
-            h(
-              "div",
-              { class: "agent-config-row" },
-              h("input", {
-                class: `model-select ${modelValue ? "active" : ""}`,
-                list: modelOptionId,
-                value: modelValue,
-                placeholder: "model",
-                title: `model for @${agent.id}: provider/name; blank = default`,
-                onchange: (event) => void setAgentConfig(agent.id, { model: /** @type {HTMLInputElement} */ (event.target).value.trim() || null }),
-              }),
-              h(
-                "datalist",
-                { id: modelOptionId },
-                suggestedModels.map((model) => h("option", { value: model })),
-              ),
-              agentAccounts.length > 0
-                ? h(
-                    "select",
-                    {
-                      class: `account-select ${agent.account ? "active" : ""}`,
-                      title: `account for @${agent.id}`,
-                      onchange: (event) => void setAgentConfig(agent.id, { account: /** @type {HTMLSelectElement} */ (event.target).value || null }),
-                    },
-                    h("option", { value: "", text: "shared login", selected: !agent.account }),
-                    agentAccounts.map((account) =>
-                      h("option", { value: account.id, text: account.label || account.id, selected: account.id === agent.account }),
-                    ),
-                  )
-                : null,
-              roles.length > 0
-                ? h(
-                    "select",
-                    {
-                      class: `role-select ${effectiveRole ? "active" : ""}`,
-                      title: `role for @${agent.id}`,
-                      onchange: (event) => void setAgentRole(agent.id, /** @type {HTMLSelectElement} */ (event.target).value),
-                    },
-                    h("option", {
-                      value: "default",
-                      text: agent.defaultRole ? `default (${agent.defaultRole})` : "default",
-                      selected: !agent.activeRole,
-                    }),
-                    h("option", { value: "none", text: "none", selected: agent.activeRole === "none" }),
-                    roles.map((roleName) => h("option", { value: roleName, text: roleName, selected: roleName === agent.activeRole })),
-                  )
-                : null,
-              agent.activeRole && agent.activeRole !== "none"
-                ? h("button", {
-                    class: "role-global-button",
-                    text: "⌂",
-                    title: `make "${agent.activeRole}" the global default for @${agent.id} (all rooms)`,
-                    onclick: async () => {
-                      const role = agent.activeRole;
-                      if (!role) return;
-                      await setAgentDefaultRole(agent.id, role);
-                      await setAgentRole(agent.id, "default");
-                    },
-                  })
-                : null,
-            ),
-          ),
-          h("button", {
-            class: `main-button ${agent.id === activeAgent ? "active" : ""}`,
-            title: agent.id === activeAgent ? `@${agent.id} is this room's active agent` : `talk to @${agent.id} in this room`,
-            disabled: agent.id === activeAgent,
-            onclick: () => void setActiveAgent(agent.id),
-            text: agent.id === activeAgent ? "●" : "○",
-          }),
-          h("button", {
-            class: `main-button ${agent.isDefault ? "active" : ""}`,
-            title: agent.isDefault
-              ? `@${agent.id} is the default agent — it seeds the active agent in a new room`
-              : `make @${agent.id} the default agent (seeds new rooms; doesn't change who this room is talking to)`,
-            disabled: agent.isDefault,
-            onclick: () => void setDefaultAgent(agent.id),
-            text: agent.isDefault ? "★" : "☆",
-          }),
-          h("button", {
-            class: `call-button ${onCall ? "active" : ""}`,
-            title: onCall ? `hang up @${agent.id}` : `start voice call with @${agent.id}`,
-            disabled: connecting || (Boolean(state.voice) && !onCall),
-            onclick: () => void toggleCall(agent.id),
-            text: connecting ? "..." : onCall ? "⏹" : "📞",
-          }),
-        );
-      }) : []),
-        ];
-      }),
-    ),
+    // HN carousel (→ hermes on a live call), quick-links, then agent group rows.
+    // These three are the SAME persistent nodes on every render (see header).
+    // ensureWidgets() guaranteed them above; assert non-null for the checker.
+    /** @type {HTMLElement} */ (widgetSlot),
+    /** @type {HTMLElement} */ (quickLinksSlot),
+    /** @type {HTMLElement} */ (agentsSlot),
     h("h3", { text: "tasks" }),
     h(
       "div",
@@ -334,8 +173,13 @@ function renderPanel() {
     ),
     ...(agentMenu ? [agentMenu] : []),
   );
-  // Keep the elapsed advancing between server snapshots while any pass runs.
-  armCompactTick(agents.some((agent) => agent.status === "compacting"));
+
+  // Sync live state into the persistent widgets after they are (re-)attached.
+  // Voice: a live call swaps the carousel out for the hermes slot.
+  const voiceOn = Boolean(state.voice);
+  if (hnHandle && voiceOn !== lastVoiceOn) setVoiceMode(hnHandle, voiceOn);
+  lastVoiceOn = voiceOn;
+  agentRowsHandle?.update({ agents: mapAgents(agents), activeAgent });
 }
 
 /**
