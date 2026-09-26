@@ -58,12 +58,12 @@ function rand(min, max) {
   return min + Math.random() * (max - min);
 }
 
-/** Theme-tuned rendering weights. Dark = luminous; light = restrained, still gold. */
+/** Theme-tuned rendering weights. Dark = luminous; light = restrained but visible. */
 function themeWeights() {
   const dark = document.documentElement.dataset.theme === "apple-dark";
   return dark
     ? { alpha: 1, count: 132, headBoost: 1, additive: true, sizeMul: 1 }
-    : { alpha: 0.5, count: 104, headBoost: 0.72, additive: false, sizeMul: 0.92 };
+    : { alpha: 0.75, count: 128, headBoost: 0.9, additive: false, sizeMul: 1.05 };
 }
 
 /** @param {DustField} f @param {boolean} initial */
