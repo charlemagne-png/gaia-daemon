@@ -1,0 +1,12 @@
+{
+  "port": 8925,
+  "capturedAt": "2026-09-26T09:15:17.040Z",
+  "md5": {
+    "01-apple.png": "ab1210d311b979615d1e9d09d97395de",
+    "02-apple-dark.png": "073581a0579a1ac48540b33c0a229b5e",
+    "03-apple-hover-popover.png": "5a7bc58d18d8100d17e0085530300b8a",
+    "04-apple-voice-hermes.png": "54dfe8b0a35ecd7fb4e8cf891bd6be47",
+    "05-apple-dark-voice-hermes.png": "84ab1192211a2afa8a7620d6e442bf9a",
+    "06-tokyo-night.png": "57f03c3f442f9511048b27b009279c82"
+  }
+}

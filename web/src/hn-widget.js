@@ -36,7 +36,7 @@ function h(tag, attrs = {}, ...children) {
     if (key === "class") node.className = String(value);
     else if (key === "text") node.textContent = String(value);
     else if (key === "html") node.innerHTML = String(value);
-    else if (key === "value") node.value = String(value);
+    else if (key === "value") /** @type {HTMLInputElement} */ (node).value = String(value);
     else if (key.startsWith("on") && typeof value === "function") {
       node.addEventListener(key.slice(2).toLowerCase(), value);
     } else {
@@ -90,12 +90,12 @@ async function fetchHNStories() {
       localStorage.setItem(CACHE_KEY_STORIES, JSON.stringify(stories));
       localStorage.setItem(CACHE_KEY_TIMESTAMP, String(Date.now()));
     } catch (e) {
-      console.warn("Failed to cache stories:", e.message);
+      console.warn("Failed to cache stories:", e instanceof Error ? e.message : String(e));
     }
 
     return stories;
   } catch (error) {
-    console.warn("HN fetch failed, attempting cache fallback:", error.message);
+    console.warn("HN fetch failed, attempting cache fallback:", error instanceof Error ? error.message : String(error));
 
     // Graceful offline fallback: return cached stories if available
     try {
@@ -105,7 +105,7 @@ async function fetchHNStories() {
         return JSON.parse(cached);
       }
     } catch (e) {
-      console.warn("Cache fallback failed:", e.message);
+      console.warn("Cache fallback failed:", e instanceof Error ? e.message : String(e));
     }
 
     // Last resort: placeholder story
@@ -174,6 +174,7 @@ function createCarouselShell(container) {
   const navRight = h("button", { class: "hn-widget-nav hn-widget-nav-right", "aria-label": "Next slide" }, "›");
 
   let currentIndex = 0;
+  /** @type {HTMLElement[]} */
   const slides = [];
 
   /**
@@ -238,29 +239,32 @@ function createCarouselShell(container) {
  *
  * @param {HTMLElement} el - Mount target
  * @param {CarouselOptions} [opts={}]
- * @returns {CarouselHandle}
+ * @returns {Promise<CarouselHandle>}
  */
 export async function mountHnCarousel(el, opts = {}) {
-  const theme = opts.theme || "apple";
+  // NOTE: the widget must NOT stamp its own data-theme. The app's theme lives on
+  // <html data-theme>, and the palette blocks use a bare [data-theme="x"]
+  // selector — stamping it here would PIN one theme's tokens to this subtree and
+  // override the live app theme (and break every non-default theme). Inherit.
+  void opts.theme;
 
   // Create widget container
   const widgetContainer = h("div", {
     class: "hn-widget",
-    "data-theme": theme,
   });
 
   // Create carousel shell
   const { addSlide, currentIndex } = createCarouselShell(widgetContainer);
 
   // Fetch and render HN stories
+  /** @type {HNStory[]} */
   let stories = [];
+  /** @type {ReturnType<typeof setTimeout>|null} */
   let refreshTimer = null;
-  let currentVoiceMode = false;
-  let voicePanel = null;
 
   /**
    * Render HN slide with all stories as tile rows.
-   * @returns {void}
+   * @returns {Promise<void>}
    */
   async function renderHNSlide() {
     stories = await fetchHNStories();
@@ -333,8 +337,8 @@ export function setVoiceMode(handle, on) {
   const widgetContainer = document.querySelector(".hn-widget");
   if (!widgetContainer) return;
 
-  const carousel = widgetContainer.querySelector(".hn-widget-carousel");
-  let voicePanel = widgetContainer.querySelector(".hn-widget-hermes-slot");
+  const carousel = /** @type {HTMLElement|null} */ (widgetContainer.querySelector(".hn-widget-carousel"));
+  let voicePanel = /** @type {HTMLElement|null} */ (widgetContainer.querySelector(".hn-widget-hermes-slot"));
 
   if (on) {
     // Hide carousel, show voice panel
