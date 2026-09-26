@@ -403,7 +403,7 @@ small, time { color: var(--muted); overflow-wrap: anywhere; }
 /* HUGR mark, centred ABOVE the tagline. Modest, crisp on retina, a soft shadow
    that lifts it off the surface — no border, no box. */
 [data-theme="apple"] .newchat-logo, [data-theme="apple-dark"] .newchat-logo {
-  width: clamp(84px, 9vw, 112px); height: auto; margin-bottom: clamp(22px, 3vw, 34px);
+  width: clamp(84px, 9vw, 112px); height: auto; margin-bottom: clamp(13px, 1.8vw, 20px);
   border-radius: 22.5%;
   filter: drop-shadow(0 8px 22px rgba(0, 0, 0, 0.22));
 }
