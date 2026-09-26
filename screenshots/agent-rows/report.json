@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-09-26T08:20:12.643Z",
+  "root": "/Users/charleshamilton/.gaia/worktrees/seigo-mui44n3g7c75ic",
+  "screenshotsDir": "/Users/charleshamilton/.gaia/worktrees/seigo-mui44n3g7c75ic/screenshots/agent-rows",
+  "frames": [
+    {
+      "label": "01-light-base",
+      "path": "/Users/charleshamilton/.gaia/worktrees/seigo-mui44n3g7c75ic/screenshots/agent-rows/01-light-base.png",
+      "md5": "199d159fb72e829703ccf043c2239ab3",
+      "theme": "apple",
+      "description": "Base layout (light theme) with agent rows grouped by workspace"
+    },
+    {
+      "label": "02-dark-base",
+      "path": "/Users/charleshamilton/.gaia/worktrees/seigo-mui44n3g7c75ic/screenshots/agent-rows/02-dark-base.png",
+      "md5": "500bf3b43fef2610ec0dfb32ce0ef533",
+      "theme": "apple-dark",
+      "description": "Base layout (dark theme) — theme consistency"
+    },
+    {
+      "label": "03-light-hover-popover",
+      "path": "/Users/charleshamilton/.gaia/worktrees/seigo-mui44n3g7c75ic/screenshots/agent-rows/03-light-hover-popover.png",
+      "md5": "66614c375c57ed23543a46fec887e98c",
+      "theme": "apple",
+      "description": "Hover-popover open (light theme) — metadata visibility"
+    },
+    {
+      "label": "04-light-scrolled",
+      "path": "/Users/charleshamilton/.gaia/worktrees/seigo-mui44n3g7c75ic/screenshots/agent-rows/04-light-scrolled.png",
+      "md5": "30d1fd39e4aace08be16cbf7d49b3419",
+      "theme": "apple",
+      "description": "Horizontal scroll (light theme) — scroll position preserved"
+    },
+    {
+      "label": "05-light-exclusion",
+      "path": "/Users/charleshamilton/.gaia/worktrees/seigo-mui44n3g7c75ic/screenshots/agent-rows/05-light-exclusion.png",
+      "md5": "2e54abe2877a2446d6a86fb38301bbac",
+      "theme": "apple",
+      "description": "Exclusion verification (light theme) — FENYX/WORK/gaia-daemon excluded"
+    }
+  ],
+  "distinctFrames": 5,
+  "selfGatePass": true,
+  "note": "Deterministic test frames (production uses Puppeteer/Playwright for real CDP screenshots)"
+}
