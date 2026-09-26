@@ -213,7 +213,7 @@ async function openVoiceSession(call) {
     JSON.stringify({
       type: "session.update",
       session: {
-        instructions: { type: "constant", text: "You are connected to a GAIA agent. The agent decides every response." },
+        instructions: { type: "constant", text: "You are connected to a HUGR agent. The agent decides every response." },
         voice: call.voice ?? null,
         allow_recording: false,
       },

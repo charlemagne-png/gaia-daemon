@@ -600,7 +600,7 @@ function renderCanvas() {
       <div class="design-canvas-panel">
         <div class="design-canvas-header">
           <div class="design-canvas-title">
-            <span>GAIA Design</span>
+            <span>HUGR Design</span>
             <input id="canvas-design-name" class="design-name-input" value="${canvasState.designName.replace(/"/g, '&quot;')}" title="Design name — sets the Dieter chat + save file" />
             <span class="canvas-element-count">${canvasState.elements.length} ${canvasState.elements.length === 1 ? 'element' : 'elements'}</span>
           </div>

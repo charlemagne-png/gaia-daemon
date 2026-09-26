@@ -278,7 +278,7 @@ function GeneralTab() {
       h(
         "label",
         { class: "settings2-row" },
-        h("span", { text: "Keep laptop awake while GAIA runs" }),
+        h("span", { text: "Keep laptop awake while HUGR runs" }),
         h("input", {
           type: "checkbox",
           checked: state.keepAwake.enabled,
@@ -768,7 +768,7 @@ function AccountsSection() {
     "div",
     { class: "settings2-body" },
     h("h3", { text: "Accounts" }),
-    h("p", { class: "muted", text: "Manage the named logins GAIA can bind to agents. Room usage is scoped to that room; this page is the only all-account overview." }),
+    h("p", { class: "muted", text: "Manage the named logins HUGR can bind to agents. Room usage is scoped to that room; this page is the only all-account overview." }),
     accountsError ? h("div", { class: "settings2-error-line", text: accountsError }) : null,
     accountsNotice ? h("div", { class: "settings2-notice", text: accountsNotice }) : null,
     accountsCatalog === null
