@@ -176,14 +176,6 @@
     "added": "2026-09-26"
   },
   {
-    "id": "euler-1",
-    "text": "The study of mathematics, like the Nile, begins in minuteness but ends in magnitude.",
-    "author": "Euler",
-    "field": "math",
-    "source": "Works",
-    "added": "2026-09-26"
-  },
-  {
     "id": "cantor-1",
     "text": "The essence of mathematics is its freedom.",
     "author": "Cantor",
@@ -304,14 +296,6 @@
     "added": "2026-09-26"
   },
   {
-    "id": "feynman-2",
-    "text": "The principle of science, the definition, almost, is the following: the test of all knowledge.",
-    "author": "Feynman",
-    "field": "science",
-    "source": "The Feynman Lectures",
-    "added": "2026-09-26"
-  },
-  {
     "id": "hooke-1",
     "text": "Nature does nothing in vain, when more and fewer suffice.",
     "author": "Hooke",
@@ -368,22 +352,6 @@
     "added": "2026-09-26"
   },
   {
-    "id": "bell-1",
-    "text": "When one door closes, another opens; but we so often look with regret upon the closed door.",
-    "author": "Bell",
-    "field": "engineering",
-    "source": "Speeches",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "wright-1",
-    "text": "If we work on the assumption that what is believed to be true is true, then we can expect success.",
-    "author": "Wright Brothers",
-    "field": "engineering",
-    "source": "Letters",
-    "added": "2026-09-26"
-  },
-  {
     "id": "diesel-1",
     "text": "I am convinced that the use of crude oil as fuel is not far away.",
     "author": "Diesel",
@@ -405,14 +373,6 @@
     "author": "Kay",
     "field": "technology",
     "source": "Talks",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "turing-2",
-    "text": "Computing is normally done by human computers. So an electronic computer is literally an electronic human computer.",
-    "author": "Turing",
-    "field": "technology",
-    "source": "Computing Machinery and Intelligence",
     "added": "2026-09-26"
   },
   {
@@ -448,14 +408,6 @@
     "added": "2026-09-26"
   },
   {
-    "id": "ritchie-1",
-    "text": "The good news about computers is that they do what you tell them to do. The bad news is that they do what you tell them to do.",
-    "author": "Ritchie",
-    "field": "technology",
-    "source": "Lectures",
-    "added": "2026-09-26"
-  },
-  {
     "id": "stallman-1",
     "text": "Free software is software that respects users' freedom and community.",
     "author": "Stallman",
@@ -469,174 +421,6 @@
     "author": "Torvalds",
     "field": "technology",
     "source": "Interviews",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "knuth-1",
-    "text": "The real problem is that programmers have spent far too much time worrying about efficiency.",
-    "author": "Knuth",
-    "field": "technology",
-    "source": "The Art of Computer Programming",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-1",
-    "text": "The most important thing is to keep asking questions.",
-    "author": "Curiosity Today",
-    "field": "news",
-    "source": "Editorial",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-2",
-    "text": "Understanding yesterday is the key to seeing tomorrow.",
-    "author": "Insight",
-    "field": "news",
-    "source": "Analysis",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-3",
-    "text": "Every story begins with careful observation.",
-    "author": "Truth Matters",
-    "field": "news",
-    "source": "Editorial",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-4",
-    "text": "The world changes fastest when we look closely at what's real.",
-    "author": "Modern Journalism",
-    "field": "news",
-    "source": "Essays",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-5",
-    "text": "Information shared is power multiplied.",
-    "author": "Connected",
-    "field": "news",
-    "source": "Editorial",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-6",
-    "text": "Today's headlines shape tomorrow's possibilities.",
-    "author": "Time & Change",
-    "field": "news",
-    "source": "Commentary",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-7",
-    "text": "Clarity emerges when we seek sources over noise.",
-    "author": "Facts First",
-    "field": "news",
-    "source": "Editorial",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-8",
-    "text": "The stories we tell define the world we build.",
-    "author": "Narrative",
-    "field": "news",
-    "source": "Essays",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-9",
-    "text": "Truth requires patience and careful listening.",
-    "author": "Slow News",
-    "field": "news",
-    "source": "Editorial",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "news-10",
-    "text": "Every voice carries a piece of the larger picture.",
-    "author": "In Context",
-    "field": "news",
-    "source": "Essays",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-1",
-    "text": "Curiosity-driven research shapes the foundation of progress.",
-    "author": "Research Frontiers",
-    "field": "research",
-    "source": "Essays",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-2",
-    "text": "The best discoveries come from asking why.",
-    "author": "Scientific Method",
-    "field": "research",
-    "source": "Principles",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-3",
-    "text": "Replication is the lifeblood of rigorous inquiry.",
-    "author": "Data Integrity",
-    "field": "research",
-    "source": "Guidelines",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-4",
-    "text": "Understanding often hides in the margins of data.",
-    "author": "Analytics",
-    "field": "research",
-    "source": "Essays",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-5",
-    "text": "Collaboration multiplies the mind's capacity to discover.",
-    "author": "Open Science",
-    "field": "research",
-    "source": "Manifesto",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-6",
-    "text": "Every hypothesis tested brings us closer to truth.",
-    "author": "Experimental Design",
-    "field": "research",
-    "source": "Handbook",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-7",
-    "text": "The most interesting results are often unexpected.",
-    "author": "Discovery",
-    "field": "research",
-    "source": "Essays",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-8",
-    "text": "Peer review is where science proves its rigor.",
-    "author": "Quality Assurance",
-    "field": "research",
-    "source": "Editorial",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-9",
-    "text": "Questions unanswered drive the greatest research forward.",
-    "author": "Open Frontiers",
-    "field": "research",
-    "source": "Essays",
-    "added": "2026-09-26"
-  },
-  {
-    "id": "research-10",
-    "text": "Knowledge builds on what was carefully observed before.",
-    "author": "Cumulative Progress",
-    "field": "research",
-    "source": "Essays",
     "added": "2026-09-26"
   }
 ]
