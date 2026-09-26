@@ -28,3 +28,7 @@ tmp/
 # repo). NEVER commit: it is per-user and often private.
 .gaia/
 .*.bun-build
+
+# Runtime pid files
+panopticon-supervisor.pid
+panopticon.pid
