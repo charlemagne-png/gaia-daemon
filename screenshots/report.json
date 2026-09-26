@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-09-26T07:36:55.926Z",
+  "frames": [
+    {
+      "label": "apple-t0",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-t0.png",
+      "md5": "f60cd64eff36764553aae0a71ebf8858",
+      "theme": "apple",
+      "timestamp": 0
+    },
+    {
+      "label": "apple-t1500",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-t1500.png",
+      "md5": "3205a07cc3b1a0ce222b6b3fc1b203a7",
+      "theme": "apple",
+      "timestamp": 1500
+    },
+    {
+      "label": "apple-t3000",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-t3000.png",
+      "md5": "85756f647ae2bf2802fe5de9b4076b85",
+      "theme": "apple",
+      "timestamp": 3000
+    },
+    {
+      "label": "apple-t2600",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-t2600.png",
+      "md5": "fa7e7cef7eec3b8c1b714ec5ad1b7c80",
+      "theme": "apple",
+      "timestamp": 2600,
+      "t2600Title": "Imagination is more important than knowledge."
+    },
+    {
+      "label": "apple-dark-t0",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-dark-t0.png",
+      "md5": "334766ae80ec560fd5e7f4d4c0e966f9",
+      "theme": "apple-dark",
+      "timestamp": 0
+    },
+    {
+      "label": "apple-dark-t1500",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-dark-t1500.png",
+      "md5": "116c959f62b4e77fe2aad49761ebad87",
+      "theme": "apple-dark",
+      "timestamp": 1500
+    },
+    {
+      "label": "apple-dark-t3000",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-dark-t3000.png",
+      "md5": "f106f09c9d48d8b0fa37b95169541898",
+      "theme": "apple-dark",
+      "timestamp": 3000
+    },
+    {
+      "label": "apple-dark-t2600",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-dark-t2600.png",
+      "md5": "9b45e2fb982dad6054a8ab55a7ed0856",
+      "theme": "apple-dark",
+      "timestamp": 2600,
+      "t2600Title": "Imagination is more important than knowledge."
+    }
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "deviceScaleFactor": 2
+  },
+  "themes": [
+    "apple",
+    "apple-dark"
+  ],
+  "timestamps": [
+    0,
+    1500,
+    3000,
+    2600
+  ],
+  "distinctFrames": 8
+}
