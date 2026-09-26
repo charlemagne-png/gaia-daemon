@@ -16,6 +16,7 @@ import { $, h } from "./dom.js";
 import { LinkedText } from "./links.js";
 import { MarkdownMessage } from "./markdown.js";
 import { attachDust } from "./newchat-dust.js";
+import { getRandomSaying } from "./newchat-sayings.js";
 import { promptText } from "./prompt.js";
 import { toggleReadAloud } from "./readaloud.js";
 import { markDirty, registerRegion, setError } from "./render.js";
@@ -493,7 +494,11 @@ function restoreActivityScroll(container, offsets) {
 function emptyState() {
   const canvas = /** @type {HTMLCanvasElement} */ (h("canvas", { class: "newchat-dust" }));
   attachDust(canvas);
-  return h(
+
+  const titleEl = h("div", { class: "newchat-title", text: "Creation is at your fingertips." });
+  const subEl = h("div", { class: "newchat-sub", text: "How will you use it?" });
+
+  const container = h(
     "div",
     { class: "empty empty-newchat" },
     h("div", { class: "newchat-art" }, canvas),
@@ -501,11 +506,75 @@ function emptyState() {
       "div",
       { class: "newchat-copy" },
       h("img", { class: "newchat-logo", src: "/img/hugr/hugr-512x512.png", alt: "HUGR", width: "112", height: "112" }),
-      h("div", { class: "newchat-title", text: "Creation is at your fingertips." }),
-      h("div", { class: "newchat-sub", text: "How will you use it?" }),
+      titleEl,
+      subEl,
     ),
     h("span", { class: "newchat-fallback", text: "no messages" }),
   );
+
+  // Schedule saying swap at t=2000ms: crossfade in title & sub
+  // Cleanup on detach so timers don't leak if the room changes before swap.
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let swapTimer = null;
+  /** @type {MutationObserver | null} */
+  let mutationObserver = null;
+
+  const scheduleSwap = () => {
+    swapTimer = setTimeout(async () => {
+      try {
+        const saying = await getRandomSaying();
+        performSwap(titleEl, subEl, saying.text, saying.author);
+      } catch (e) {
+        console.warn("Failed to swap saying", e);
+      }
+    }, 2000);
+  };
+
+  const cleanup = () => {
+    if (swapTimer) clearTimeout(swapTimer);
+    if (mutationObserver) mutationObserver.disconnect();
+  };
+
+  // Watch for detach so we don't keep timers alive after removal
+  mutationObserver = new MutationObserver(() => {
+    if (!document.contains(container)) cleanup();
+  });
+  mutationObserver.observe(document.body, { childList: true, subtree: true });
+
+  scheduleSwap();
+  return container;
+}
+
+/**
+ * Perform the premium crossfade swap: fade out old, fade in new.
+ * t=0: start fade-out on old text
+ * t=450ms: text changed, fade-in completes
+ * @param {HTMLElement} titleEl
+ * @param {HTMLElement} subEl
+ * @param {string} newText — the quote
+ * @param {string} author — the author name
+ */
+function performSwap(titleEl, subEl, newText, author) {
+  // Fade out: apply animation class
+  titleEl.classList.add("crossfade-out");
+  subEl.classList.add("crossfade-out");
+
+  // After fade completes, swap text and fade in
+  setTimeout(() => {
+    titleEl.textContent = newText;
+    subEl.textContent = `— ${author}`;
+
+    titleEl.classList.remove("crossfade-out");
+    subEl.classList.remove("crossfade-out");
+    titleEl.classList.add("crossfade-in");
+    subEl.classList.add("crossfade-in");
+
+    // Remove animation classes after fade completes so they don't re-trigger
+    setTimeout(() => {
+      titleEl.classList.remove("crossfade-in");
+      subEl.classList.remove("crossfade-in");
+    }, 450);
+  }, 450);
 }
 
 function renderTranscript() {
