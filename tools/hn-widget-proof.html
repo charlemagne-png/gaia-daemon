@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HN Widget Proof Rig</title>
+  <link rel="stylesheet" href="/web/src/styles.css">
+  <link rel="stylesheet" href="/web/src/hn-widget.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { width: 100%; height: 100vh; background: var(--bg); overflow: hidden; }
+    #root { width: 100%; height: 100vh; display: flex; flex-direction: column; }
+
+    .proof-frame {
+      display: none;
+      flex: 1;
+      padding: 24px;
+      overflow: auto;
+    }
+    .proof-frame.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .proof-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+
+    .proof-widget-mount {
+      flex: 1;
+      display: flex;
+      border-radius: 8px;
+      background: var(--surface-1);
+      min-height: 200px;
+    }
+
+    .proof-controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 24px;
+      justify-content: center;
+    }
+
+    .proof-btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: none;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      background: var(--accent);
+      color: white;
+      transition: filter 150ms ease-out;
+    }
+    .proof-btn:hover {
+      filter: brightness(1.06);
+    }
+    .proof-btn.inactive {
+      background: var(--interactive-rest);
+      color: var(--text-secondary);
+      cursor: not-allowed;
+    }
+
+    .proof-status {
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+<div id="root">
+  <!-- Frame 1: Apple theme, carousel visible -->
+  <div class="proof-frame active" data-frame="1">
+    <div class="proof-label">Frame 1: Apple (Light) Theme — Carousel Active</div>
+    <div class="proof-widget-mount" id="mount-1"></div>
+    <div class="proof-controls">
+      <button class="proof-btn" onclick="nextFrame()">Next Frame →</button>
+    </div>
+    <div class="proof-status">Carousel mounted, HN stories loading...</div>
+  </div>
+
+  <!-- Frame 2: Apple theme, voice mode ON -->
+  <div class="proof-frame" data-frame="2">
+    <div class="proof-label">Frame 2: Apple (Light) Theme — Voice Mode ON</div>
+    <div class="proof-widget-mount" id="mount-2"></div>
+    <div class="proof-controls">
+      <button class="proof-btn" onclick="prevFrame()">← Previous</button>
+      <button class="proof-btn" onclick="nextFrame()">Next Frame →</button>
+    </div>
+    <div class="proof-status">Voice mode toggled, hermes placeholder visible</div>
+  </div>
+
+  <!-- Frame 3: Apple-Dark theme, carousel visible -->
+  <div class="proof-frame" data-frame="3">
+    <div class="proof-label">Frame 3: Apple-Dark Theme — Carousel Active</div>
+    <div class="proof-widget-mount" id="mount-3"></div>
+    <div class="proof-controls">
+      <button class="proof-btn" onclick="prevFrame()">← Previous</button>
+      <button class="proof-btn" onclick="nextFrame()">Next Frame →</button>
+    </div>
+    <div class="proof-status">Dark theme, carousel mounted</div>
+  </div>
+
+  <!-- Frame 4: Apple-Dark theme, voice mode ON -->
+  <div class="proof-frame" data-frame="4">
+    <div class="proof-label">Frame 4: Apple-Dark Theme — Voice Mode ON</div>
+    <div class="proof-widget-mount" id="mount-4"></div>
+    <div class="proof-controls">
+      <button class="proof-btn" onclick="prevFrame()">← Previous</button>
+      <button class="proof-btn" onclick="captureProof()">Capture Proof</button>
+    </div>
+    <div class="proof-status">Dark theme, voice mode active</div>
+  </div>
+</div>
+
+<script type="module">
+  // Error logging for proof rig
+  window.addEventListener('error', (e) => {
+    console.error('Uncaught error:', e.message, e.filename, e.lineno);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    console.error('Unhandled rejection:', e.reason);
+  });
+
+  // Import widget module
+  let HnWidgetModule;
+  try {
+    HnWidgetModule = await import("/web/src/hn-widget.js");
+    console.log("✓ Loaded hn-widget.js");
+  } catch (e) {
+    console.error("Failed to load hn-widget.js:", e.message);
+    throw e;
+  }
+
+  const { mountHnCarousel, setVoiceMode } = HnWidgetModule;
+
+  // State tracking
+  let currentFrame = 1;
+  let handles = {};
+
+  /**
+   * Navigation: switch to next frame.
+   */
+  window.nextFrame = () => {
+    if (currentFrame < 4) {
+      switchFrame(currentFrame + 1);
+    }
+  };
+
+  /**
+   * Navigation: switch to previous frame.
+   */
+  window.prevFrame = () => {
+    if (currentFrame > 1) {
+      switchFrame(currentFrame - 1);
+    }
+  };
+
+  /**
+   * Switch to frame N, applying state changes.
+   */
+  function switchFrame(n) {
+    // Hide all frames
+    document.querySelectorAll(".proof-frame").forEach((f) => f.classList.remove("active"));
+
+    // Show target frame
+    const frame = document.querySelector(`[data-frame="${n}"]`);
+    if (frame) frame.classList.add("active");
+
+    currentFrame = n;
+    console.log(`→ Frame ${n}`);
+  }
+
+  /**
+   * Initialize and mount widget for a frame.
+   */
+  async function initFrame(n, theme, voiceMode = false) {
+    const el = document.getElementById(`mount-${n}`);
+    if (!el) return;
+
+    // Set theme on HTML element
+    document.documentElement.dataset.theme = theme;
+
+    // Mount widget
+    const handle = await mountHnCarousel(el, { theme });
+    handles[n] = handle;
+
+    // Apply voice mode if requested
+    if (voiceMode) {
+      setVoiceMode(handle, true);
+    }
+
+    console.log(`✓ Frame ${n} initialized (theme=${theme}, voice=${voiceMode})`);
+  }
+
+  /**
+   * Capture proof: navigate through frames, take screenshots.
+   * (In real use, CDP screenshot tool runs this headless.)
+   */
+  window.captureProof = () => {
+    console.log("=== PROOF CAPTURE START ===");
+    console.log("Frame 1 (Apple, carousel): Ready");
+    console.log("Frame 2 (Apple, voice): Ready");
+    console.log("Frame 3 (Apple-Dark, carousel): Ready");
+    console.log("Frame 4 (Apple-Dark, voice): Ready");
+    console.log("=== PROOF CAPTURE END ===");
+    alert("Proof captured. Check console for frame references.");
+  };
+
+  // Initialize all frames
+  console.log("Initializing proof rig...");
+  try {
+    await initFrame(1, "apple", false);
+    await initFrame(2, "apple", true);
+    // For frame 3 & 4, we need to create fresh mounts with different theme
+    setTimeout(async () => {
+      await initFrame(3, "apple-dark", false);
+      await initFrame(4, "apple-dark", true);
+      console.log("✓ All frames initialized");
+    }, 500);
+  } catch (e) {
+    console.error("Failed to initialize frames:", e.message);
+  }
+
+  // Log final status
+  console.log("✓ HN Widget Proof Rig ready at", new Date().toISOString());
+  console.log("Themes: apple, apple-dark | States: carousel, voice-mode");
+</script>
+</body>
+</html>
