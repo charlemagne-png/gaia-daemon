@@ -371,8 +371,11 @@ textarea:focus, input:focus, select:focus {
 small, time { color: var(--muted); overflow-wrap: anywhere; }
 .muted { opacity: 0.55; }
 .empty { color: var(--muted); padding: var(--sp-2) 0; }
-/* New-chat empty state. Non-Apple themes keep the quiet fallback line; the art
-   + keynote copy are inert markup hidden until an Apple theme opts them in. */
+/* New-chat empty state. Non-Apple themes keep the quiet fallback line; the HUGR
+   mark, gold-dust canvas, and keynote copy are inert markup hidden until an
+   Apple theme opts them in. The gold dust is HUGR's design language: fine
+   sparkling particles drifting in dark air, radial-masked so the centre stays
+   clean for the mark + invitation. */
 .empty-newchat .newchat-art, .empty-newchat .newchat-copy { display: none; }
 [data-theme="apple"] .empty-newchat, [data-theme="apple-dark"] .empty-newchat {
   position: relative; display: grid; place-items: center;
@@ -380,29 +383,34 @@ small, time { color: var(--muted); overflow-wrap: anywhere; }
 }
 [data-theme="apple"] .empty-newchat .newchat-fallback,
 [data-theme="apple-dark"] .empty-newchat .newchat-fallback { display: none; }
+/* Gold-dust canvas fills the surface behind the copy; the engine sizes its
+   backing store to the element (see newchat-dust.js). The radial mask keeps the
+   optical centre clear so dust never crowds the mark or invitation. */
 [data-theme="apple"] .empty-newchat .newchat-art,
 [data-theme="apple-dark"] .empty-newchat .newchat-art {
-  display: flex; position: absolute; inset: 0; align-items: center; justify-content: center;
-  pointer-events: none;
+  display: block; position: absolute; inset: 0; pointer-events: none;
 }
-[data-theme="apple"] .newchat-constel, [data-theme="apple-dark"] .newchat-constel {
-  width: min(860px, 82%); height: auto; color: var(--fg);
-  -webkit-mask-image: radial-gradient(ellipse 42% 46% at 50% 50%, transparent 0%, transparent 34%, #000 72%);
-          mask-image: radial-gradient(ellipse 42% 46% at 50% 50%, transparent 0%, transparent 34%, #000 72%);
+[data-theme="apple"] .newchat-dust, [data-theme="apple-dark"] .newchat-dust {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  -webkit-mask-image: radial-gradient(ellipse 46% 50% at 50% 46%, transparent 0%, transparent 30%, #000 78%);
+          mask-image: radial-gradient(ellipse 46% 50% at 50% 46%, transparent 0%, transparent 30%, #000 78%);
 }
-[data-theme="apple"] .constel-lines, [data-theme="apple-dark"] .constel-lines { opacity: 0.16; }
-[data-theme="apple"] .constel-planets, [data-theme="apple-dark"] .constel-planets { opacity: 0.30; }
-[data-theme="apple"] .constel-stars, [data-theme="apple-dark"] .constel-stars { opacity: 0.42; }
-[data-theme="apple-dark"] .constel-lines { opacity: 0.22; }
-[data-theme="apple-dark"] .constel-planets { opacity: 0.40; }
-[data-theme="apple-dark"] .constel-stars { opacity: 0.60; }
 [data-theme="apple"] .empty-newchat .newchat-copy,
 [data-theme="apple-dark"] .empty-newchat .newchat-copy {
-  display: block; position: relative; z-index: 1; text-align: center; padding: 0 var(--sp-4);
+  display: flex; flex-direction: column; align-items: center;
+  position: relative; z-index: 1; text-align: center; padding: 0 var(--sp-4);
 }
+/* HUGR mark, centred ABOVE the tagline. Modest, crisp on retina, a soft shadow
+   that lifts it off the surface — no border, no box. */
+[data-theme="apple"] .newchat-logo, [data-theme="apple-dark"] .newchat-logo {
+  width: clamp(84px, 9vw, 112px); height: auto; margin-bottom: clamp(22px, 3vw, 34px);
+  border-radius: 22.5%;
+  filter: drop-shadow(0 8px 22px rgba(0, 0, 0, 0.22));
+}
+[data-theme="apple-dark"] .newchat-logo { filter: drop-shadow(0 10px 30px rgba(0, 0, 0, 0.55)); }
 [data-theme="apple"] .newchat-title, [data-theme="apple-dark"] .newchat-title {
   font-size: clamp(30px, 3.6vw, 48px); font-weight: var(--fw-semibold);
-  letter-spacing: -0.03em; line-height: 1.04; color: var(--fg);
+  letter-spacing: -0.03em; line-height: 1.04; color: var(--fg); text-wrap: balance;
 }
 [data-theme="apple"] .newchat-sub, [data-theme="apple-dark"] .newchat-sub {
   margin-top: 14px; font-size: clamp(15px, 1.5vw, 21px); font-weight: var(--fw-normal);

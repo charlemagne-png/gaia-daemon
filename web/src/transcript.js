@@ -15,6 +15,7 @@ import { beginEditMessage, humanSize } from "./composer.js";
 import { $, h } from "./dom.js";
 import { LinkedText } from "./links.js";
 import { MarkdownMessage } from "./markdown.js";
+import { attachDust } from "./newchat-dust.js";
 import { promptText } from "./prompt.js";
 import { toggleReadAloud } from "./readaloud.js";
 import { markDirty, registerRegion, setError } from "./render.js";
@@ -483,6 +484,30 @@ function restoreActivityScroll(container, offsets) {
   }
 }
 
+// Empty-room state. Every theme falls back to a quiet "no messages" line; the
+// Apple themes replace it with the HUGR mark centred above the invitation, over
+// a field of slow-drifting gold dust — HUGR's design language. The dust is a
+// canvas painted by a single shared loop (see newchat-dust.js); CSS
+// ([data-theme="apple"|"apple-dark"] .empty-newchat) opts the art + copy in and
+// hides the fallback line.
+function emptyState() {
+  const canvas = /** @type {HTMLCanvasElement} */ (h("canvas", { class: "newchat-dust" }));
+  attachDust(canvas);
+  return h(
+    "div",
+    { class: "empty empty-newchat" },
+    h("div", { class: "newchat-art" }, canvas),
+    h(
+      "div",
+      { class: "newchat-copy" },
+      h("img", { class: "newchat-logo", src: "/img/hugr/hugr-512x512.png", alt: "HUGR", width: "112", height: "112" }),
+      h("div", { class: "newchat-title", text: "Creation is at your fingertips." }),
+      h("div", { class: "newchat-sub", text: "How will you use it?" }),
+    ),
+    h("span", { class: "newchat-fallback", text: "no messages" }),
+  );
+}
+
 function renderTranscript() {
   const container = $("#transcript");
   if (!container) return;
@@ -502,7 +527,7 @@ function renderTranscript() {
 
   const views = messageViews();
   if (views.length === 0) {
-    container.replaceChildren(h("div", { class: "empty", text: "no messages" }));
+    container.replaceChildren(emptyState());
     return;
   }
 
