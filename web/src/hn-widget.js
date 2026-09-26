@@ -242,12 +242,15 @@ function createCarouselShell(container) {
  * @returns {Promise<CarouselHandle>}
  */
 export async function mountHnCarousel(el, opts = {}) {
-  const theme = opts.theme || "apple";
+  // NOTE: the widget must NOT stamp its own data-theme. The app's theme lives on
+  // <html data-theme>, and the palette blocks use a bare [data-theme="x"]
+  // selector — stamping it here would PIN one theme's tokens to this subtree and
+  // override the live app theme (and break every non-default theme). Inherit.
+  void opts.theme;
 
   // Create widget container
   const widgetContainer = h("div", {
     class: "hn-widget",
-    "data-theme": theme,
   });
 
   // Create carousel shell

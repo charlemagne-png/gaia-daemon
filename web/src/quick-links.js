@@ -27,7 +27,9 @@
  * @returns {Promise<QuickLinksHandle>} Handle with destroy method
  */
 export async function mountQuickLinks(el, opts = {}) {
-  const dataUrl = opts.dataUrl ?? "/web/quick-links.json";
+  // web/ is the static root, so the file at web/quick-links.json is served at
+  // /quick-links.json (not /web/quick-links.json).
+  const dataUrl = opts.dataUrl ?? "/quick-links.json";
   
   /** @type {QuickLink[]} */
   let links = [];

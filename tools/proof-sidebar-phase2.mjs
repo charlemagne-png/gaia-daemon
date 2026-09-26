@@ -17,7 +17,7 @@ const ROOT = resolve(WORKTREE, "../../.."); // root checkout holds the design/ s
 const OUT = resolve(WORKTREE, "proof/sidebar-phase2");
 const HOME = "/tmp/dieter-proof-home";
 const CWD = "/tmp/dieter-proof-ws";
-const PORT = 8899;
+const PORT = 8800 + Math.floor(Math.random() * 900); // fresh port, dodge stale daemons
 const URL = `http://127.0.0.1:${PORT}`;
 
 await rm(OUT, { recursive: true, force: true });
@@ -41,8 +41,11 @@ async function waitReady(ms = 30000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
     try {
-      const r = await fetch(URL, { signal: AbortSignal.timeout(1500) });
-      if (r.ok) return true;
+      // Require the ES module route to serve real JS — a 200 on / alone can
+      // precede static wiring and races the browser into a text/html main.js.
+      const r = await fetch(`${URL}/src/main.js`, { signal: AbortSignal.timeout(1500) });
+      const ct = r.headers.get("content-type") || "";
+      if (r.ok && ct.includes("javascript")) return true;
     } catch {}
     await new Promise((r) => setTimeout(r, 400));
   }
@@ -107,7 +110,8 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1024 }, de
 page.on("console", (m) => { if (m.type() === "error") console.log("[page error]", m.text()); });
 
 await page.goto(URL, { waitUntil: "load" });
-await page.waitForTimeout(1500); // app boot + loader
+await page.waitForSelector("#right", { timeout: 15000 }); // app mounted its skeleton
+await page.waitForTimeout(1200); // loader settle
 
 const md5 = (buf) => createHash("md5").update(buf).digest("hex");
 const frames = {};
@@ -156,6 +160,17 @@ await shot("04-apple-voice-hermes.png");
 await setTheme("apple-dark");
 await page.waitForTimeout(300);
 await shot("05-apple-dark-voice-hermes.png");
+
+// non-Apple theme must not break: universal tokens, no pinned palette
+await page.evaluate(async () => {
+  const st = await import('/src/state.js');
+  const rd = await import('/src/render.js');
+  st.state.voice = null;
+  rd.markDirty('panel');
+});
+await setTheme("tokyo-night");
+await page.waitForTimeout(500);
+await shot("06-tokyo-night.png");
 
 await writeFile(resolve(OUT, "manifest.json"), JSON.stringify({ port: PORT, capturedAt: new Date().toISOString(), md5: frames }, null, 2));
 
