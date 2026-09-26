@@ -11,6 +11,7 @@ import { mountHnCarousel, setVoiceMode } from "./hn-widget.js";
 import { LinkedText, PathText } from "./links.js";
 import { shortModel } from "./models.js";
 import { mountQuickLinks } from "./quick-links.js";
+import { renderLegacyPanel } from "./panel-legacy.js";
 import { markDirty, registerRegion } from "./render.js";
 import { openAgentSettings } from "./settings.js";
 import { state } from "./state.js";
@@ -91,6 +92,18 @@ function ensureWidgets() {
 function renderPanel() {
   const panel = $("#room-panel");
   if (!panel) return;
+  // APPLE-ONLY SCOPE: the reformatted layout (HN carousel / quick-links /
+  // agent strips / section labels) renders ONLY under apple + apple-dark. Every
+  // other theme gets the exact pre-reformat panel from panel-legacy.js. The
+  // persistent widget slots below are module-level, so toggling themes detaches
+  // (never destroys) them and ensureWidgets() reuses the same nodes on return —
+  // no leak, no duplicate timers. themes.js markDirty("panel") drives the live
+  // re-render on theme switch.
+  const theme = currentTheme();
+  if (theme !== "apple" && theme !== "apple-dark") {
+    renderLegacyPanel(panel);
+    return;
+  }
   ensureWidgets();
   const snapshot = state.snapshot;
   const agents = snapshot?.agents ?? [];
@@ -160,10 +173,15 @@ function renderPanel() {
     // HN carousel (→ hermes on a live call), quick-links, then agent group rows.
     // These three are the SAME persistent nodes on every render (see header).
     // ensureWidgets() guaranteed them above; assert non-null for the checker.
+    // Each is fronted by an Apple-grade section label (SF-style uppercase
+    // tracking, hairline-quiet, matching the GENERAL/PERSONAL pill weight).
+    h("h3", { class: "panel-section-label", text: "Hacker News" }),
     /** @type {HTMLElement} */ (widgetSlot),
+    h("h3", { class: "panel-section-label", text: "My Apps" }),
     /** @type {HTMLElement} */ (quickLinksSlot),
+    h("h3", { class: "panel-section-label", text: "Agents" }),
     /** @type {HTMLElement} */ (agentsSlot),
-    h("h3", { text: "tasks" }),
+    h("h3", { class: "panel-section-label", text: "Tasks" }),
     h(
       "div",
       { class: "task-list" },
@@ -187,7 +205,7 @@ function renderPanel() {
  * ABOVE the task/queue rows — they are the shelf, the queue sits beneath.
  * @param {import("./types.js").RoomNote[]} notes
  */
-function NoteRows(notes) {
+export function NoteRows(notes) {
   return notes.map((note) =>
     h(
       "div",
@@ -211,7 +229,7 @@ function NoteRows(notes) {
  * controls operate on; only history is truncated).
  * @param {import("./types.js").Task[]} tasks
  */
-function TaskRows(tasks) {
+export function TaskRows(tasks) {
   const waiting = tasks.filter((task) => task.status === "queued" || task.status === "paused");
   const rest = tasks.filter((task) => task.status !== "queued" && task.status !== "paused").slice(-5);
   return [...rest, ...waiting].map((task) => {
@@ -244,7 +262,7 @@ function TaskRows(tasks) {
 
 /** Right-click menu on an agent row: delete (moves to trash, recoverable).
  * @returns {HTMLElement|null} */
-function AgentContextMenu() {
+export function AgentContextMenu() {
   const open = state.agentContextMenu;
   if (!open) return null;
   const agent = (state.snapshot?.agents ?? []).find((candidate) => candidate.id === open.agentId);

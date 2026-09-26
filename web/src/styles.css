@@ -2029,6 +2029,25 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* slot rhythm — one calm interval between the three stacked widgets */
 .panel-widget-slot, .panel-quicklinks-slot, .panel-agents-slot { margin-bottom: var(--sp-4); }
 
+/* Apple-grade section headers for the reformatted panel (apple / apple-dark
+   only): SF-style uppercase tracking, quiet and hairline, matching the
+   GENERAL/PERSONAL pill weight. Overrides the loud apple h3 rule below. */
+.panel-section-label {
+  margin: 0 0 var(--sp-2) 2px;
+  font-size: var(--text-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[data-theme="apple"] .panel-section-label,
+[data-theme="apple-dark"] .panel-section-label {
+  font-size: var(--text-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
 /* --- HN carousel -------------------------------------------------------- */
 .hn-widget { display: flex; flex-direction: column; }
 .hn-widget-carousel { display: flex; align-items: stretch; position: relative; }

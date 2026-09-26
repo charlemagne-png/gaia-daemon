@@ -4,6 +4,7 @@
 // and the cycle shortcut, and persists the choice. Swatches in the palette
 // scope the same CSS variables by carrying their own data-theme attribute,
 // so there is no second copy of any colour anywhere.
+import { markDirty } from "./render.js";
 
 /**
  * @typedef {Object} ThemeMeta
@@ -51,6 +52,9 @@ export function applyTheme(id) {
   const root = document.documentElement;
   root.dataset.theme = theme.id;
   root.classList.toggle("retro", Boolean(theme.retro));
+  // The right panel has an apple-only reformatted layout vs. a legacy layout
+  // for every other theme (see panel.js). Re-render it on any theme switch.
+  markDirty("panel");
   try {
     localStorage.setItem(STORAGE_KEY, theme.id);
   } catch {
