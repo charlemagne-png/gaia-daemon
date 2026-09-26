@@ -570,7 +570,6 @@ export class MemoryService {
         .catch((error): ResolvedEmbedder => ({ status: "dead", detail: error instanceof Error ? error.message : String(error) }))
         .then((resolved) => {
           this.recordEmbedderHealth(resolved);
-          if (resolved.status === "dead") this.log(`memory: embedder DEAD — ${resolved.detail}`);
           // A dead/auto-off resolve is not cached: the next search re-ensures
           // the sidecar instead of staying lexical-only forever. Explicit "off"
           // is a chosen mode; cache it to skip re-resolve.
