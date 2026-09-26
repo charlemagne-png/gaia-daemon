@@ -2178,6 +2178,70 @@ body.resizing { cursor: col-resize; user-select: none; }
 .agent-rows-popover-label { font-weight: var(--fw-semibold); color: var(--muted); }
 .agent-rows-popover-value { color: var(--fg); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Tab bar and pill tabs for agent groups */
+.agent-rows-tab-bar {
+  display: flex;
+  gap: var(--sp-2);
+  padding: 0 2px;
+  margin-bottom: calc(-1 * var(--sp-2));
+}
+
+.agent-rows-tab-pill {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  padding: calc(var(--sp-1) * 1.25) calc(var(--sp-1) * 2.75);
+  border-radius: var(--r-full);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.agent-rows-tab-pill:hover {
+  color: var(--fg);
+  background: var(--bg3);
+}
+
+.agent-rows-tab-pill.agent-rows-tab-active {
+  color: var(--fg);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+}
+
+/* Apple theme: hairline segmented control aesthetic */
+[data-theme="apple"] .agent-rows-tab-bar,
+[data-theme="apple-dark"] .agent-rows-tab-bar {
+  gap: 2px;
+}
+
+[data-theme="apple"] .agent-rows-tab-pill,
+[data-theme="apple-dark"] .agent-rows-tab-pill {
+  color: var(--muted);
+  background: transparent;
+  padding: calc(var(--sp-1) * 1.5) calc(var(--sp-1) * 3);
+  border: 0.5px solid transparent;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+[data-theme="apple"] .agent-rows-tab-pill:hover,
+[data-theme="apple-dark"] .agent-rows-tab-pill:hover {
+  color: var(--fg);
+  background: transparent;
+}
+
+[data-theme="apple"] .agent-rows-tab-pill.agent-rows-tab-active,
+[data-theme="apple-dark"] .agent-rows-tab-pill.agent-rows-tab-active {
+  color: var(--fg);
+  background: var(--surf-card);
+  border: 0.5px solid var(--border);
+  box-shadow: var(--elev-1);
+}
+
 /* --- Apple depth-through-light overrides ------------------------------- */
 [data-theme="apple"] .hn-widget-hn-slide, [data-theme="apple-dark"] .hn-widget-hn-slide,
 [data-theme="apple"] .hn-widget-hermes-slot, [data-theme="apple-dark"] .hn-widget-hermes-slot,
