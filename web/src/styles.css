@@ -248,8 +248,102 @@
 [data-theme="apple"] .code-copy, [data-theme="apple-dark"] .code-copy { background: var(--surf-card); border-color: transparent; box-shadow: var(--elev-1); }
 
 /* structural dividers — trade the 1px line for a soft edge-shadow */
-[data-theme="apple"] .tabbar, [data-theme="apple-dark"] .tabbar { background: var(--bg2); border-bottom: none; box-shadow: 0 1px 2px var(--edge); z-index: 3; }
 [data-theme="apple"] .statusbar, [data-theme="apple-dark"] .statusbar { background: var(--bg2); border-top: none; box-shadow: 0 -1px 2px var(--edge); }
+
+/* ============================================================
+   Chrome-silhouette tabbar — Apple depth · subtly metallic graphite
+   ------------------------------------------------------------
+   Both Apple variants share ONE dark brushed-graphite bar (Chrome's dark
+   strip, ref 3) — the metal reads correctly on the light theme too, exactly
+   as Chrome keeps a dark tab-strip over light content. The surface is a
+   restrained vertical micro-gradient (brushed-steel hint), a 0.5px top sheen
+   and a seated base shadow — never chrome-plate gloss, no specular streak.
+   Active tab = a raised rounded-top contour lifted on layered soft shadow,
+   its lighter graphite flaring through concave Chrome fillets so it fuses
+   into the bar baseline. Inactive tabs = flat, hairline-separated. All
+   colours are tokens so both themes stay coherent.
+   ============================================================ */
+[data-theme="apple"], [data-theme="apple-dark"] {
+  --tabbar-top: #3b3b3e;
+  --tabbar-bot: #2a2a2c;
+  --tabbar-sheen: rgba(255, 255, 255, 0.07);   /* 0.5px top light edge */
+  --tabbar-base: rgba(0, 0, 0, 0.55);          /* bottom seat shadow line */
+  --tab-sep: rgba(255, 255, 255, 0.06);        /* inactive vertical hairlines */
+  --tab-active-top: #4d4d51;
+  --tab-active-bot: #414145;
+  --tab-ink: #ededef;
+  --tab-ink-dim: rgba(237, 237, 239, 0.56);
+  --tab-ink-hover: #fbfbfd;
+}
+
+[data-theme="apple"] .tabbar, [data-theme="apple-dark"] .tabbar {
+  background: linear-gradient(180deg, var(--tabbar-top) 0%, var(--tabbar-bot) 100%);
+  border-bottom: none;
+  box-shadow:
+    inset 0 0.5px 0 var(--tabbar-sheen),
+    inset 0 -0.5px 0 var(--tabbar-base),
+    0 1px 3px rgba(0, 0, 0, 0.26);
+  z-index: 4;
+}
+
+/* left/right chrome buttons + the new-tab plus live on the dark bar → light
+   ink in BOTH themes, hairline dividers dropped for a whisper on hover only */
+[data-theme="apple"] .tabbar .chrome-btn, [data-theme="apple-dark"] .tabbar .chrome-btn,
+[data-theme="apple"] .tab-new, [data-theme="apple-dark"] .tab-new {
+  color: var(--tab-ink-dim); border-right-color: transparent;
+}
+[data-theme="apple"] .tabbar .chrome-btn:hover, [data-theme="apple-dark"] .tabbar .chrome-btn:hover,
+[data-theme="apple"] .tab-new:hover, [data-theme="apple-dark"] .tab-new:hover {
+  color: var(--tab-ink-hover); background: rgba(255, 255, 255, 0.06);
+}
+[data-theme="apple"] .tab-brand, [data-theme="apple-dark"] .tab-brand {
+  color: var(--tab-ink); border-right-color: var(--tab-sep);
+}
+
+/* inactive tab — flat on the metal, hairline separator, no radius.
+   position:relative anchors the active tab's wing fillets to the tab itself
+   (the strip is the nearest positioned ancestor otherwise → strays). */
+[data-theme="apple"] .tab, [data-theme="apple-dark"] .tab {
+  position: relative;
+  background: transparent;
+  color: var(--tab-ink-dim);
+  border-right: 1px solid var(--tab-sep);
+  border-radius: 0;
+}
+[data-theme="apple"] .tab:hover, [data-theme="apple-dark"] .tab:hover {
+  background: rgba(255, 255, 255, 0.05); color: var(--tab-ink-hover);
+}
+
+/* active tab — raised rounded-top contour, lighter graphite, layered lift */
+[data-theme="apple"] .tab.active, [data-theme="apple-dark"] .tab.active {
+  background: linear-gradient(180deg, var(--tab-active-top) 0%, var(--tab-active-bot) 100%);
+  color: var(--tab-ink);
+  border-right-color: transparent;
+  border-radius: 9px 9px 0 0;
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.14),   /* metallic sheen on the raised face */
+    0 -0.5px 1px rgba(0, 0, 0, 0.18),
+    -2px 0 6px rgba(0, 0, 0, 0.16),
+    2px 0 6px rgba(0, 0, 0, 0.16);
+  z-index: 1;
+}
+/* concave Chrome fillets — the lighter tab colour flares outward at the base,
+   fusing the contour into the darker bar (pure box-shadow quarter-circles) */
+[data-theme="apple"] .tab.active::before, [data-theme="apple-dark"] .tab.active::before,
+[data-theme="apple"] .tab.active::after, [data-theme="apple-dark"] .tab.active::after {
+  content: ""; position: absolute; bottom: 0; width: 8px; height: 8px;
+  background: transparent; pointer-events: none;
+}
+[data-theme="apple"] .tab.active::before, [data-theme="apple-dark"] .tab.active::before {
+  left: -8px; border-bottom-right-radius: 9px; box-shadow: 4px 4px 0 4px var(--tab-active-bot);
+}
+[data-theme="apple"] .tab.active::after, [data-theme="apple-dark"] .tab.active::after {
+  right: -8px; border-bottom-left-radius: 9px; box-shadow: -4px 4px 0 4px var(--tab-active-bot);
+}
+
+/* close × — light on the dark metal, danger on hover (unchanged behaviour) */
+[data-theme="apple"] .tab-close, [data-theme="apple-dark"] .tab-close { color: var(--tab-ink-dim); }
+[data-theme="apple"] .tab-close:hover, [data-theme="apple-dark"] .tab-close:hover { color: var(--danger); }
 
 /* composer + inputs — style the SHELL (the box); the inner textarea stays
    transparent so there is exactly one box, correctly sized, cursor aligned. */
