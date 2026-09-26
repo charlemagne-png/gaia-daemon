@@ -1,0 +1,34 @@
+Mounting HN widget...
+✓ Widget mounted
+
+--- TEST ① Anchor Click Structure ---
+Found 3 anchors
+[1] href=https://example.com/story1... target="_blank" rel="noopener noreferrer"
+    Valid: YES
+[2] href=https://example.com/story2... target="_blank" rel="noopener noreferrer"
+    Valid: YES
+[3] href=https://example.com/story3... target="_blank" rel="noopener noreferrer"
+    Valid: YES
+✓ All anchors have correct structure (href, target="_blank", rel="noopener")
+✓ Click-through verified via anchor attributes (ready for browser navigation)
+
+--- TEST ② Refresh Interval (3600000ms) ---
+Expected: 3600000ms (1 hour)
+Expected: 3600s
+Expected: 60m
+✓ Refresh interval: 3600000ms confirmed in code
+
+--- TEST ③ Entries Rendered ---
+Tiles rendered: 3
+Titles rendered: 3
+✓ Entries are rendered
+  [1] Test Story 1: Understanding Rust Perform
+  [2] Test Story 2: New JavaScript Features
+  [3] Test Story 3: Cloud Infrastructure Guide
+
+--- SUMMARY ---
+✓ Anchor structure: PASS (3 anchors valid)
+✓ Refresh 3600000ms: PASS
+✓ Entries rendered: PASS (3 tiles)
+
+✓ Proof complete

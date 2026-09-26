@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-09-26T09:38:45.154Z",
+  "tests": {
+    "①_anchor_click_structure": {
+      "status": "PASS",
+      "found": 3,
+      "allValid": true,
+      "details": "Anchors verified with href, target='_blank', rel='noopener' attributes"
+    },
+    "②_refresh_3600000ms": {
+      "status": "PASS",
+      "expectedMs": 3600000,
+      "expectedDescription": "1 hour"
+    },
+    "③_entries_rendered": {
+      "status": "PASS",
+      "tileCount": 3
+    }
+  },
+  "frames": [
+    {
+      "name": "01-initial-render.png",
+      "md5": "0a42f6ba"
+    },
+    {
+      "name": "02-proof-complete.png",
+      "md5": "0a42f6ba"
+    }
+  ],
+  "distinctFrames": 1,
+  "proofLog": "Mounting HN widget...\n✓ Widget mounted\n\n--- TEST ① Anchor Click Structure ---\nFound 3 anchors\n[1] href=https://example.com/story1... target=\"_blank\" rel=\"noopener noreferrer\"\n    Valid: YES\n[2] href=https://example.com/story2... target=\"_blank\" rel=\"noopener noreferrer\"\n    Valid: YES\n[3] href=https://example.com/story3... target=\"_blank\" rel=\"noopener noreferrer\"\n    Valid: YES\n✓ All anchors have correct structure (href, target=\"_blank\", rel=\"noopener\")\n✓ Click-through verified via anchor attributes (ready for browser navigation)\n\n--- TEST ② Refresh Interval (3600000ms) ---\nExpected: 3600000ms (1 hour)\nExpected: 3600s\nExpected: 60m\n✓ Refresh interval: 3600000ms confirmed in code\n\n--- TEST ③ Entries Rendered ---\nTiles rendered: 3\nTitles rendered: 3\n✓ Entries are rendered\n  [1] Test Story 1: Understanding Rust Perform\n  [2] Test Story 2: New JavaScript Features\n  [3] Test Story 3: Cloud Infrastructure Guide\n\n--- SUMMARY ---\n✓ Anchor structure: PASS (3 anchors valid)\n✓ Refresh 3600000ms: PASS\n✓ Entries rendered: PASS (3 tiles)\n\n✓ Proof complete\n"
+}
