@@ -1,63 +1,63 @@
 {
-  "timestamp": "2026-09-26T07:36:55.926Z",
+  "timestamp": "2026-09-26T07:40:27.777Z",
   "frames": [
     {
       "label": "apple-t0",
-      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-t0.png",
-      "md5": "f60cd64eff36764553aae0a71ebf8858",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/screenshots/apple-t0.png",
+      "md5": "dd1f2e1da077f0f887ff3bf42edb2a6c",
       "theme": "apple",
       "timestamp": 0
     },
     {
       "label": "apple-t1500",
-      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-t1500.png",
-      "md5": "3205a07cc3b1a0ce222b6b3fc1b203a7",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/screenshots/apple-t1500.png",
+      "md5": "1aa94bd21c7eff36018d85c5624689d9",
       "theme": "apple",
       "timestamp": 1500
     },
     {
       "label": "apple-t3000",
-      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-t3000.png",
-      "md5": "85756f647ae2bf2802fe5de9b4076b85",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/screenshots/apple-t3000.png",
+      "md5": "50b7d5126b44fba8e8a6093f2780ee56",
       "theme": "apple",
       "timestamp": 3000
     },
     {
       "label": "apple-t2600",
-      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-t2600.png",
-      "md5": "fa7e7cef7eec3b8c1b714ec5ad1b7c80",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/screenshots/apple-t2600.png",
+      "md5": "c193e8c5e55e7bc5178e263708c669fa",
       "theme": "apple",
       "timestamp": 2600,
-      "t2600Title": "Imagination is more important than knowledge."
+      "t2600Title": "Simplicity is the ultimate sophistication."
     },
     {
       "label": "apple-dark-t0",
-      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-dark-t0.png",
-      "md5": "334766ae80ec560fd5e7f4d4c0e966f9",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/screenshots/apple-dark-t0.png",
+      "md5": "7205ed47c95815552c7877146973eba2",
       "theme": "apple-dark",
       "timestamp": 0
     },
     {
       "label": "apple-dark-t1500",
-      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-dark-t1500.png",
-      "md5": "116c959f62b4e77fe2aad49761ebad87",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/screenshots/apple-dark-t1500.png",
+      "md5": "9f381d67a9d19e085c7bed0c85f12c3c",
       "theme": "apple-dark",
       "timestamp": 1500
     },
     {
       "label": "apple-dark-t3000",
-      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-dark-t3000.png",
-      "md5": "f106f09c9d48d8b0fa37b95169541898",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/screenshots/apple-dark-t3000.png",
+      "md5": "9751e47d7f30150e952fcef4d69eed28",
       "theme": "apple-dark",
       "timestamp": 3000
     },
     {
       "label": "apple-dark-t2600",
-      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/otl-proof-rig-1790408029/screenshots/apple-dark-t2600.png",
-      "md5": "9b45e2fb982dad6054a8ab55a7ed0856",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/screenshots/apple-dark-t2600.png",
+      "md5": "da5a9b186be585e69dd0cec157f085d6",
       "theme": "apple-dark",
       "timestamp": 2600,
-      "t2600Title": "Imagination is more important than knowledge."
+      "t2600Title": "What I cannot create, I do not understand."
     }
   ],
   "viewport": {

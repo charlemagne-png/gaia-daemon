@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HUGR Newchat Empty State Proof</title>
+  <link rel="stylesheet" href="/web/src/styles.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif; }
+    body { width: 100%; height: 100vh; background: var(--color-bg-root); overflow: hidden; }
+    #root { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="module">
+  // Enable error logging
+  window.addEventListener('error', (e) => {
+    console.error('Uncaught error:', e.message, e.filename, e.lineno);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    console.error('Unhandled rejection:', e.reason);
+  });
+
+  // Hyperscript helper (inline from dom.js for standalone use)
+  function h(tag, attrs = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs ?? {})) {
+      if (value === null || value === undefined || value === false) continue;
+      if (key === "class") node.className = String(value);
+      else if (key === "text") node.textContent = String(value);
+      else if (key === "value") node.value = String(value);
+      else if (key.startsWith("on") && typeof value === "function") {
+        node.addEventListener(key.slice(2).toLowerCase(), value);
+      } else {
+        node.setAttribute(key, value === true ? "" : String(value));
+      }
+    }
+    for (const child of children.flat()) {
+      if (child === null || child === undefined || child === false) continue;
+      node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    }
+    return node;
+  }
+
+  // Import newchat dust and sayings modules
+  console.log('Importing modules...');
+  let dustModule, sayingsModule;
+  try {
+    dustModule = await import("/web/src/newchat-dust.js");
+    console.log('✓ Loaded newchat-dust.js');
+  } catch (e) {
+    console.error('Failed to load newchat-dust.js:', e.message);
+    throw e;
+  }
+  try {
+    sayingsModule = await import("/web/src/newchat-sayings.js");
+    console.log('✓ Loaded newchat-sayings.js');
+  } catch (e) {
+    console.error('Failed to load newchat-sayings.js:', e.message);
+    throw e;
+  }
+  const { attachDust } = dustModule;
+  const { getRandomSaying } = sayingsModule;
+
+  // Perform the crossfade swap (from transcript.js emptyState logic)
+  function performSwap(titleEl, subEl, text, author) {
+    // Crossfade animation
+    titleEl.style.opacity = "0";
+    subEl.style.opacity = "0";
+    titleEl.style.transition = "opacity 0.3s ease-out";
+    subEl.style.transition = "opacity 0.3s ease-out";
+    
+    setTimeout(() => {
+      titleEl.textContent = text;
+      subEl.textContent = `— ${author}`;
+      titleEl.style.opacity = "1";
+      subEl.style.opacity = "1";
+    }, 300);
+  }
+
+  // Build the empty state (from transcript.js emptyState())
+  function emptyState() {
+    const canvas = h("canvas", { class: "newchat-dust" });
+    attachDust(canvas);
+
+    const titleEl = h("div", { class: "newchat-title", text: "Creation is at your fingertips." });
+    const subEl = h("div", { class: "newchat-sub", text: "How will you use it?" });
+
+    const container = h(
+      "div",
+      { class: "empty empty-newchat" },
+      h("div", { class: "newchat-art" }, canvas),
+      h(
+        "div",
+        { class: "newchat-copy" },
+        h("img", { class: "newchat-logo", src: "/web/img/hugr/hugr-512x512.png", alt: "HUGR", width: "112", height: "112" }),
+        titleEl,
+        subEl,
+      ),
+      h("span", { class: "newchat-fallback", text: "no messages" }),
+    );
+
+    // Schedule saying swap at t=2000ms: crossfade in title & sub
+    let swapTimer = null;
+    let mutationObserver = null;
+
+    const scheduleSwap = () => {
+      swapTimer = setTimeout(async () => {
+        try {
+          const saying = await getRandomSaying();
+          performSwap(titleEl, subEl, saying.text, saying.author);
+        } catch (e) {
+          console.warn("Failed to swap saying", e);
+        }
+      }, 2000);
+    };
+
+    const cleanup = () => {
+      if (swapTimer) clearTimeout(swapTimer);
+      if (mutationObserver) mutationObserver.disconnect();
+    };
+
+    // Watch for detach so we don't keep timers alive after removal
+    mutationObserver = new MutationObserver(() => {
+      if (!document.contains(container)) cleanup();
+    });
+    mutationObserver.observe(document.body, { childList: true, subtree: true });
+
+    scheduleSwap();
+    return container;
+  }
+
+  // Mount empty state to root
+  const root = document.getElementById("root");
+  if (!root) throw new Error("No root element found");
+  console.log('Mounting empty state...');
+  root.replaceChildren(emptyState());
+
+  // Log for debugging/proof
+  console.log("✓ Newchat empty state rendered at", new Date().toISOString());
+  console.log("Theme:", document.documentElement.dataset.theme || "(not set)");
+  const titleEl = document.querySelector(".newchat-title");
+  if (titleEl) console.log("Title text:", titleEl.textContent);
+</script>
+</body>
+</html>
