@@ -69,12 +69,17 @@ function themeWeights() {
 /** @param {DustField} f @param {boolean} initial */
 function seedParticle(f, initial) {
   const g = Math.random();
+  // Spawn in a ring around the center; particles are drawn into orbit by the flow field
+  const cx = f.w / 2;
+  const cy = f.h / 2.2;
+  const spawnRadius = initial ? rand(150, 280) : rand(180, 320);
+  const spawnAngle = rand(0, Math.PI * 2);
   /** @type {Particle} */
   const p = {
-    x: rand(0, f.w),
-    y: initial ? rand(0, f.h) : rand(f.h * 0.15, f.h * 1.05),
-    vx: rand(-4, 4),
-    vy: rand(-14, -5), // gentle upward drift, like dust rising in still air
+    x: cx + Math.cos(spawnAngle) * spawnRadius,
+    y: cy + Math.sin(spawnAngle) * spawnRadius,
+    vx: rand(-2, 2),
+    vy: rand(-2, 2),
     size: rand(0.6, 2.2),
     alpha: rand(0.35, 1),
     hue: g < 0.08 ? 2 : g < 0.4 ? 1 : g < 0.85 ? 0 : 3,
@@ -101,15 +106,37 @@ function measure(canvas) {
 }
 
 /**
- * Curl-ish flow field: a smooth, slowly-evolving vector nudge so trails curve
- * gently and coherently instead of jittering. Cheap trig, no noise tables.
- * @param {number} x @param {number} y @param {number} t @param {number} seed
+ * Dancing wave flow field: particles swirl around the center like fairy dust,
+ * with orbital motion + gentle wave undulation. Creates a living, dancing aura
+ * around the logo/text without feeling chaotic.
+ * @param {number} x @param {number} y @param {number} t @param {number} seed @param {number} cx @param {number} cy
  */
-function flow(x, y, t, seed) {
-  const s = 0.0016;
-  const ax = Math.sin(y * s + t * 0.18 + seed) + 0.5 * Math.cos(x * s * 1.7 - t * 0.12);
-  const ay = Math.cos(x * s - t * 0.15 + seed) * 0.6;
-  return [ax, ay];
+function flow(x, y, t, seed, cx, cy) {
+  // Distance from center + angle
+  const dx = x - cx;
+  const dy = y - cy;
+  const r = Math.sqrt(dx * dx + dy * dy);
+  const angle = Math.atan2(dy, dx);
+  
+  // Orbital swirl: tangent-to-radius + inward/outward wave
+  const orbitSpeed = 0.8;
+  const orbitForce = Math.cos(r * 0.0035 - t * orbitSpeed + seed);
+  
+  // Radial: pulsing in/out gently so particles orbit closer then drift out
+  const radialWave = Math.sin(t * 0.22 + seed) * 1.2;
+  
+  // Tangential velocity (orbital swirl)
+  const tx = -Math.sin(angle) * (2.5 + orbitForce * 1.2);
+  const ty = Math.cos(angle) * (2.5 + orbitForce * 1.2);
+  
+  // Radial component (in/out dance)
+  const rx = Math.cos(angle) * radialWave;
+  const ry = Math.sin(angle) * radialWave;
+  
+  // Gentle slow-wave undulation perpendicular to orbit
+  const wave = Math.sin(angle * 3 + t * 0.15) * 0.8;
+  
+  return [tx + rx + wave * Math.sin(angle), ty + ry + wave * Math.cos(angle)];
 }
 
 /** @param {DustField} f @param {number} dt @param {ReturnType<typeof themeWeights>} w */
@@ -126,17 +153,34 @@ function step(f, dt, w) {
     f.spawnAcc -= 1;
   }
 
+  // Center of the canvas: particles orbit/dance around here
+  const cx = f.w / 2;
+  const cy = f.h / 2.2; // slightly above center (logo position)
+
   for (let i = f.parts.length - 1; i >= 0; i--) {
     const p = f.parts[i];
     p.life += dt;
-    const [ax, ay] = flow(p.x, p.y, lastT / 1000, p.seed);
-    p.vx += ax * dt * 6;
-    p.vy += ay * dt * 6;
+    const [ax, ay] = flow(p.x, p.y, lastT / 1000, p.seed, cx, cy);
+    p.vx += ax * dt * 5.5;
+    p.vy += ay * dt * 5.5;
     // Mild damping keeps speeds dust-slow and bounded.
     p.vx *= 0.985;
-    p.vy = p.vy * 0.985 - 1.6 * dt; // steady faint buoyancy
+    p.vy *= 0.987; // no forced buoyancy; orbit sustains motion
     p.x += p.vx * dt * f.dpr;
     p.y += p.vy * dt * f.dpr;
+    
+    // Soft bounce-away from logo circle: ~100px radius at canvas center
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const distToCenter = Math.sqrt(dx * dx + dy * dy);
+    const logoRadius = 100 * f.dpr;
+    if (distToCenter < logoRadius) {
+      const bounceForce = (logoRadius - distToCenter) * 0.04;
+      const nx = dx / (distToCenter + 1);
+      const ny = dy / (distToCenter + 1);
+      p.vx += nx * bounceForce * dt;
+      p.vy += ny * bounceForce * dt;
+    }
 
     // Record trail head (in device px).
     p.trail.push(p.x, p.y);
@@ -196,8 +240,11 @@ function step(f, dt, w) {
       ctx.stroke();
     }
 
-    // Recycle when spent or drifted off the top/sides.
-    if (p.life >= p.maxLife || p.y < -f.h * 0.1 || p.x < -60 || p.x > f.w + 60) {
+    // Recycle when spent or drifted far from the dance center.
+    const dcx = p.x - cx;
+    const dcy = p.y - cy;
+    const distFromDance = Math.sqrt(dcx * dcx + dcy * dcy);
+    if (p.life >= p.maxLife || distFromDance > f.h * 0.7) {
       f.parts[i] = seedParticle(f, false);
     }
   }
