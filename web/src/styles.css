@@ -4,8 +4,18 @@
    attribute, so they recolour from these same blocks — no second copy of
    any colour exists anywhere. */
 
+/* Inter — bundled variable roman; powers the Apple theme's UI type.
+   Code/refs stay mono; only [data-theme="apple"] flips --font to Inter. */
+@font-face {
+  font-family: "Inter var";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/vendor/fonts/Inter-roman.var.woff2") format("woff2");
+}
+
 /* ============================================================
-   tokens: base + 11 theme palettes (10 modern + Matrix CRT)
+   tokens: base + 12 theme palettes (10 modern + Matrix CRT + Apple light)
    ============================================================ */
 :root {
   color-scheme: dark;
@@ -153,6 +163,132 @@
   --good: #7d9367; --warn: #d98e32; --danger: #a41e22; --glow: rgba(201, 154, 75, 0.22);
 }
 
+/* Apple — Dieter Rams functionalism in Apple's calm: restrained surfaces,
+   graphite/paper text, a single system-blue accent, Inter type, softly
+   rounded corners, and delineation by TIGHT LAYERED SHADOW, never lines or
+   grey boxes. "Weniger, aber besser." Two variants (light + dark) share ONE
+   rule set below; only these token blocks differ. */
+[data-theme="apple"] {
+  color-scheme: light;
+  --bg: #f5f5f7; --bg2: #ffffff; --bg3: #f0f0f2; --fg: #1d1d1f; --muted: #6e6e73;
+  --border: #e3e3e6; --accent: #0071e3; --accent2: #86868b;
+  /* darker green so running-state + status lights read on white */
+  --good: #248a3d; --warn: #b25e00; --danger: #d70015; --glow: rgba(0, 113, 227, 0.14);
+  --ink: #ffffff;
+  --font: "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 18px; --r-pill: 980px;
+  /* surfaces + scrim (referenced by the shared Apple rule set) */
+  --surf-card: #ffffff; --surf-inset: #ffffff; --surf-code: #f5f5f7; --surf-code-head: #ececee;
+  --scrim: rgba(0,0,0,0.18); --edge: rgba(0,0,0,0.04);
+  /* modern Apple: soft, diffuse, barely-there elevation + a hairline stroke
+     that does the delineation shadows can't at low opacity. Flat, not aqua. */
+  --elev-1: 0 1px 3px rgba(0,0,0,0.04), 0 0 0 0.5px rgba(0,0,0,0.04);
+  --elev-2: 0 6px 18px rgba(0,0,0,0.07), 0 0 0 0.5px rgba(0,0,0,0.04);
+  --elev-3: 0 16px 48px rgba(0,0,0,0.13), 0 0 0 0.5px rgba(0,0,0,0.04);
+  --inset-1: inset 0 0 0 1px rgba(0,0,0,0.07);
+}
+
+/* Apple Dark — the same language after dark: near-black graphite surfaces,
+   brighter system blue, a 1px inner light edge doing the delineation shadows
+   can't on black. */
+[data-theme="apple-dark"] {
+  color-scheme: dark;
+  --bg: #000000; --bg2: #1c1c1e; --bg3: #2c2c2e; --fg: #f5f5f7; --muted: #98989d;
+  --border: #38383a; --accent: #0a84ff; --accent2: #98989d;
+  --good: #30d158; --warn: #ff9f0a; --danger: #ff453a; --glow: rgba(10, 132, 255, 0.24);
+  --ink: #1c1c1e;
+  --font: "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 18px; --r-pill: 980px;
+  --surf-card: #1c1c1e; --surf-inset: #000000; --surf-code: #0a0a0b; --surf-code-head: #202022;
+  --scrim: rgba(0,0,0,0.6); --edge: rgba(255,255,255,0.05);
+  --elev-1: 0 1px 2px rgba(0,0,0,0.4), inset 0 0 0 0.5px rgba(255,255,255,0.06);
+  --elev-2: 0 4px 16px rgba(0,0,0,0.5), inset 0 0 0 0.5px rgba(255,255,255,0.07);
+  --elev-3: 0 20px 56px rgba(0,0,0,0.62), inset 0 0 0 0.5px rgba(255,255,255,0.07);
+  --inset-1: inset 0 0 0 1px rgba(255,255,255,0.07);
+}
+
+/* ---- Apple elevation system (shared by both variants) ------------------
+   The base chrome is a dark terminal: it darkens surfaces with black overlays
+   and delineates with 1px lines — grey boxes + amateur hairlines in this
+   language. Here every container is a clean surface separated by tight
+   layered shadows, softly rounded, borders reduced to a whisper. All colours
+   come from the two token blocks above via vars, so there is one rule set. */
+[data-theme="apple"] body,
+[data-theme="apple-dark"] body {
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(120% 70% at 50% -12%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 55%),
+    var(--bg);
+}
+[data-theme="apple"] ::selection,
+[data-theme="apple-dark"] ::selection { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+
+/* cards / panels / roster / tasks — a surface lifted by shadow, no visible line */
+[data-theme="apple"] .panel, [data-theme="apple"] .agent-row, [data-theme="apple"] .task,
+[data-theme="apple-dark"] .panel, [data-theme="apple-dark"] .agent-row, [data-theme="apple-dark"] .task {
+  background: var(--surf-card);
+  border-color: transparent;
+  box-shadow: var(--elev-1);
+}
+[data-theme="apple"] .agent-row:hover, [data-theme="apple-dark"] .agent-row:hover { box-shadow: var(--elev-2); }
+/* Apple keeps identity legible, not shouty — names are medium, not heavy bold */
+[data-theme="apple"] .agent-main strong, [data-theme="apple-dark"] .agent-main strong { font-weight: var(--fw-medium); }
+[data-theme="apple"] .agent-row.on-call, [data-theme="apple"] .agent-row.running,
+[data-theme="apple-dark"] .agent-row.on-call, [data-theme="apple-dark"] .agent-row.running { box-shadow: var(--elev-2), 0 0 0 1.5px var(--good); }
+
+/* code — a calm inset surface, softly rounded; considered, not a grey box */
+[data-theme="apple"] .code-block, [data-theme="apple-dark"] .code-block { background: var(--surf-code); border-color: transparent; border-radius: var(--r-md); box-shadow: var(--inset-1); }
+[data-theme="apple"] .code-block .code-block-head, [data-theme="apple-dark"] .code-block .code-block-head { background: var(--surf-code-head); }
+[data-theme="apple"] pre, [data-theme="apple-dark"] pre { background: var(--surf-code); box-shadow: var(--inset-1); border-radius: var(--r-md); }
+/* thinking / tool-output boxes — a light considered surface, never a grey box */
+[data-theme="apple"] .tool-payload pre, [data-theme="apple"] .thinking > .markdown-message,
+[data-theme="apple-dark"] .tool-payload pre, [data-theme="apple-dark"] .thinking > .markdown-message {
+  background: var(--surf-code); border-color: transparent; box-shadow: var(--inset-1); border-radius: var(--r-md);
+}
+[data-theme="apple"] .code-copy, [data-theme="apple-dark"] .code-copy { background: var(--surf-card); border-color: transparent; box-shadow: var(--elev-1); }
+
+/* structural dividers — trade the 1px line for a soft edge-shadow */
+[data-theme="apple"] .tabbar, [data-theme="apple-dark"] .tabbar { background: var(--bg2); border-bottom: none; box-shadow: 0 1px 2px var(--edge); z-index: 3; }
+[data-theme="apple"] .statusbar, [data-theme="apple-dark"] .statusbar { background: var(--bg2); border-top: none; box-shadow: 0 -1px 2px var(--edge); }
+
+/* composer + inputs — style the SHELL (the box); the inner textarea stays
+   transparent so there is exactly one box, correctly sized, cursor aligned. */
+[data-theme="apple"] .input-shell, [data-theme="apple"] .prompt-input,
+[data-theme="apple-dark"] .input-shell, [data-theme="apple-dark"] .prompt-input {
+  background: var(--surf-inset);
+  border-color: transparent;
+  box-shadow: var(--inset-1);
+  border-radius: var(--r-md);
+}
+/* modern-Apple pill buttons — fully rounded, flat, solid-blue primary */
+[data-theme="apple"] .prompt-btn, [data-theme="apple-dark"] .prompt-btn { background: var(--surf-card); border-color: transparent; box-shadow: var(--inset-1); border-radius: var(--r-pill); font-weight: var(--fw-medium); }
+[data-theme="apple"] .prompt-btn:hover, [data-theme="apple-dark"] .prompt-btn:hover { box-shadow: var(--elev-1); }
+[data-theme="apple"] .prompt-btn.primary, [data-theme="apple-dark"] .prompt-btn.primary { background: var(--accent); color: #fff; box-shadow: none; border-radius: var(--r-pill); }
+[data-theme="apple"] .prompt-btn.primary:hover, [data-theme="apple-dark"] .prompt-btn.primary:hover { filter: brightness(1.06); box-shadow: none; }
+
+/* modern-Apple type: tighter tracking + semibold (not heavy) on headings */
+[data-theme="apple"] h1, [data-theme="apple"] h2, [data-theme="apple"] h3, [data-theme="apple"] .panel-head h2,
+[data-theme="apple-dark"] h1, [data-theme="apple-dark"] h2, [data-theme="apple-dark"] h3, [data-theme="apple-dark"] .panel-head h2 {
+  letter-spacing: -0.014em; font-weight: var(--fw-semibold);
+}
+
+/* modals — soft scrim + deep-but-tight lift */
+[data-theme="apple"] .modal-backdrop, [data-theme="apple-dark"] .modal-backdrop { background: var(--scrim); backdrop-filter: blur(6px); }
+[data-theme="apple"] .modal, [data-theme="apple"] .prompt-modal, [data-theme="apple"] .plugin-corner-panel,
+[data-theme="apple-dark"] .modal, [data-theme="apple-dark"] .prompt-modal, [data-theme="apple-dark"] .plugin-corner-panel {
+  background: var(--surf-card);
+  border-color: transparent;
+  box-shadow: var(--elev-3);
+}
+
+[data-theme="apple"] button:focus-visible, [data-theme="apple"] input:focus-visible,
+[data-theme="apple"] textarea:focus-visible, [data-theme="apple"] select:focus-visible,
+[data-theme="apple-dark"] button:focus-visible, [data-theme="apple-dark"] input:focus-visible,
+[data-theme="apple-dark"] textarea:focus-visible, [data-theme="apple-dark"] select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
 /* The Matrix theme alone keeps the CRT identity: scanlines, phosphor glow,
    pixel font, no smoothing. Every other theme is a clean flat terminal. */
 html.retro { --font: "Perfect DOS VGA 437", "Px437 IBM VGA8", "Fixedsys", "Terminal", Menlo, "Courier New", monospace; }
@@ -235,6 +371,43 @@ textarea:focus, input:focus, select:focus {
 small, time { color: var(--muted); overflow-wrap: anywhere; }
 .muted { opacity: 0.55; }
 .empty { color: var(--muted); padding: var(--sp-2) 0; }
+/* New-chat empty state. Non-Apple themes keep the quiet fallback line; the art
+   + keynote copy are inert markup hidden until an Apple theme opts them in. */
+.empty-newchat .newchat-art, .empty-newchat .newchat-copy { display: none; }
+[data-theme="apple"] .empty-newchat, [data-theme="apple-dark"] .empty-newchat {
+  position: relative; display: grid; place-items: center;
+  min-height: min(70vh, 620px); width: 100%; color: var(--fg); padding: 0;
+}
+[data-theme="apple"] .empty-newchat .newchat-fallback,
+[data-theme="apple-dark"] .empty-newchat .newchat-fallback { display: none; }
+[data-theme="apple"] .empty-newchat .newchat-art,
+[data-theme="apple-dark"] .empty-newchat .newchat-art {
+  display: flex; position: absolute; inset: 0; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+[data-theme="apple"] .newchat-constel, [data-theme="apple-dark"] .newchat-constel {
+  width: min(860px, 82%); height: auto; color: var(--fg);
+  -webkit-mask-image: radial-gradient(ellipse 42% 46% at 50% 50%, transparent 0%, transparent 34%, #000 72%);
+          mask-image: radial-gradient(ellipse 42% 46% at 50% 50%, transparent 0%, transparent 34%, #000 72%);
+}
+[data-theme="apple"] .constel-lines, [data-theme="apple-dark"] .constel-lines { opacity: 0.16; }
+[data-theme="apple"] .constel-planets, [data-theme="apple-dark"] .constel-planets { opacity: 0.30; }
+[data-theme="apple"] .constel-stars, [data-theme="apple-dark"] .constel-stars { opacity: 0.42; }
+[data-theme="apple-dark"] .constel-lines { opacity: 0.22; }
+[data-theme="apple-dark"] .constel-planets { opacity: 0.40; }
+[data-theme="apple-dark"] .constel-stars { opacity: 0.60; }
+[data-theme="apple"] .empty-newchat .newchat-copy,
+[data-theme="apple-dark"] .empty-newchat .newchat-copy {
+  display: block; position: relative; z-index: 1; text-align: center; padding: 0 var(--sp-4);
+}
+[data-theme="apple"] .newchat-title, [data-theme="apple-dark"] .newchat-title {
+  font-size: clamp(30px, 3.6vw, 48px); font-weight: var(--fw-semibold);
+  letter-spacing: -0.03em; line-height: 1.04; color: var(--fg);
+}
+[data-theme="apple"] .newchat-sub, [data-theme="apple-dark"] .newchat-sub {
+  margin-top: 14px; font-size: clamp(15px, 1.5vw, 21px); font-weight: var(--fw-normal);
+  letter-spacing: -0.01em; color: var(--fg); opacity: 0.42;
+}
 .spacer { height: 24px; }
 
 .link-token { color: inherit; text-decoration: none; }
@@ -793,6 +966,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .message:hover .msg-action { opacity: 1; }
 .msg-action:hover { color: var(--fg); }
 .msg-action.bookmark.active { opacity: 1; color: var(--accent); text-shadow: 0 0 8px var(--glow); }
+.msg-action.delete:hover { color: var(--danger); }
 /* Read-aloud stays visible while it is the active message (loading, speaking,
    paused, or ended-and-replayable), not just on hover. */
 .msg-action.ra-loading,
@@ -3105,8 +3279,10 @@ body.love:not(.berserk) .main {
   50% { box-shadow: inset 0 0 0 1px #ff5fa2, 0 0 15px rgba(255, 95, 162, 0.7); }
 }
 @media (prefers-reduced-motion: reduce) { .nav-item.room-item.love:not(.berserk) { animation: none; box-shadow: inset 0 0 0 1px #ff5fa2, 0 0 10px rgba(255, 95, 162, 0.5); } }
-.voice-console-header { color: var(--muted); font-size: var(--text-xs); letter-spacing: 0.4px; text-transform: lowercase; padding-bottom: calc(var(--sp-1) * 0.5); border-bottom: 0; margin-bottom: calc(var(--sp-1) * 0.75); }
+.voice-console-header { display: flex; align-items: baseline; gap: calc(var(--sp-1) * 0.75); color: var(--muted); font-size: var(--text-xs); letter-spacing: 0.4px; text-transform: lowercase; padding-bottom: calc(var(--sp-1) * 0.5); border-bottom: 0; margin-bottom: calc(var(--sp-1) * 0.75); }
 .voice-console-header strong { color: var(--accent); font-weight: var(--fw-semibold); }
+.voice-console-popout { margin-left: auto; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: var(--r-md); background: transparent; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease; }
+.voice-console-popout:hover { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .voice-console-draft { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; padding: calc(var(--sp-1) * 1.75) var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--ink) 82%, transparent); color: var(--muted); }
 .voice-console-draft.has-draft { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--fg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent); }
 .voice-console-draft-text { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }

@@ -23,6 +23,8 @@ export const THEMES = [
   { id: "kanagawa", name: "Kanagawa" },
   { id: "rose-pine", name: "Rosé Pine" },
   { id: "dracula", name: "Dracula" },
+  { id: "apple", name: "Apple" },
+  { id: "apple-dark", name: "Apple Dark" },
   { id: "matte-black", name: "Matte Black" },
   { id: "matrix", name: "Matrix", retro: true },
   { id: "bloodborne", name: "Bloodborne" },
