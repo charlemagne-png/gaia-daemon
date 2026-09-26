@@ -52,26 +52,34 @@ export function mountAgentRows(el, config) {
   let autoScrollRAF = null;
   /** @type {'left'|'right'|null} */
   let autoScrollDirection = null;
+  /** @type {'GENERAL'|'PERSONAL'} */
+  let selectedTab = 'GENERAL'; // persisted across renders
 
   /**
-   * Group agents by workspace, excluding certain groups
+   * Get agents for GENERAL and PERSONAL tabs
    * @param {AgentTile[]} agents
-   * @returns {Map<string, AgentTile[]>}
+   * @returns {Map<'GENERAL'|'PERSONAL', AgentTile[]>}
    */
-  function groupAgents(agents) {
-    const agentsByWorkspace = new Map();
+  function getTabAgents(agents) {
+    const tabs = new Map();
+    tabs.set('GENERAL', []);
+    tabs.set('PERSONAL', []);
+    
     for (const agent of agents) {
       const ws = agent.workspace || 'GENERAL';
-      // Check if group should be excluded (case-insensitive)
+      // Excluded workspaces (those normally hidden) → skip
       if (EXCLUDED_GROUPS.some(excluded => excluded.toLowerCase() === ws.toLowerCase())) {
         continue;
       }
-      if (!agentsByWorkspace.has(ws)) {
-        agentsByWorkspace.set(ws, []);
+      // PERSONAL tab gets agents with explicit workspace (non-GENERAL)
+      // GENERAL tab gets all others
+      if (ws === 'GENERAL') {
+        tabs.get('GENERAL').push(agent);
+      } else {
+        tabs.get('PERSONAL').push(agent);
       }
-      agentsByWorkspace.get(ws).push(agent);
     }
-    return agentsByWorkspace;
+    return tabs;
   }
 
   /**
@@ -316,32 +324,53 @@ export function mountAgentRows(el, config) {
   }
 
   /**
-   * Render agent rows
+   * Render agent rows with tabs
    */
   function render() {
     el.innerHTML = '';
     el.className = 'agent-rows-container';
 
-    const agentsByWorkspace = groupAgents(currentAgents);
-    const workspaces = Array.from(agentsByWorkspace.keys()).sort();
+    const tabAgents = getTabAgents(currentAgents);
+    /** @type {Array<'GENERAL'|'PERSONAL'>} */
+    const tabs = ['GENERAL', 'PERSONAL'];
 
-    for (const workspace of workspaces) {
-      const wsAgents = agentsByWorkspace.get(workspace) || [];
-      if (wsAgents.length === 0) continue;
+    // Render tab pills
+    const tabBar = document.createElement('div');
+    tabBar.className = 'agent-rows-tab-bar';
 
-      // Workspace group label
-      const groupLabel = document.createElement('div');
-      groupLabel.className = 'agent-rows-group-label';
-      groupLabel.textContent = workspace;
-      el.appendChild(groupLabel);
+    for (const tab of tabs) {
+      /** @type {'GENERAL'|'PERSONAL'} */
+      const typedTab = tab;
+      const tabAgentCount = (tabAgents.get(typedTab) || []).length;
+      if (tabAgentCount === 0) continue; // Hide tabs with no agents
 
-      // Horizontal scrollable strip
+      const tabPill = document.createElement('button');
+      tabPill.className = 'agent-rows-tab-pill';
+      if (typedTab === selectedTab) {
+        tabPill.classList.add('agent-rows-tab-active');
+      }
+      tabPill.textContent = typedTab.charAt(0).toUpperCase() + typedTab.slice(1).toLowerCase();
+      tabPill.dataset.tab = typedTab;
+
+      tabPill.addEventListener('click', () => {
+        selectedTab = typedTab;
+        render(); // re-render to switch tabs
+      });
+
+      tabBar.appendChild(tabPill);
+    }
+
+    el.appendChild(tabBar);
+
+    // Render active tab's strip
+    const stripAgents = tabAgents.get(selectedTab) || [];
+    if (stripAgents.length > 0) {
       const strip = document.createElement('div');
       strip.className = 'agent-rows-strip';
-      strip.dataset.workspace = workspace;
+      strip.dataset.tab = selectedTab;
 
       // Create tiles
-      for (const agent of wsAgents) {
+      for (const agent of stripAgents) {
         const tile = createAgentTile(agent);
         strip.appendChild(tile);
       }
@@ -356,14 +385,15 @@ export function mountAgentRows(el, config) {
       });
 
       // Restore scroll position if saved
-      const savedScroll = scrollStates.get(workspace);
+      const savedScroll = scrollStates.get(selectedTab);
       if (savedScroll !== undefined) {
         strip.scrollLeft = savedScroll;
       }
 
       // Save scroll position on scroll
       strip.addEventListener('scroll', () => {
-        scrollStates.set(workspace, strip.scrollLeft);
+        const tabKey = selectedTab;
+        scrollStates.set(tabKey, strip.scrollLeft);
       });
 
       el.appendChild(strip);
