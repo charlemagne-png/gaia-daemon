@@ -37,6 +37,11 @@ const SILENCE_MS = 1800;
 // Hermes speaks his reply through Apple TTS as it streams (barge-in stops him
 // if you talk over him). Chunked at sentence boundaries by the readout state.
 const VOICE_REPLY_READOUT = true;
+// Dead-air self-heal: if N consecutive VAD segments return empty/failed
+// transcription while the meter shows only transient spikes, re-acquire the
+// stream once (max 1 per 60s) to recover from zombie audio.
+const EMPTY_TRANSCRIPTION_TRIGGER = 3;
+const STREAM_REACQUIRE_COOLDOWN_MS = 60_000;
 // ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
 // (proven live 08-26: orb "listening", zero transcribe calls). Speech =
 // level clearly above a tracked noise floor, with a small absolute minimum.
@@ -85,6 +90,8 @@ const TRANSCRIBE_TIMEOUT_MS = 180_000;
  * @property {number} calibrationFrames
  * @property {number} blockMin
  * @property {number} blockFrames
+ * @property {number} consecutiveEmptyTranscriptions
+ * @property {number} lastStreamReacquireAtMs
  */
 
 /** @type {VoiceControlSession|null} */
@@ -194,6 +201,8 @@ export async function startVoiceControl() {
     calibrationFrames: 0,
     blockMin: Infinity,
     blockFrames: 0,
+    consecutiveEmptyTranscriptions: 0,
+    lastStreamReacquireAtMs: 0,
   });
   session = current;
   state.voiceControl.enabled = true;
@@ -485,6 +494,8 @@ async function transcribeAndRoute(blob, continuation) {
   try {
     const text = await postTranscribe(blob);
     if (!text || !state.voiceControl.enabled) return;
+    // Text found: reset empty transcription counter (stream is healthy).
+    if (session) session.consecutiveEmptyTranscriptions = 0;
     state.voiceControl.pulse = Date.now();
     markDirty("panel");
     await routeTranscribedVoiceText(text, continuation);
@@ -510,8 +521,10 @@ async function postTranscribe(blob) {
       const message = String(data.error ?? `GaiaVoice transcription failed: ${response.status}`);
       if (/no speech detected/i.test(message)) {
         // A silence-only segment is normal gate noise, not a failure worth a
-        // spoken announcement — console row only.
+        // spoken announcement — console row only. Count as empty for dead-air
+        // self-heal trigger.
         vcLog("heard", "(silence — nothing transcribed)");
+        maybeReacquireStreamOnDeadAir();
         return "";
       }
       vcLog("error", message, true);
@@ -530,6 +543,49 @@ async function postTranscribe(blob) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** Dead-air self-heal: if N consecutive VAD segments all return empty
+ * transcription while the meter shows only transient spikes (below 1/3 of
+ * speech threshold), drop + re-acquire the stream once, max 1 per 60s. */
+function maybeReacquireStreamOnDeadAir() {
+  const current = session;
+  if (!current) return;
+  current.consecutiveEmptyTranscriptions += 1;
+  if (current.consecutiveEmptyTranscriptions < EMPTY_TRANSCRIPTION_TRIGGER) return;
+  const now = Date.now();
+  if (now - current.lastStreamReacquireAtMs < STREAM_REACQUIRE_COOLDOWN_MS) return;
+  // Meter shows noise but no formants (zombie stream symptom): re-acquire.
+  const threshold = (current.noiseFloor * SPEAK_RATIO) / 3;
+  if (state.voiceControl.level > threshold) return; // Live audio present; not zombie stream.
+  current.lastStreamReacquireAtMs = now;
+  current.consecutiveEmptyTranscriptions = 0;
+  reacquireStream(current);
+}
+
+/** Stop old stream, acquire a fresh one, restart analyser. @param {VoiceControlSession} current */
+function reacquireStream(current) {
+  vcLog("action", "mic stream re-acquired", false);
+  for (const track of current.stream.getTracks()) track.stop();
+  void current.audioCtx?.close().catch(() => {});
+  navigator.mediaDevices
+    ?.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+    })
+    .then((newStream) => {
+      if (session !== current || current.stopping) {
+        for (const track of newStream.getTracks()) track.stop();
+        return;
+      }
+      current.stream = newStream;
+      current.audioCtx = null;
+      current.analyser = null;
+      current.analyserData = null;
+      startAnalyser(current);
+    })
+    .catch(() => {
+      if (state.voiceControl.enabled) setError(new Error("failed to re-acquire microphone"));
+    });
 }
 
 let lastFailureSpokenAt = 0;

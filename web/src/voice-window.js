@@ -24,6 +24,9 @@ const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById("voice-
 const telemetry = { level: 0, pulse: 0, phase: "idle", active: false };
 let telemetryAt = 0;
 let smoothedLevel = 0;
+let lastSoftReloadAtMs = 0;
+const SOFT_RELOAD_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+const BROADCAST_SILENCE_THRESHOLD_MS = 120 * 1000; // 120 seconds
 
 if (typeof BroadcastChannel !== "undefined") {
   try {
@@ -41,6 +44,19 @@ if (typeof BroadcastChannel !== "undefined") {
     // No cross-window telemetry — the orb still breathes on its own.
   }
 }
+
+// Broadcast silence detector: if BroadcastChannel goes silent >120s while
+// main window claims active session, soft-reload to recover from stale mirror.
+window.setInterval(() => {
+  const now = Date.now();
+  const silence = now - telemetryAt;
+  if (telemetry.active && silence > BROADCAST_SILENCE_THRESHOLD_MS) {
+    if (now - lastSoftReloadAtMs >= SOFT_RELOAD_COOLDOWN_MS) {
+      lastSoftReloadAtMs = now;
+      location.reload();
+    }
+  }
+}, 30_000);
 
 startOrb(canvas, () => {
   const stale = Date.now() - telemetryAt > 500;
@@ -222,19 +238,45 @@ async function seedTranscript() {
 function followRoom() {
   if (!workspaceId || !roomId) return;
   const query = new URLSearchParams({ workspaceId, roomId });
-  const source = openEventChannel(`/api/events?${query}`);
-  source.addEventListener("text-delta", (event) => {
-    const payload = JSON.parse(event.data);
-    const eventId = String(payload.eventId ?? "");
-    const author = String(payload.agentId ?? "");
-    if (eventId && author && author !== "user") appendDelta(eventId, author, String(payload.delta ?? ""));
-  });
-  source.addEventListener("room-event", (event) => {
-    const payload = JSON.parse(event.data);
-    const ev = payload.event;
-    if (ev?.id && typeof ev.text === "string") upsertRow(ev.id, String(ev.author ?? ""), ev.text);
-  });
-  window.addEventListener("pagehide", () => source.close());
+  let attempt = 0;
+  const maxRetries = 10;
+  const baseDelayMs = 1000;
+  /** @type {import("./eventchannel.js").EventChannel|null} */
+  let source = null;
+
+  const connect = () => {
+    if (attempt >= maxRetries) {
+      console.error("voice-window: failed to reconnect after", maxRetries, "attempts");
+      return;
+    }
+    source = openEventChannel(`/api/events?${query}`);
+    attempt += 1;
+
+    source.addEventListener("text-delta", (event) => {
+      attempt = 0; // Reset counter on successful message
+      const payload = JSON.parse(event.data);
+      const eventId = String(payload.eventId ?? "");
+      const author = String(payload.agentId ?? "");
+      if (eventId && author && author !== "user") appendDelta(eventId, author, String(payload.delta ?? ""));
+    });
+    source.addEventListener("room-event", (event) => {
+      attempt = 0; // Reset counter on successful message
+      const payload = JSON.parse(event.data);
+      const ev = payload.event;
+      if (ev?.id && typeof ev.text === "string") upsertRow(ev.id, String(ev.author ?? ""), ev.text);
+    });
+    source.onerror = () => {
+      // EventSource error: schedule reconnect with backoff
+      const delayMs = Math.min(baseDelayMs * Math.pow(2, attempt - 1), 30_000);
+      window.setTimeout(connect, delayMs);
+    };
+    source.onopen = () => {
+      attempt = 0; // Reset on successful connection
+    };
+  };
+
+  connect();
+  window.addEventListener("pagehide", () => source?.close());
 }
 
 paintStatus();
