@@ -1,0 +1,426 @@
+[
+  {
+    "id": "plato-1",
+    "text": "The beginning is the most important part of the work.",
+    "author": "Plato",
+    "field": "philosophy",
+    "source": "Republic",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "aristotle-1",
+    "text": "We are what we repeatedly do. Excellence is not an act but a habit.",
+    "author": "Aristotle",
+    "field": "philosophy",
+    "source": "Virtue ethics",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "descartes-1",
+    "text": "I think, therefore I am.",
+    "author": "Descartes",
+    "field": "philosophy",
+    "source": "Discourse on Method",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "kant-1",
+    "text": "Sapere aude. Dare to know.",
+    "author": "Kant",
+    "field": "philosophy",
+    "source": "What is Enlightenment?",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "nietzsche-1",
+    "text": "He who has a why to live can bear almost any how.",
+    "author": "Nietzsche",
+    "field": "philosophy",
+    "source": "Twilight of the Idols",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "wittgenstein-1",
+    "text": "Whereof one cannot speak, thereof one must be silent.",
+    "author": "Wittgenstein",
+    "field": "philosophy",
+    "source": "Tractatus",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "popper-1",
+    "text": "The growth of knowledge is the falling out of illusions.",
+    "author": "Popper",
+    "field": "philosophy",
+    "source": "Conjectures and Refutations",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "russell-1",
+    "text": "Philosophy is to be studied, not for the sake of any definite answers.",
+    "author": "Russell",
+    "field": "philosophy",
+    "source": "Problems of Philosophy",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "heraclitus-1",
+    "text": "Everything flows, nothing stands still.",
+    "author": "Heraclitus",
+    "field": "philosophy",
+    "source": "Fragments",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "epicurus-1",
+    "text": "Be grateful for happiness or it can take its leave.",
+    "author": "Epicurus",
+    "field": "philosophy",
+    "source": "Letters",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "newton-1",
+    "text": "If I have seen further, it is by standing on the shoulders of giants.",
+    "author": "Newton",
+    "field": "physics",
+    "source": "Letter to Hooke",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "einstein-1",
+    "text": "Imagination is more important than knowledge.",
+    "author": "Einstein",
+    "field": "physics",
+    "source": "Essays",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "einstein-2",
+    "text": "Life is like riding a bicycle. To keep your balance, you must keep moving.",
+    "author": "Einstein",
+    "field": "physics",
+    "source": "Letters",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "feynman-1",
+    "text": "What I cannot create, I do not understand.",
+    "author": "Feynman",
+    "field": "physics",
+    "source": "Blackboard at Caltech",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "planck-1",
+    "text": "Science cannot solve the ultimate mystery of nature.",
+    "author": "Planck",
+    "field": "physics",
+    "source": "Scientific Autobiography",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "bohr-1",
+    "text": "Prediction is very difficult, especially about the future.",
+    "author": "Bohr",
+    "field": "physics",
+    "source": "Lectures",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "schrödinger-1",
+    "text": "The scientist only imposes his own interpretation on the findings.",
+    "author": "Schrödinger",
+    "field": "physics",
+    "source": "What is Life?",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "heisenberg-1",
+    "text": "The first gulp from the glass of natural sciences will turn you into an atheist.",
+    "author": "Heisenberg",
+    "field": "physics",
+    "source": "Physics and Philosophy",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "dirac-1",
+    "text": "A theory with mathematical beauty is more likely to be correct.",
+    "author": "Dirac",
+    "field": "physics",
+    "source": "Lectures",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "hawking-1",
+    "text": "Remember to look up at the stars, not down at your feet.",
+    "author": "Hawking",
+    "field": "physics",
+    "source": "Speeches",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "euclid-1",
+    "text": "The laws of nature are but the mathematical thoughts of God.",
+    "author": "Euclid",
+    "field": "math",
+    "source": "Elements",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "gauss-1",
+    "text": "Mathematics is the queen of the sciences.",
+    "author": "Gauss",
+    "field": "math",
+    "source": "Letters",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "cantor-1",
+    "text": "The essence of mathematics is its freedom.",
+    "author": "Cantor",
+    "field": "math",
+    "source": "Foundations of Set Theory",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "hilbert-1",
+    "text": "No one shall expel us from the paradise Cantor has created.",
+    "author": "Hilbert",
+    "field": "math",
+    "source": "On the Infinite",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "hardy-1",
+    "text": "Beauty is the first test: there is no permanent place in the world for ugly mathematics.",
+    "author": "Hardy",
+    "field": "math",
+    "source": "A Mathematician's Apology",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "ramanujan-1",
+    "text": "An equation means nothing to me unless it expresses a thought of God.",
+    "author": "Ramanujan",
+    "field": "math",
+    "source": "Letters",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "gödel-1",
+    "text": "I am convinced that the Continuum Hypothesis is false.",
+    "author": "Gödel",
+    "field": "math",
+    "source": "Lectures",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "turing-1",
+    "text": "Mathematics is thought moving in the sphere of complete abstraction.",
+    "author": "Turing",
+    "field": "math",
+    "source": "ACE Lectures",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "conway-1",
+    "text": "Symmetry is a vast subject, significant in art and nature.",
+    "author": "Conway",
+    "field": "math",
+    "source": "On Numbers and Games",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "darwin-1",
+    "text": "It is not the strongest of the species that survives, but the most adaptable.",
+    "author": "Darwin",
+    "field": "science",
+    "source": "Origin of Species",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "pasteur-1",
+    "text": "Science knows no country, because knowledge belongs to humanity.",
+    "author": "Pasteur",
+    "field": "science",
+    "source": "Lectures",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "tesla-1",
+    "text": "The present is theirs; the future, for which I really worked, is mine.",
+    "author": "Tesla",
+    "field": "science",
+    "source": "Interviews",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "curie-1",
+    "text": "Nothing in life is to be feared, only understood. Now is the time to understand more.",
+    "author": "Curie",
+    "field": "science",
+    "source": "Speeches",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "pauling-1",
+    "text": "The best way to have a good idea is to have lots of ideas.",
+    "author": "Pauling",
+    "field": "science",
+    "source": "Essays",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "sagan-1",
+    "text": "Imagination will often carry us to worlds that never were, but without it we go nowhere.",
+    "author": "Sagan",
+    "field": "science",
+    "source": "Cosmos",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "dawkins-1",
+    "text": "The universe does not owe you meaning.",
+    "author": "Dawkins",
+    "field": "science",
+    "source": "Essays",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "tyson-1",
+    "text": "The most creative people in the world are the ones who can solve problems others see.",
+    "author": "Tyson",
+    "field": "science",
+    "source": "Interviews",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "hooke-1",
+    "text": "Nature does nothing in vain, when more and fewer suffice.",
+    "author": "Hooke",
+    "field": "science",
+    "source": "Micrographia",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "davinci-1",
+    "text": "Learning never exhausts the mind.",
+    "author": "da Vinci",
+    "field": "engineering",
+    "source": "Notebooks",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "davinci-2",
+    "text": "Simplicity is the ultimate sophistication.",
+    "author": "da Vinci",
+    "field": "engineering",
+    "source": "Notebooks",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "eiffel-1",
+    "text": "My tower will be the first to demonstrate the power of the metal.",
+    "author": "Eiffel",
+    "field": "engineering",
+    "source": "Memoirs",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "edison-1",
+    "text": "I have not failed. I've just found 10,000 ways that won't work.",
+    "author": "Edison",
+    "field": "engineering",
+    "source": "Interviews",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "tesla-2",
+    "text": "The present is theirs; the future, for which I really worked, is mine.",
+    "author": "Tesla",
+    "field": "engineering",
+    "source": "Interviews",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "brunel-1",
+    "text": "If I am to succeed, I must proceed methodically.",
+    "author": "Brunel",
+    "field": "engineering",
+    "source": "Letters",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "diesel-1",
+    "text": "I am convinced that the use of crude oil as fuel is not far away.",
+    "author": "Diesel",
+    "field": "engineering",
+    "source": "Lectures",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "siemens-1",
+    "text": "The scientific principle must guide technology.",
+    "author": "Siemens",
+    "field": "engineering",
+    "source": "Writings",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "kay-1",
+    "text": "The best way to predict the future is to invent it.",
+    "author": "Kay",
+    "field": "technology",
+    "source": "Talks",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "shannon-1",
+    "text": "The fundamental problem of communication is the accurate reproduction of a message.",
+    "author": "Shannon",
+    "field": "technology",
+    "source": "Information Theory",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "jobs-1",
+    "text": "Stay hungry. Stay foolish.",
+    "author": "Jobs",
+    "field": "technology",
+    "source": "Stanford Commencement",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "jobs-2",
+    "text": "The only way to do great work is to love what you do.",
+    "author": "Jobs",
+    "field": "technology",
+    "source": "Stanford Commencement",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "gates-1",
+    "text": "The advance of technology is based on making it fit in so that you don't really notice it.",
+    "author": "Gates",
+    "field": "technology",
+    "source": "Interviews",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "stallman-1",
+    "text": "Free software is software that respects users' freedom and community.",
+    "author": "Stallman",
+    "field": "technology",
+    "source": "Essays",
+    "added": "2026-09-26"
+  },
+  {
+    "id": "torvalds-1",
+    "text": "I'm an egotistical bastard, and I name all my projects after myself.",
+    "author": "Torvalds",
+    "field": "technology",
+    "source": "Interviews",
+    "added": "2026-09-26"
+  }
+]
