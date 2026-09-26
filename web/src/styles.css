@@ -409,11 +409,11 @@ small, time { color: var(--muted); overflow-wrap: anywhere; }
 }
 [data-theme="apple-dark"] .newchat-logo { filter: drop-shadow(0 10px 30px rgba(0, 0, 0, 0.55)); }
 [data-theme="apple"] .newchat-title, [data-theme="apple-dark"] .newchat-title {
-  font-size: clamp(30px, 3.6vw, 48px); font-weight: var(--fw-semibold);
+  font-size: clamp(18px, 2.16vw, 29px); font-weight: var(--fw-semibold);
   letter-spacing: -0.03em; line-height: 1.04; color: var(--fg); text-wrap: balance;
 }
 [data-theme="apple"] .newchat-sub, [data-theme="apple-dark"] .newchat-sub {
-  margin-top: 14px; font-size: clamp(15px, 1.5vw, 21px); font-weight: var(--fw-normal);
+  margin-top: 14px; font-size: clamp(9px, 0.9vw, 13px); font-weight: var(--fw-normal);
   letter-spacing: -0.01em; color: var(--fg); opacity: 0.42;
 }
 /* Premium crossfade animation for new-chat saying swap at t=2000ms (450ms duration,
