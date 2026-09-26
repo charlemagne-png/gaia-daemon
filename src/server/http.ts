@@ -1071,6 +1071,31 @@ export class GaiaWebServer {
       return;
     }
 
+    // POST /redact: surgical in-place redaction of specific transcript events
+    // (the ✕ on individual bubbles). Rewrites message text to a neutral placeholder,
+    // preserves originals in redactions.jsonl, resets sessions. Accepts eventIds
+    // array; optional replacement text (defaults to "[message removed]").
+    if (method === "POST" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/redact$/))) {
+      const service = await this.daemon.serviceFor(params[0], params[1]);
+      const body = await parseBody(request);
+      const rawIds = body && typeof body === "object" && "eventIds" in body ? body.eventIds : undefined;
+      const eventIds = Array.isArray(rawIds)
+        ? rawIds.filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
+        : [];
+      if (eventIds.length === 0) return json(response, 400, { error: "Missing eventIds array" });
+      const replacementText = typeof body === "object" && body && "text" in body && typeof body.text === "string"
+        ? body.text
+        : "[message removed]";
+      const edits = new Map(eventIds.map((id) => [id, replacementText]));
+      try {
+        const result = await service.redactMessages(edits);
+        json(response, 200, result);
+      } catch (error) {
+        json(response, 409, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     // Backwards paging through committed history ("load older" in the
     // transcript): the events immediately before ?before=<eventId>.
     if (method === "GET" && (params = match(/^\/api\/workspaces\/([^/]+)\/rooms\/([^/]+)\/events$/))) {

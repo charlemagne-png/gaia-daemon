@@ -520,6 +520,34 @@ test("search self-heals an idle-stopped embedder: failed query embed → in-call
   service.dispose();
 });
 
+test("dead embedder resolve is not cached: sidecar recovery restores semantic arm without restart", async () => {
+  const pad = " filler words to give this event enough mass to close a chunk cleanly.".repeat(10);
+  let sidecarUp = false;
+  const { service } = await makeMemoryService({
+    config: { embeddings: "auto" },
+    rooms: [{ roomId: "solo", events: [{ author: "user", text: `the marker phrase lives here.${pad}` }] }],
+    embedderDeps: {
+      fetchImpl: (async (url: unknown, init?: RequestInit) => {
+        if (String(url).includes("embeddings")) {
+          if (!sidecarUp) throw new Error("ECONNREFUSED (sidecar down)");
+          const input = JSON.parse(init!.body as string).input as string[];
+          return new Response(JSON.stringify({ data: input.map(() => ({ embedding: [0.1, 0.2, 0.3] })) }), { status: 200 });
+        }
+        throw new Error("ECONNREFUSED");
+      }) as typeof fetch,
+      ensureLocalSidecar: async () => (sidecarUp ? { baseUrl: "http://127.0.0.1:4244/v1", model: "embeddinggemma-300m" } : undefined),
+    },
+  });
+  // First search: sidecar down → dead resolve → lexical-only.
+  const first = await service.search("gaia", "marker phrase");
+  assert.ok(first.degraded.some((note) => note.includes("lexical-only")), `first search lexical-only (got ${JSON.stringify(first.degraded)})`);
+  // Sidecar recovers; second search must re-resolve (dead was not cached).
+  sidecarUp = true;
+  const second = await service.search("gaia", "marker phrase");
+  assert.ok(!second.degraded.some((note) => note.includes("lexical-only")), `second search restored semantic arm (got ${JSON.stringify(second.degraded)})`);
+  service.dispose();
+});
+
 test("an over-long query is capped to one physical batch: no 'input too large' 500, dense arm survives", async () => {
   const pad = " filler words to give this event enough mass to close a chunk cleanly.".repeat(10);
   // Stand-in for the non-causal embedder's physical batch: any single input

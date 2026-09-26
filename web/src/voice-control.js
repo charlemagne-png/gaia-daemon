@@ -6,6 +6,8 @@ import { h } from "./dom.js";
 import { openEventChannel } from "./eventchannel.js";
 import { markDirty, setError } from "./render.js";
 import { state } from "./state.js";
+import { startOrb } from "./voice-orb.js";
+import { broadcastVoiceTelemetry, openVoiceWindow, subscribeVoiceCommands } from "./voice-window-link.js";
 import { createVoiceTranscriptMerger } from "./voice-merge.js";
 import {
   appendVoiceReadoutDelta,
@@ -32,7 +34,9 @@ export {
 } from "./voice-control-readout.js";
 
 const SILENCE_MS = 1800;
-const VOICE_REPLY_READOUT = false;
+// Hermes speaks his reply through Apple TTS as it streams (barge-in stops him
+// if you talk over him). Chunked at sentence boundaries by the readout state.
+const VOICE_REPLY_READOUT = true;
 // ADAPTIVE gate: a fixed 0.025 RMS threshold never opened on quiet mics
 // (proven live 08-26: orb "listening", zero transcribe calls). Speech =
 // level clearly above a tracked noise floor, with a small absolute minimum.
@@ -54,11 +58,6 @@ const MIN_UTTERANCE_MS = 260;
 const MIN_VOICE_FRAMES = 3;
 const MIN_CHUNK_BYTES = 900;
 const TRANSCRIBE_TIMEOUT_MS = 180_000;
-const HERMES_SPLAT_URL = "/img/hermes-splat-samples.json";
-
-/** @typedef {{kind:"sphere", x:number, y:number, z:number, seed:number, size:number, audio:number, warm:boolean}} SphereOrbPoint */
-/** @typedef {{kind:"hermes", nx:number, ny:number, r:number, g:number, b:number, aspect:number, seed:number, depth:number, size:number, audio:number}} HermesOrbPoint */
-/** @typedef {SphereOrbPoint|HermesOrbPoint} VoiceOrbPoint */
 
 /**
  * @typedef {Object} Segment
@@ -330,6 +329,7 @@ function tickAnalyser(current) {
   current.analyser.getByteTimeDomainData(current.analyserData);
   const level = rmsLevel(current.analyserData);
   state.voiceControl.level = level;
+  publishVoiceTelemetry();
 
   const now = Date.now();
   const speakAt = Math.max(current.noiseFloor * SPEAK_RATIO, current.noiseFloor + SPEAK_MARGIN);
@@ -996,7 +996,37 @@ function updateVoiceControlPhase() {
   const next = state.voiceControl.enabled ? (activeTranscriptions > 0 || activeSpeechRequests > 0 ? "processing" : "listening") : "idle";
   const changed = state.voiceControl.phase !== next;
   state.voiceControl.phase = next;
+  publishVoiceTelemetry(true);
   if (changed) markDirty("composer", "panel");
+}
+
+let lastTelemetryAt = 0;
+
+/** Mirror the live orb inputs (level/pulse/phase/active) to any torn-off voice
+ * window over a BroadcastChannel. Throttled to ~20fps for the level stream;
+ * `force` pushes immediately on phase/enable transitions. @param {boolean} [force] */
+function publishVoiceTelemetry(force = false) {
+  const now = Date.now();
+  if (!force && now - lastTelemetryAt < 50) return;
+  lastTelemetryAt = now;
+  broadcastVoiceTelemetry({
+    active: state.voiceControl.enabled,
+    level: state.voiceControl.level,
+    pulse: state.voiceControl.pulse,
+    phase: state.voiceControl.phase,
+    draft: state.voiceControl.draft,
+    target: voiceSessionTarget,
+  });
+}
+
+// A torn-off voice window drives Go/Clear from its own draft bar; the mic and
+// transcript merger live only here, so those clicks route home as commands.
+if (typeof window !== "undefined") {
+  subscribeVoiceCommands((command) => {
+    if (!state.voiceControl.enabled) return;
+    if (command === "send") sendVoiceDraft();
+    else if (command === "clear") clearVoiceDraft();
+  });
 }
 
 /** @returns {string} */
@@ -1016,7 +1046,7 @@ export function VoiceControlOrb() {
     canvas,
     h("div", { class: "voice-control-orb-label" }, h("strong", { text: "GaiaVoice" }), h("span", { text: phase })),
   );
-  queueMicrotask(() => startOrb(canvas));
+  queueMicrotask(() => startOrb(canvas, () => ({ active: state.voiceControl.enabled, level: state.voiceControl.level, pulse: state.voiceControl.pulse })));
   return node;
 }
 
@@ -1040,205 +1070,23 @@ export function VoiceControlConsole() {
     ),
   );
   const node = h("div", { class: "voice-control-console" },
-    h("div", { class: "voice-console-header" }, h("strong", { text: "Hermes" }), h("span", { text: " · GaiaVoice transcript" })),
+    h("div", { class: "voice-console-header" },
+      h("strong", { text: "Hermes" }),
+      h("span", { text: " · GaiaVoice transcript" }),
+      h("button", {
+        class: "voice-console-popout",
+        type: "button",
+        title: "Open Hermes in a full-screen window",
+        "aria-label": "Open Hermes in a full-screen window",
+        onclick: () => openVoiceWindow(voiceSessionTarget),
+        text: "\u2197",
+      }),
+    ),
     controls,
     rows.length ? rows : [h("div", { class: "voice-console-row empty", text: "say something — Hermes will show what he hears" })],
   );
   queueMicrotask(() => { node.scrollTop = node.scrollHeight; });
   return node;
-}
-
-/** @param {HTMLCanvasElement} canvas */
-function startOrb(canvas) {
-  if (!canvas.isConnected) return;
-  const maybeCtx = canvas.getContext("2d");
-  if (!maybeCtx) return;
-  const ctx = maybeCtx;
-  /** @type {VoiceOrbPoint[]} */
-  let points = [];
-  const fallback = window.setTimeout(() => {
-    if (!points.length) points = orbPoints();
-  }, 1200);
-  void hermesSplatPoints().then((loaded) => {
-    window.clearTimeout(fallback);
-    points = loaded;
-  }).catch(() => {
-    window.clearTimeout(fallback);
-    points = orbPoints();
-  });
-  const startedAt = performance.now();
-
-  /** @param {number} now */
-  function draw(now) {
-    if (!canvas.isConnected || !state.voiceControl.enabled) return;
-    const rect = canvas.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const width = Math.max(1, Math.floor(rect.width * dpr));
-    const height = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const w = width / dpr;
-    const hgt = height / dpr;
-    const t = (now - startedAt) / 1000;
-    const level = state.voiceControl.level;
-    const pulseAge = state.voiceControl.pulse ? Math.max(0, (now - state.voiceControl.pulse) / 1000) : 99;
-    const pulse = Math.exp(-pulseAge * 5.2);
-    ctx.clearRect(0, 0, w, hgt);
-    const glow = ctx.createRadialGradient(w / 2, hgt / 2, 4, w / 2, hgt / 2, Math.max(w, hgt) * 0.48);
-    glow.addColorStop(0, `rgba(224,198,114,${0.12 + level * 0.16 + pulse * 0.12})`);
-    glow.addColorStop(0.46, `rgba(126,88,42,${0.06 + level * 0.10})`);
-    glow.addColorStop(1, "rgba(0,0,0,0)");
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, w, hgt);
-
-    if (!points.length) {
-      requestAnimationFrame(draw);
-      return;
-    }
-    for (const p of points) {
-      if (p.kind === "hermes") drawHermesPoint(ctx, p, w, hgt, t, level, pulse);
-      else drawSpherePoint(ctx, p, w, hgt, t, level, pulse);
-    }
-    requestAnimationFrame(draw);
-  }
-  requestAnimationFrame(draw);
-}
-
-/** @type {Promise<VoiceOrbPoint[]>|null} */
-let hermesSplatPromise = null;
-
-/** @returns {Promise<VoiceOrbPoint[]>} */
-function hermesSplatPoints() {
-  hermesSplatPromise ??= fetch(HERMES_SPLAT_URL)
-    .then((response) => {
-      if (!response.ok) throw new Error(`Hermes splat missing: ${response.status}`);
-      return response.json();
-    })
-    .then((data) => {
-      const sample = /** @type {{w?: unknown, h?: unknown, points?: unknown}} */ (data?.hermes ?? {});
-      const w = typeof sample.w === "number" && sample.w > 0 ? sample.w : 1;
-      const hgt = typeof sample.h === "number" && sample.h > 0 ? sample.h : 1;
-      const rows = Array.isArray(sample.points) ? sample.points : [];
-      return rows.map((row, index) => hermesPointFrom(row, index, w / hgt)).filter((point) => point !== null);
-    });
-  return hermesSplatPromise;
-}
-
-/** @param {unknown} row @param {number} index @param {number} aspect @returns {HermesOrbPoint|null} */
-function hermesPointFrom(row, index, aspect) {
-  if (!Array.isArray(row) || row.length < 5) return null;
-  const [nx, ny, r, g, b] = row;
-  if (![nx, ny, r, g, b].every((value) => typeof value === "number" && Number.isFinite(value))) return null;
-  const seed = seededUnit(index + 1);
-  // Pseudo-depth from luminance: bright pigment reads as near, shadow recedes.
-  const depth = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 - 0.5;
-  return {
-    kind: "hermes",
-    nx: clamp01(nx),
-    ny: clamp01(ny),
-    r: Math.max(0, Math.min(255, Math.round(r))),
-    g: Math.max(0, Math.min(255, Math.round(g))),
-    b: Math.max(0, Math.min(255, Math.round(b))),
-    aspect,
-    seed,
-    depth,
-    size: seededUnit(index + 101),
-    audio: 0.35 + seededUnit(index + 211) * 0.9,
-  };
-}
-
-/** @param {CanvasRenderingContext2D} ctx @param {HermesOrbPoint} p @param {number} w @param {number} hgt @param {number} t @param {number} level @param {number} pulse */
-function drawHermesPoint(ctx, p, w, hgt, t, level, pulse) {
-  const targetH = Math.min(hgt * 0.93, (w * 0.86) / p.aspect);
-  const targetW = targetH * p.aspect;
-  const left = (w - targetW) / 2;
-  const top = (hgt - targetH) / 2;
-  const cx = w / 2;
-  const cy = hgt / 2;
-  const tx = left + p.nx * targetW;
-  const ty = top + p.ny * targetH;
-  const breath = 1 + Math.sin(t * 1.35) * 0.012 + level * p.audio * 0.052 + pulse * p.audio * 0.034;
-  const drift = 0.55 + level * 2.2 + pulse * 1.3;
-  const depth = p.depth ?? 0;
-  // Slight 3D: bright (near) points sway with a slow virtual camera, dark points counter-sway.
-  const sway = Math.sin(t * 0.55) * depth * targetW * 0.055;
-  const lift = Math.cos(t * 0.42) * depth * targetH * 0.02;
-  const x = cx + (tx - cx) * breath + sway + Math.sin(t * 1.9 + p.seed * 12.7) * drift;
-  const y = cy + (ty - cy) * breath + lift + Math.cos(t * 1.6 + p.seed * 10.1) * drift;
-  const alpha = Math.max(0.24, Math.min(0.95, 0.52 + depth * 0.22 + level * 0.24 + pulse * 0.18 + Math.sin(p.seed * 8.3) * 0.06));
-  const size = (0.30 + p.size * 0.55 + level * 0.55 + pulse * 0.4) * (1 + depth * 0.55);
-  ctx.beginPath();
-  ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${alpha})`;
-  ctx.arc(x, y, size, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-/** @param {CanvasRenderingContext2D} ctx @param {SphereOrbPoint} p @param {number} w @param {number} hgt @param {number} t @param {number} level @param {number} pulse */
-function drawSpherePoint(ctx, p, w, hgt, t, level, pulse) {
-  const radius = Math.min(w, hgt) * (0.30 + 0.018 * Math.sin(t * 1.6) + level * 0.07 + pulse * 0.05);
-  const cx = w / 2;
-  const cy = hgt * 0.52;
-  const rotY = t * 0.34;
-  const rotX = Math.sin(t * 0.27) * 0.34;
-  const y1 = p.y * Math.cos(rotX) - p.z * Math.sin(rotX);
-  const z1 = p.y * Math.sin(rotX) + p.z * Math.cos(rotX);
-  const x2 = p.x * Math.cos(rotY) + z1 * Math.sin(rotY);
-  const z2 = -p.x * Math.sin(rotY) + z1 * Math.cos(rotY);
-  const perspective = 0.72 + (z2 + 1) * 0.18;
-  const wave = 1 + Math.sin(t * 2.1 + p.seed * 9.7) * 0.022 + level * p.audio * 0.18 + pulse * p.audio * 0.15;
-  const x = cx + x2 * radius * perspective * wave;
-  const y = cy + y1 * radius * perspective * wave;
-  const alpha = Math.max(0.12, Math.min(0.86, 0.20 + (z2 + 1) * 0.19 + level * 0.24 + pulse * 0.16));
-  const size = (0.58 + p.size * 1.38 + level * 1.1 + pulse * 0.8) * perspective;
-  ctx.beginPath();
-  ctx.fillStyle = p.warm
-    ? `rgba(255,121,198,${alpha})`
-    : `rgba(${132 + Math.floor(p.seed * 70)},${178 + Math.floor(p.seed * 54)},255,${alpha})`;
-  ctx.arc(x, y, size, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-/** @param {number} value @returns {number} */
-function clamp01(value) {
-  return Math.max(0, Math.min(1, value));
-}
-
-/** @param {number} value @returns {number} */
-function seededUnit(value) {
-  const raw = Math.sin(value * 12.9898) * 43758.5453;
-  return raw - Math.floor(raw);
-}
-
-/** @returns {SphereOrbPoint[]} */
-function orbPoints() {
-  /** @type {SphereOrbPoint[]} */
-  const points = [];
-  let seed = 8121;
-  const random = () => {
-    seed = (seed * 16807) % 2147483647;
-    return (seed - 1) / 2147483646;
-  };
-  for (let i = 0; i < 760; i += 1) {
-    const u = random();
-    const v = random();
-    const theta = Math.PI * 2 * u;
-    const phi = Math.acos(2 * v - 1);
-    const shell = 0.70 + random() * 0.34;
-    points.push({
-      kind: "sphere",
-      x: Math.sin(phi) * Math.cos(theta) * shell,
-      y: Math.sin(phi) * Math.sin(theta) * shell,
-      z: Math.cos(phi) * shell,
-      seed: random(),
-      size: random(),
-      audio: 0.35 + random() * 0.9,
-      warm: random() > 0.74,
-    });
-  }
-  return points;
 }
 
 window.addEventListener("pagehide", () => stopVoiceControl());

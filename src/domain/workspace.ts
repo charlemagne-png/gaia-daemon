@@ -128,7 +128,7 @@ export async function initWorkspace(cwd: string): Promise<{ workspaceDir: string
   await writeIfMissing(workspacePaths.config(cwd), jsonText(defaultConfigJson()));
   await writeIfMissing(
     join(cwd, "AGENTS.md"),
-    `# Project Instructions\n\nThis file is project-local context for GAIA agents.\n\nAdd repo conventions, commands, constraints, and preferences here.\nCanonical agent identity lives in global personas under ~/.gaia/agents/.\n`,
+    `# Project Instructions\n\nThis file is project-local context for Hugr agents.\n\nAdd repo conventions, commands, constraints, and preferences here.\nCanonical agent identity lives in global personas under ~/.gaia/agents/.\n`,
   );
   await ensureWorkspaceRoom(cwd, DEFAULT_ROOM);
   await ensureScheduleFile(cwd);
