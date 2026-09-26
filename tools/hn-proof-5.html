@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="apple">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HN Widget Proof — Apple Carousel Hover</title>
+  <link rel="stylesheet" href="/web/src/styles.css">
+  <link rel="stylesheet" href="/web/src/hn-widget.css">
+  <style>
+    body { margin: 0; padding: 24px; background: var(--bg); min-height: 100vh; }
+    #mount { width: 100%; max-width: 600px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+<div id="mount"></div>
+<script type="module">
+  const { mountHnCarousel } = await import("/web/src/hn-widget.js");
+  window.addEventListener('error', (e) => console.error('ERROR:', e.message));
+  window.addEventListener('unhandledrejection', (e) => console.error('REJECTION:', e.reason));
+  const handle = await mountHnCarousel(document.getElementById('mount'), { theme: 'apple' });
+  
+  // Simulate hover on first tile for capture
+  setTimeout(() => {
+    const tile = document.querySelector('.hn-widget-tile');
+    if (tile) {
+      const event = new MouseEvent('mouseenter', { bubbles: true });
+      tile.dispatchEvent(event);
+      // Keep hover state visibly by adding CSS class
+      tile.style.boxShadow = 'var(--elev-2, 0 2px 8px rgba(0, 0, 0, 0.12))';
+      tile.style.background = 'color-mix(in srgb, var(--accent) 3%, var(--surface-1))';
+    }
+    console.log('✓ Frame 5: Apple carousel with hover state');
+  }, 500);
+</script>
+</body>
+</html>

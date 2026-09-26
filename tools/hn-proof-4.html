@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="apple-dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HN Widget Proof — Apple-Dark Voice-On</title>
+  <link rel="stylesheet" href="/web/src/styles.css">
+  <link rel="stylesheet" href="/web/src/hn-widget.css">
+  <style>
+    body { margin: 0; padding: 24px; background: var(--bg); min-height: 100vh; }
+    #mount { width: 100%; max-width: 600px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+<div id="mount"></div>
+<script type="module">
+  const { mountHnCarousel, setVoiceMode } = await import("/web/src/hn-widget.js");
+  window.addEventListener('error', (e) => console.error('ERROR:', e.message));
+  window.addEventListener('unhandledrejection', (e) => console.error('REJECTION:', e.reason));
+  const handle = await mountHnCarousel(document.getElementById('mount'), { theme: 'apple-dark' });
+  setVoiceMode(handle, true);
+  console.log('✓ Frame 4: Apple-dark voice-mode ON');
+</script>
+</body>
+</html>

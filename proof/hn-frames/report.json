@@ -1,0 +1,48 @@
+{
+  "timestamp": "2026-09-26T08:25:31.347Z",
+  "frames": [
+    {
+      "label": "hn-apple-carousel",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/hermes-mui442x3fhrb2g/proof/hn-frames/hn-apple-carousel.png",
+      "md5": "3fb2c61a714adcc641e479646f552cbe",
+      "theme": "apple",
+      "state": "carousel",
+      "errors": 0
+    },
+    {
+      "label": "hn-apple-voice",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/hermes-mui442x3fhrb2g/proof/hn-frames/hn-apple-voice.png",
+      "md5": "f73ca1b1417aebfff8f6a1e9e0b02078",
+      "theme": "apple",
+      "state": "voice-on",
+      "errors": 0
+    },
+    {
+      "label": "hn-apple-dark-carousel",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/hermes-mui442x3fhrb2g/proof/hn-frames/hn-apple-dark-carousel.png",
+      "md5": "55bba6fb5a2f7589cc70b9a28a9d8912",
+      "theme": "apple-dark",
+      "state": "carousel",
+      "errors": 0
+    },
+    {
+      "label": "hn-apple-dark-voice",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/hermes-mui442x3fhrb2g/proof/hn-frames/hn-apple-dark-voice.png",
+      "md5": "935ac2fdf36c3daf9f2ebc8b37222e76",
+      "theme": "apple-dark",
+      "state": "voice-on",
+      "errors": 0
+    },
+    {
+      "label": "hn-apple-carousel-hover",
+      "path": "/Users/charleshamilton/Documents/Codex/2026-07-31/i-wan/gaia-daemon/.gaia/worktrees/hermes-mui442x3fhrb2g/proof/hn-frames/hn-apple-carousel-hover.png",
+      "md5": "987d7a6e30786f79633431b568c2faed",
+      "theme": "apple",
+      "state": "hover",
+      "errors": 0
+    }
+  ],
+  "distinctFrames": 5,
+  "totalFrames": 5,
+  "allDistinct": true
+}

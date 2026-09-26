@@ -165,7 +165,7 @@
   };
 
   /**
-   * Switch to frame N, applying state changes.
+   * Switch to frame N, applying state changes (theme + voice mode).
    */
   function switchFrame(n) {
     // Hide all frames
@@ -175,8 +175,13 @@
     const frame = document.querySelector(`[data-frame="${n}"]`);
     if (frame) frame.classList.add("active");
 
+    // Update global theme based on frame
+    // Frames 1-2: apple, Frames 3-4: apple-dark
+    const theme = n <= 2 ? "apple" : "apple-dark";
+    document.documentElement.dataset.theme = theme;
+
     currentFrame = n;
-    console.log(`→ Frame ${n}`);
+    console.log(`→ Frame ${n} (theme=${theme})`);
   }
 
   /**
