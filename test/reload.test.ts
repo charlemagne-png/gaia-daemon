@@ -2,7 +2,100 @@
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { pidfilePath, prepareChildArgs, prepareChildEnv } from "../src/server/reload.js";
+import { createServer, type Server } from "node:http";
+import { spawn, type ChildProcess } from "node:child_process";
+import { pidfilePath, prepareChildArgs, prepareChildEnv, reclaimPortFromPriorDaemon } from "../src/server/reload.js";
+
+function listenOn(handler: (path: string) => { status: number; body: unknown } | undefined): Promise<{ server: Server; port: number }> {
+  return new Promise((resolve) => {
+    const server = createServer((req, res) => {
+      const out = handler(req.url ?? "/");
+      if (!out) {
+        res.writeHead(404).end();
+        return;
+      }
+      res.writeHead(out.status, { "content-type": "application/json" });
+      res.end(JSON.stringify(out.body));
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      resolve({ server, port: typeof addr === "object" && addr ? addr.port : 0 });
+    });
+  });
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitGone(pid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (!pidAlive(pid)) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return !pidAlive(pid);
+}
+
+test("reclaimPortFromPriorDaemon: foreign holder (no gaia identity) is never killed", async () => {
+  // A stranger occupies the port and a live dummy process exists; reclaim must
+  // refuse (return false) and leave the process untouched.
+  const victim: ChildProcess = spawn("sleep", ["30"]);
+  const { server, port } = await listenOn(() => ({ status: 200, body: { not: "gaia" } }));
+  try {
+    const freed = await reclaimPortFromPriorDaemon(port, "127.0.0.1");
+    assert.equal(freed, false);
+    assert.ok(victim.pid !== undefined && pidAlive(victim.pid), "foreign process must not be signalled");
+  } finally {
+    server.close();
+    if (victim.pid) victim.kill("SIGKILL");
+  }
+});
+
+test("reclaimPortFromPriorDaemon: nothing on the port → false, fast", async () => {
+  // Bind then immediately close to obtain a port with no listener.
+  const { server, port } = await listenOn(() => undefined);
+  await new Promise<void>((r) => server.close(() => r()));
+  const freed = await reclaimPortFromPriorDaemon(port, "127.0.0.1");
+  assert.equal(freed, false);
+});
+
+test("reclaimPortFromPriorDaemon: verified prior gaia daemon is terminated and port reclaimed", async () => {
+  // Stand up a real process to play the wedged prior daemon, and a server that
+  // reports THAT pid via the identity probe. reclaim must SIGTERM it and free.
+  const prior: ChildProcess = spawn("sleep", ["30"]);
+  const priorPid = prior.pid;
+  assert.ok(priorPid !== undefined);
+  const { server, port } = await listenOn((path) =>
+    path === "/api/daemon/identity" ? { status: 200, body: { gaia: true, pid: priorPid } } : undefined,
+  );
+  try {
+    const freed = await reclaimPortFromPriorDaemon(port, "127.0.0.1");
+    assert.equal(freed, true);
+    assert.ok(await waitGone(priorPid!, 2_000), "prior gaia daemon process must be terminated");
+  } finally {
+    server.close();
+    if (priorPid && pidAlive(priorPid)) prior.kill("SIGKILL");
+  }
+});
+
+test("reclaimPortFromPriorDaemon: never suicides on its own pid", async () => {
+  const { server, port } = await listenOn((path) =>
+    path === "/api/daemon/identity" ? { status: 200, body: { gaia: true, pid: process.pid } } : undefined,
+  );
+  try {
+    const freed = await reclaimPortFromPriorDaemon(port, "127.0.0.1");
+    assert.equal(freed, false);
+    assert.ok(pidAlive(process.pid));
+  } finally {
+    server.close();
+  }
+});
 
 test("pidfilePath: default port → daemon.pid", () => {
   const path = pidfilePath(8787);

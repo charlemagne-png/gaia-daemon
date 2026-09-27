@@ -18,6 +18,12 @@ const RELOAD_CLOSE_TIMEOUT_MS = 1_000;
 const ORPHAN_CHECK_INTERVAL_MS = 2_000;
 const PORT_OWNERSHIP_CHECK_INTERVAL_MS = 5_000;
 
+// Port-reclaim (bind-fail self-heal). See reclaimPortFromPriorDaemon.
+const PORT_PROBE_TIMEOUT_MS = 800;
+const PORT_RECLAIM_TIMEOUT_MS = 4_000;
+const PORT_RECLAIM_POLL_MS = 150;
+const PORT_RECLAIM_SIGKILL_GRACE_MS = 500;
+
 interface ReloadPlan {
   script: string;
   out: string;
@@ -164,6 +170,100 @@ export function installPortOwnershipCheck(boundPort: number, isServing: () => bo
   }, PORT_OWNERSHIP_CHECK_INTERVAL_MS);
 
   timer.unref();
+}
+
+/** Normalize a bind host into an address a client can actually connect to.
+ * A daemon bound on the wildcard (0.0.0.0 / ::) is reachable via loopback;
+ * probing the wildcard literal itself is not routable. */
+function probeHost(host: string): string {
+  if (host === "0.0.0.0" || host === "" || host === "::" || host === "[::]") return "127.0.0.1";
+  return host;
+}
+
+/** Probe :port for a live gaia daemon. Returns its pid when the response
+ * carries the gaia identity marker, else undefined. Authoritative for "is the
+ * process holding this port one of ours, safe to terminate" — a foreign server
+ * on the port never answers this shape, so we never kill a stranger. */
+async function probeDaemonIdentity(host: string, port: number, timeoutMs: number): Promise<{ pid: number } | undefined> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`http://${probeHost(host)}:${port}/api/daemon/identity`, {
+      signal: controller.signal,
+      headers: { accept: "application/json" },
+    });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { gaia?: unknown; pid?: unknown };
+    if (data && data.gaia === true && typeof data.pid === "number" && Number.isInteger(data.pid)) {
+      return { pid: data.pid };
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** SELF-HEAL (2026-09-27): when a fresh daemon can't bind :port because a PRIOR
+ * gaia daemon still holds it — the classic reload/rebuild/relaunch wedge: a
+ * re-exec'd daemon strips GAIA_PARENT_PID (prepareChildEnv) so it installs NO
+ * orphan-retire watchdog and lingers on the port forever; the next daemon then
+ * exhausts its EADDRINUSE retries and exits, leaving stale code (or nothing)
+ * on the port — verify the holder IS a gaia daemon (identity probe, never the
+ * bare pidfile alone), then terminate it gracefully (SIGTERM → bounded wait →
+ * SIGKILL) so the newest daemon always wins the port. Returns true when the
+ * port was freed by us, false when the holder is foreign / unverifiable /
+ * ourselves (never kill in those cases).
+ *
+ * Uniform for every harness: this is port + process lifecycle, below the
+ * harness abstraction — it never learns which harness is running. */
+export async function reclaimPortFromPriorDaemon(port: number, host: string): Promise<boolean> {
+  const identity = await probeDaemonIdentity(host, port, PORT_PROBE_TIMEOUT_MS);
+  if (!identity) return false; // Foreign or nothing answering — never kill.
+  const { pid } = identity;
+  if (pid === process.pid) return false; // Never suicide.
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (error) {
+    // ESRCH: already gone → port is (about to be) free.
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+    console.error(`[gaia] reclaim: SIGTERM of prior daemon pid ${pid} failed: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  console.error(`[gaia] reclaim: prior gaia daemon pid ${pid} holds :${port} — sent SIGTERM, waiting for graceful exit`);
+
+  const deadline = Date.now() + PORT_RECLAIM_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, PORT_RECLAIM_POLL_MS));
+    if (!pidAlive(pid)) {
+      console.error(`[gaia] reclaim: prior daemon pid ${pid} exited — taking over :${port}`);
+      return true;
+    }
+  }
+
+  // Bounded wait elapsed: escalate. A prior daemon wedged in an unbounded
+  // in-flight turn (or a hung dispose) must never permanently deny the port —
+  // the durability protocol persists the queue in state.json, so a SIGKILL
+  // here loses no committed user work; the resumed daemon replays it.
+  console.error(`[gaia] reclaim: prior daemon pid ${pid} did not exit in ${PORT_RECLAIM_TIMEOUT_MS}ms — escalating to SIGKILL`);
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+  }
+  await new Promise((r) => setTimeout(r, PORT_RECLAIM_SIGKILL_GRACE_MS));
+  return !pidAlive(pid);
 }
 
 /** Walk up from a path to the nearest ancestor directory named "*.app" (a macOS bundle root), if any. */

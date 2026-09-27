@@ -34,6 +34,7 @@ import {
   installParentWatchdog,
   installPortOwnershipCheck,
   pidfilePath,
+  reclaimPortFromPriorDaemon,
   removePidfile,
   requestReload,
   writePidfile,
@@ -74,6 +75,9 @@ const TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024;
 const bootId = randomUUID();
 const LISTEN_RETRY_DELAY_MS = 300;
 const LISTEN_RETRIES = 10;
+// EADDRINUSE retries to let a /reload re-exec parent exit on its own before we
+// treat the port holder as a wedged/orphaned prior daemon and reclaim it.
+const LISTEN_RECLAIM_AFTER = 3;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -290,6 +294,8 @@ export class GaiaWebServer {
   }
 
   private async listenWithRetry(server: HttpServer, port: number, host: string): Promise<void> {
+    // A wildcard bind (port 0) picks a free port — never reclaim anything.
+    let reclaimTried = port === 0;
     for (let attempt = 0; ; attempt++) {
       try {
         await new Promise<void>((resolveListen, reject) => {
@@ -307,6 +313,17 @@ export class GaiaWebServer {
         return;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EADDRINUSE" && attempt < LISTEN_RETRIES) {
+          // Grace window (LISTEN_RECLAIM_AFTER retries) first: a /reload re-exec
+          // parent frees the port on its own within a few hundred ms, so we
+          // never race to kill a daemon that is already exiting. Only once the
+          // grace elapses do we treat the holder as a wedged/orphaned prior
+          // daemon and reclaim the port from it — exactly ONCE, then keep
+          // retrying the bind so the freed port is taken over.
+          if (!reclaimTried && attempt >= LISTEN_RECLAIM_AFTER) {
+            reclaimTried = true;
+            const freed = await reclaimPortFromPriorDaemon(port, host);
+            if (freed) console.log(`[gaia] listen: reclaimed :${port} from a prior gaia daemon — binding`);
+          }
           await sleep(LISTEN_RETRY_DELAY_MS);
           continue;
         }
@@ -352,6 +369,16 @@ export class GaiaWebServer {
   private async handleApi(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     const method = request.method ?? "GET";
     const path = url.pathname;
+
+    // Daemon identity probe: a fresh daemon that can't bind :port uses this to
+    // verify the current port holder is one of OURS (safe to terminate and
+    // take over) vs a foreign process (must never be killed). Deliberately
+    // trivial + synchronous — answerable even mid-boot or while a turn streams,
+    // so a wedged prior daemon still identifies itself for reclaim.
+    if (method === "GET" && path === "/api/daemon/identity") {
+      json(response, 200, { gaia: true, pid: process.pid, bootId, boundPort: this.boundPort ?? null });
+      return;
+    }
 
     if (method === "GET" && path === "/api/app") {
       json(response, 200, await this.daemon.appPayload());
