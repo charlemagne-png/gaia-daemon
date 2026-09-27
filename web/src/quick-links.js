@@ -2,6 +2,8 @@
 // Data-driven from web/quick-links.json (Charles-editable, no code change needed).
 // Chips open URLs in system browser (external navigation, never in-app).
 
+import { isNative, openWebWindow } from "./native.js";
+
 /**
  * @typedef {Object} QuickLink
  * @property {string} id       - Unique identifier
@@ -71,10 +73,14 @@ export async function mountQuickLinks(el, opts = {}) {
     tile.appendChild(avatar);
     tile.appendChild(label);
     
-    // Click handler: open in system browser
-    tile.addEventListener("click", () => {
-      // Open in new tab/window (system browser for external URLs)
-      window.open(link.url, "_blank", "noopener,noreferrer");
+    // Click handler: open in system browser via native shell if available
+    tile.addEventListener("click", async () => {
+      if (isNative()) {
+        await openWebWindow(link.url);
+      } else {
+        // Fallback for browser mode
+        window.open(link.url, "_blank", "noopener,noreferrer");
+      }
     });
     
     container.appendChild(tile);
