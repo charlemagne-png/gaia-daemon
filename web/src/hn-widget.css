@@ -46,12 +46,35 @@
   display: flex;
 }
 
-/* HN Slide — tile rows stacked vertically with composition rhythm */
+/* HN Slide — tile rows stacked vertically with composition rhythm, scrollable */
 .hn-widget-hn-slide {
   display: flex;
   flex-direction: column;
   gap: var(--sp-3, 12px);
   width: 100%;
+  padding: var(--sp-4, 16px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: 400px;
+  border-radius: var(--r-md, 6px);
+}
+
+/* Scrollbar styling — subtle, Apple-like */
+.hn-widget-hn-slide::-webkit-scrollbar {
+  width: 6px;
+}
+
+.hn-widget-hn-slide::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.hn-widget-hn-slide::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+  border-radius: 3px;
+}
+
+.hn-widget-hn-slide::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-secondary) 40%, transparent);
 }
 
 /* TILE ROW — avatar-first structure, content stack
@@ -60,7 +83,7 @@
   display: flex;
   align-items: flex-start;
   gap: var(--sp-4, 16px);
-  padding: var(--sp-4, 16px) var(--sp-4, 16px);
+  padding: var(--sp-3, 12px) var(--sp-4, 16px);
   border-radius: var(--r-lg, 10px);
   background: var(--surface-1, #f5f5f7);
   box-shadow: var(--elev-1, 0 1px 3px rgba(0, 0, 0, 0.08));
@@ -68,6 +91,7 @@
   color: inherit;
   transition: box-shadow var(--dur-fast, 150ms) ease-out, background-color var(--dur-fast, 150ms) ease-out;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 [data-theme="apple-dark"] .hn-widget-tile {
@@ -169,6 +193,41 @@
   border-radius: var(--r-md, 6px);
   cursor: pointer;
   transition: background-color var(--dur-fast, 150ms) ease-out;
+}
+
+/* REFRESH BUTTON — subtle icon, Apple-grade restraint */
+.hn-widget-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: var(--sp-2, 8px);
+  font-size: var(--text-base, 16px);
+  line-height: 1;
+  color: var(--text-secondary, #6e6e73);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-md, 6px);
+  cursor: pointer;
+  transition: background-color var(--dur-fast, 150ms) ease-out, color var(--dur-fast, 150ms) ease-out;
+}
+
+[data-theme="apple-dark"] .hn-widget-refresh {
+  color: var(--text-secondary, #98989d);
+}
+
+.hn-widget-refresh:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--text-primary, #1d1d1f);
+}
+
+[data-theme="apple-dark"] .hn-widget-refresh:hover {
+  color: var(--text-primary, #f5f5f7);
+}
+
+.hn-widget-refresh:active {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
 }
 
 [data-theme="apple-dark"] .hn-widget-nav {

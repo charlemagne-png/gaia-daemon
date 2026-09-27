@@ -141,7 +141,7 @@ function renderHNStory(story) {
       href: url,
       target: "_blank",
       rel: "noopener noreferrer",
-      onclick: async (event) => {
+      onclick: async (/** @type {Event} */ event) => {
         // In native mode, intercept click and use Tauri IPC for external navigation.
         // In browser mode, allow default anchor behavior.
         if (isNative()) {
@@ -178,7 +178,7 @@ function renderHNStory(story) {
  * Create carousel shell with slide container + navigation affordances.
  * Extensible for N slides; currently ships ONE.
  * @param {HTMLElement} container
- * @returns {{ container: HTMLElement, addSlide: Function, currentIndex: number }}
+ * @returns {{ container: HTMLElement, addSlide: Function, currentIndex: number, setRefreshCallback: Function }}
  */
 function createCarouselShell(container) {
   const carousel = h("div", { class: "hn-widget-carousel" });
@@ -186,10 +186,13 @@ function createCarouselShell(container) {
   const dotsContainer = h("div", { class: "hn-widget-dots" });
   const navLeft = h("button", { class: "hn-widget-nav hn-widget-nav-left", "aria-label": "Previous slide" }, "‹");
   const navRight = h("button", { class: "hn-widget-nav hn-widget-nav-right", "aria-label": "Next slide" }, "›");
+  const refreshBtn = h("button", { class: "hn-widget-refresh", "aria-label": "Refresh feed" }, "↻");
 
   let currentIndex = 0;
   /** @type {HTMLElement[]} */
   const slides = [];
+  /** @type {Function|null} */
+  let refreshCallback = null;
 
   /**
    * Add a slide to the carousel.
@@ -229,8 +232,13 @@ function createCarouselShell(container) {
   // Navigation handlers
   navLeft.addEventListener("click", () => goToSlide(currentIndex - 1));
   navRight.addEventListener("click", () => goToSlide(currentIndex + 1));
+  refreshBtn.addEventListener("click", async () => {
+    if (refreshCallback) {
+      await refreshCallback();
+    }
+  });
 
-  carousel.append(navLeft, slideContainer, navRight);
+  carousel.append(navLeft, slideContainer, navRight, refreshBtn);
   // Only show dots for multi-slide carousels; hide nav for single slide
   if (slides.length > 1) {
     carousel.append(dotsContainer);
@@ -243,7 +251,7 @@ function createCarouselShell(container) {
 
   container.append(carousel);
 
-  return { container: slideContainer, addSlide, get currentIndex() { return currentIndex; } };
+  return { container: slideContainer, addSlide, get currentIndex() { return currentIndex; }, setRefreshCallback: (/** @type {Function} */ cb) => { refreshCallback = cb; } };
 }
 
 /**
@@ -268,7 +276,7 @@ export async function mountHnCarousel(el, opts = {}) {
   });
 
   // Create carousel shell
-  const { addSlide, currentIndex } = createCarouselShell(widgetContainer);
+  const { addSlide, currentIndex, setRefreshCallback } = createCarouselShell(widgetContainer);
 
   // Fetch and render HN stories
   /** @type {HNStory[]} */
@@ -283,7 +291,7 @@ export async function mountHnCarousel(el, opts = {}) {
   async function renderHNSlide() {
     stories = await fetchHNStories();
 
-    // Create slide container with tile rows stacked
+    // Create slide container with tile rows stacked (scrollable)
     const slide = h("div", { class: "hn-widget-hn-slide" });
 
     if (stories.length === 0) {
@@ -304,6 +312,13 @@ export async function mountHnCarousel(el, opts = {}) {
     addSlide(slide);
   }
 
+  // Wire refresh callback to render + scroll to top
+  setRefreshCallback(async () => {
+    await renderHNSlide();
+    const slideContainer = widgetContainer.querySelector(".hn-widget-hn-slide");
+    if (slideContainer) slideContainer.scrollTop = 0;
+  });
+
   /**
    * Schedule refresh every hour, pausing when document is hidden.
    * @returns {void}
@@ -321,12 +336,12 @@ export async function mountHnCarousel(el, opts = {}) {
     }, 60 * 60 * 1000); // 3600000ms = 1 hour
   }
 
-  // Initial render
+  // Initial render + wire refresh callback
   await renderHNSlide();
   scheduleRefresh();
 
   // Listen for visibility changes to pause/resume refresh
-  document.addEventListener("visibilitychange", () => {
+  const visibilityHandler = () => {
     if (!document.hidden) {
       // Resume refresh when document becomes visible
       scheduleRefresh();
@@ -335,7 +350,8 @@ export async function mountHnCarousel(el, opts = {}) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
     }
-  });
+  };
+  document.addEventListener("visibilitychange", visibilityHandler);
 
   // Mount to DOM
   el.append(widgetContainer);
@@ -343,6 +359,7 @@ export async function mountHnCarousel(el, opts = {}) {
   return {
     destroy() {
       if (refreshTimer) clearTimeout(refreshTimer);
+      document.removeEventListener("visibilitychange", visibilityHandler);
       widgetContainer.remove();
     },
   };
