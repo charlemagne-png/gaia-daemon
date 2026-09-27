@@ -2,9 +2,27 @@
 // a separate window, local paths through the daemon's /api/open-target.
 import { api } from "./api.js";
 import { h } from "./dom.js";
-import { isNative, openWebWindow } from "./native.js";
+import { isNative } from "./native.js";
 import { setError } from "./render.js";
 import { state } from "./state.js";
+
+/**
+ * Open an external http(s) URL WITHOUT ever floating a window over the GAIA
+ * viewport (WINDOW LAW). Native shell → default OS browser via the daemon;
+ * plain browser → a new tab. Shared by every web-link surface (chat links,
+ * quick-links tiles, HN widget).
+ * @param {string} url
+ */
+export async function openExternalUrl(url) {
+  if (isNative()) {
+    await api("/api/open-target", {
+      method: "POST",
+      body: JSON.stringify({ target: url, workspaceId: state.snapshot?.workspace.id }),
+    });
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 
 /** @typedef {{ text: string, target?: string }} LinkedSegment */
 
@@ -75,14 +93,7 @@ function findLinkedSegments(text) {
 
 /** @param {string} target */
 async function openWebTarget(target) {
-  const url = normalizeWebTarget(target);
-  if (isNative()) {
-    await openWebWindow(url);
-    return;
-  }
-  // Browsers may still apply the user's popup policy, but a non-empty popup
-  // feature requests a separate window instead of a tab where supported.
-  window.open(url, "_blank", "popup,noopener,noreferrer");
+  await openExternalUrl(normalizeWebTarget(target));
 }
 
 /** @param {string} target */
@@ -98,19 +109,6 @@ async function openLinkedTarget(target) {
     });
   } catch (error) {
     setError(error);
-  }
-}
-
-/** @param {MouseEvent} event @returns {string|null} */
-function webAnchorTarget(event) {
-  const clicked = /** @type {Element|null} */ (event.target instanceof Element ? event.target : null);
-  const anchor = /** @type {HTMLAnchorElement|null} */ (clicked?.closest("a[href]") ?? null);
-  if (!anchor) return null;
-  try {
-    const url = new URL(anchor.href || anchor.getAttribute("href") || "", window.location.href);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
-  } catch {
-    return null;
   }
 }
 
@@ -165,19 +163,23 @@ export function installOpenModifierTracking() {
   });
   window.addEventListener("blur", () => update(false));
 
-  // WKWebView does not reliably turn modifier-clicked anchors into separate OS
-  // windows. Capture real anchors (including transcript/markdown anchors) before
-  // their default navigation and route only the modified native-shell gesture.
-  // Plain clicks and all browser clicks retain their existing behavior.
+  // WKWebView drops target=_blank navigation without a WKUIDelegate, and a raw
+  // anchor left to WebKit would float a window over the GAIA viewport. Capture
+  // real http(s) anchors (including plain clicks — for example sign-in links)
+  // before WebKit handles them and route them to the OS browser via the daemon.
+  // Relative/attachment links and every plain-browser click are left alone.
   document.addEventListener(
     "click",
     (event) => {
-      if (!isNative() || !isOpenModifier(event)) return;
-      const target = webAnchorTarget(event);
-      if (!target) return;
+      if (!isNative()) return;
+      let element = /** @type {any} */ (event.target);
+      if (typeof element?.closest !== "function") element = element?.parentElement;
+      const anchor = element?.closest?.("a[href]");
+      const target = anchor?.getAttribute?.("href");
+      if (!target || !/^https?:\/\//i.test(target)) return;
       event.preventDefault();
       event.stopPropagation();
-      void openWebTarget(target);
+      void openExternalUrl(target);
     },
     true,
   );

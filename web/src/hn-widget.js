@@ -28,7 +28,7 @@
  * @property {string} story_id
  */
 
-import { isNative, openWebWindow } from "./native.js";
+import { openExternalUrl } from "./links.js";
 
 // Hyperscript helper (inline for no-import pattern)
 /** @param {string} tag @param {object} [attrs] @param {...*} children @returns {HTMLElement} */
@@ -128,8 +128,9 @@ async function fetchHNStories() {
 /**
  * Render a single HN story as a tile row.
  * FORM: avatar-first structure → source chip + title/meta stack → click opens story.
- * Native mode: click handler calls openWebWindow() for Tauri IPC.
- * Browser mode: default anchor behavior with window.open.
+ * Every mode: click routes through the shared external-link helper (OS browser
+ * via daemon under the shell, a new tab in a plain browser) — never a window
+ * over the GAIA viewport.
  * @param {HNStory} story
  * @returns {HTMLElement}
  */
@@ -142,14 +143,12 @@ function renderHNStory(story) {
       href: url,
       target: "_blank",
       rel: "noopener noreferrer",
-      onclick: async (/** @type {Event} */ event) => {
-        // In native mode, intercept click and use Tauri IPC for external navigation.
-        // In browser mode, allow default anchor behavior.
-        if (isNative()) {
-          event.preventDefault();
-          event.stopPropagation();
-          await openWebWindow(url);
-        }
+      onclick: (/** @type {Event} */ event) => {
+        // Never let WebKit float the story over the GAIA viewport: always route
+        // through the shared external-link helper.
+        event.preventDefault();
+        event.stopPropagation();
+        void openExternalUrl(url);
       },
     }
   );

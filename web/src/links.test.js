@@ -1,40 +1,81 @@
 // @ts-nocheck — native bridge behavior + source seams; no visible shell/browser.
 import { expect, test } from "bun:test";
 
-const calls = [];
-globalThis.window = {
-  __TAURI__: {
-    core: {
-      invoke(command, args) {
-        calls.push({ command, args });
-        return Promise.resolve("web-7");
-      },
-    },
-  },
+const documentListeners = {};
+globalThis.document = {
+  createElement: (tag) => ({ tag, listeners: {}, addEventListener() {}, setAttribute() {}, append() {} }),
+  createTextNode: (text) => ({ text }),
+  addEventListener: (type, listener) => { documentListeners[type] = listener; },
+  body: { classList: { toggle() {} } },
 };
+globalThis.location = { href: "http://localhost/", origin: "http://localhost", search: "", hash: "" };
+globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+const opened = [];
+globalThis.window = { open: (...args) => opened.push(args), addEventListener() {}, location: globalThis.location };
 
-const { openWebWindow } = await import("./native.js");
+const { openExternalUrl, installOpenModifierTracking } = await import("./links.js");
 const linksSource = await Bun.file(new URL("./links.js", import.meta.url)).text();
 const shellSource = await Bun.file(new URL("../../src-tauri/src/lib.rs", import.meta.url)).text();
+installOpenModifierTracking();
 
-test("native web links use the dedicated new-window IPC", async () => {
-  expect(await openWebWindow("https://example.com/path")).toBe("web-7");
-  expect(calls).toEqual([
-    { command: "open_web_window", args: { url: "https://example.com/path" } },
-  ]);
+function nativeFetch(requests) {
+  globalThis.window.__TAURI__ = {};
+  globalThis.fetch = async (url, options) => {
+    requests.push([url, options]);
+    return { ok: true, json: async () => ({}) };
+  };
+}
+
+test("browser mode opens external links in a new tab, never a floating window", () => {
+  delete globalThis.window.__TAURI__;
+  opened.length = 0;
+  void openExternalUrl("https://example.com/docs");
+  expect(opened).toEqual([["https://example.com/docs", "_blank", "noopener,noreferrer"]]);
 });
 
-test("link tokens retain local open-target and route native web targets separately", () => {
+test("native mode routes external links to the OS browser via the daemon", () => {
+  const requests = [];
+  nativeFetch(requests);
+  opened.length = 0;
+  void openExternalUrl("https://example.com/docs");
+  expect(opened).toEqual([]);
+  expect(requests).toEqual([["/api/open-target", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target: "https://example.com/docs" }),
+  }]]);
+});
+
+test("native captures raw http(s) anchors but leaves relative/attachment links alone", () => {
+  const requests = [];
+  nativeFetch(requests);
+  const anchor = {
+    closest: (selector) => (selector === "a[href]" ? anchor : null),
+    getAttribute: (name) => (name === "href" ? "https://example.com/sign-in" : null),
+  };
+  const click = { target: anchor, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+  documentListeners.click(click);
+  expect(click.prevented).toBe(true);
+  expect(click.stopped).toBe(true);
+  expect(requests).toEqual([["/api/open-target", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target: "https://example.com/sign-in" }),
+  }]]);
+
+  const attachment = {
+    closest: () => attachment,
+    getAttribute: () => "/api/attachments/a.png",
+  };
+  const attachmentClick = { target: attachment, preventDefault() { this.prevented = true; }, stopPropagation() {} };
+  documentListeners.click(attachmentClick);
+  expect(attachmentClick.prevented).toBeUndefined();
+  expect(requests).toHaveLength(1);
+});
+
+test("links.js keeps external links off the floating-window IPC", () => {
   expect(linksSource).toContain('api("/api/open-target"');
-  expect(linksSource).toContain("await openWebWindow(url);");
-  expect(linksSource).toContain('window.open(url, "_blank", "popup,noopener,noreferrer")');
-});
-
-test("modified real anchors are captured only in the native shell", () => {
-  expect(linksSource).toContain('clicked?.closest("a[href]")');
-  expect(linksSource).toContain("if (!isNative() || !isOpenModifier(event)) return;");
-  expect(linksSource).toContain('document.addEventListener(\n    "click"');
-  expect(linksSource).toContain("    true,\n  );");
+  expect(linksSource).not.toContain("openWebWindow");
 });
 
 test("Rust secondary windows never focus or restore over main", () => {
