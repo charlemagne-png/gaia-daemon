@@ -345,6 +345,16 @@
 [data-theme="apple"] .tab-close, [data-theme="apple-dark"] .tab-close { color: var(--tab-ink-dim); }
 [data-theme="apple"] .tab-close:hover, [data-theme="apple-dark"] .tab-close:hover { color: var(--danger); }
 
+/* Apple Dark black chrome — sidebar, tabbar, statusbar use pure black (var(--bg)),
+   never mixed or gradient. Overrides the base color-mix(--bg2, --bg) and the
+   Chrome-silhouette tabbar gradient. Apple light theme unchanged. */
+[data-theme="apple-dark"] .sidebar,
+[data-theme="apple-dark"] .right,
+[data-theme="apple-dark"] .tabbar,
+[data-theme="apple-dark"] .statusbar {
+  background: var(--bg);
+}
+
 /* composer + inputs — style the SHELL (the box); the inner textarea stays
    transparent so there is exactly one box, correctly sized, cursor aligned. */
 [data-theme="apple"] .input-shell, [data-theme="apple"] .prompt-input,
