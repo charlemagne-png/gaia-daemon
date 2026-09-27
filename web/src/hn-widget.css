@@ -25,6 +25,56 @@
   padding: var(--sp-4, 16px) var(--sp-3, 12px);
 }
 
+/* Header seam — label + refresh button in one row, right-aligned button */
+.hn-widget-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: var(--sp-3, 12px);
+}
+
+.hn-widget-header .panel-section-label {
+  flex: 1;
+  margin: 0; /* Reset h3 defaults */
+}
+
+/* Refresh button in header — small, quiet, compact icon */
+.hn-widget-header-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-secondary, #6e6e73);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-md, 6px);
+  cursor: pointer;
+  transition: background-color var(--dur-fast, 150ms) ease-out, color var(--dur-fast, 150ms) ease-out;
+}
+
+[data-theme="apple-dark"] .hn-widget-header-refresh {
+  color: var(--text-secondary, #98989d);
+}
+
+.hn-widget-header-refresh:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--text-primary, #1d1d1f);
+}
+
+[data-theme="apple-dark"] .hn-widget-header-refresh:hover {
+  color: var(--text-primary, #f5f5f7);
+}
+
+.hn-widget-header-refresh:active {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
 .hn-widget-slides {
   flex: 1;
   display: flex;
@@ -195,39 +245,9 @@
   transition: background-color var(--dur-fast, 150ms) ease-out;
 }
 
-/* REFRESH BUTTON — subtle icon, Apple-grade restraint */
+/* REFRESH BUTTON (carousel) — NOT USED, kept for reference/legacy */
 .hn-widget-refresh {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 32px;
-  min-height: 32px;
-  padding: var(--sp-2, 8px);
-  font-size: var(--text-base, 16px);
-  line-height: 1;
-  color: var(--text-secondary, #6e6e73);
-  background: transparent;
-  border: none;
-  border-radius: var(--r-md, 6px);
-  cursor: pointer;
-  transition: background-color var(--dur-fast, 150ms) ease-out, color var(--dur-fast, 150ms) ease-out;
-}
-
-[data-theme="apple-dark"] .hn-widget-refresh {
-  color: var(--text-secondary, #98989d);
-}
-
-.hn-widget-refresh:hover {
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-  color: var(--text-primary, #1d1d1f);
-}
-
-[data-theme="apple-dark"] .hn-widget-refresh:hover {
-  color: var(--text-primary, #f5f5f7);
-}
-
-.hn-widget-refresh:active {
-  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  display: none;
 }
 
 [data-theme="apple-dark"] .hn-widget-nav {

@@ -14,6 +14,7 @@
  *
  * @typedef {Object} CarouselHandle
  * @property {Function} destroy
+ * @property {HTMLElement} refreshBtn - Refresh button element for header placement
  *
  * @typedef {Object} CarouselOptions
  * @property {string} [theme='apple'] - Theme name for CSS scoping
@@ -178,7 +179,7 @@ function renderHNStory(story) {
  * Create carousel shell with slide container + navigation affordances.
  * Extensible for N slides; currently ships ONE.
  * @param {HTMLElement} container
- * @returns {{ container: HTMLElement, addSlide: Function, currentIndex: number, setRefreshCallback: Function }}
+ * @returns {{ container: HTMLElement, addSlide: Function, currentIndex: number, setRefreshCallback: Function, refreshBtn: HTMLElement }}
  */
 function createCarouselShell(container) {
   const carousel = h("div", { class: "hn-widget-carousel" });
@@ -238,7 +239,7 @@ function createCarouselShell(container) {
     }
   });
 
-  carousel.append(navLeft, slideContainer, navRight, refreshBtn);
+  carousel.append(navLeft, slideContainer, navRight);
   // Only show dots for multi-slide carousels; hide nav for single slide
   if (slides.length > 1) {
     carousel.append(dotsContainer);
@@ -251,7 +252,7 @@ function createCarouselShell(container) {
 
   container.append(carousel);
 
-  return { container: slideContainer, addSlide, get currentIndex() { return currentIndex; }, setRefreshCallback: (/** @type {Function} */ cb) => { refreshCallback = cb; } };
+  return { container: slideContainer, addSlide, get currentIndex() { return currentIndex; }, setRefreshCallback: (/** @type {Function} */ cb) => { refreshCallback = cb; }, refreshBtn };
 }
 
 /**
@@ -276,7 +277,7 @@ export async function mountHnCarousel(el, opts = {}) {
   });
 
   // Create carousel shell
-  const { addSlide, currentIndex, setRefreshCallback } = createCarouselShell(widgetContainer);
+  const { addSlide, currentIndex, setRefreshCallback, refreshBtn } = createCarouselShell(widgetContainer);
 
   // Fetch and render HN stories
   /** @type {HNStory[]} */
@@ -362,6 +363,7 @@ export async function mountHnCarousel(el, opts = {}) {
       document.removeEventListener("visibilitychange", visibilityHandler);
       widgetContainer.remove();
     },
+    refreshBtn,
   };
 }
 

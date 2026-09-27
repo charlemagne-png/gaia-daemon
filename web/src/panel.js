@@ -21,6 +21,7 @@ import { VoiceControlConsole, VoiceControlOrb } from "./voice-control.js";
 // Persistent widget slots (see file header). Created lazily on first render,
 // then reused for the life of the tab.
 /** @type {HTMLElement|null} */ let widgetSlot = null;
+/** @type {HTMLElement|null} */ let hnHeaderSlot = null;
 /** @type {HTMLElement|null} */ let quickLinksSlot = null;
 /** @type {HTMLElement|null} */ let agentsSlot = null;
 /** @type {import("./hn-widget.js").CarouselHandle|null} */ let hnHandle = null;
@@ -61,9 +62,18 @@ function ensureWidgets() {
     widgetSlot = h("div", { class: "panel-widget-slot" });
     void mountHnCarousel(widgetSlot, { theme: currentTheme() }).then((handle) => {
       hnHandle = handle;
+      // Inject refresh button into header once carousel is mounted
+      if (hnHeaderSlot && handle.refreshBtn) {
+        hnHeaderSlot.append(handle.refreshBtn);
+      }
       lastVoiceOn = Boolean(state.voice);
       setVoiceMode(handle, lastVoiceOn); // reflect any call already live at mount
     });
+  }
+  if (!hnHeaderSlot) {
+    // Create header as flex row: label on left, refresh button on right (added after carousel mounts)
+    hnHeaderSlot = h("div", { class: "hn-widget-header" });
+    hnHeaderSlot.append(h("h3", { class: "panel-section-label", text: "Hacker News" }));
   }
   if (!quickLinksSlot) {
     quickLinksSlot = h("div", { class: "panel-quicklinks-slot" });
@@ -175,7 +185,7 @@ function renderPanel() {
     // ensureWidgets() guaranteed them above; assert non-null for the checker.
     // Each is fronted by an Apple-grade section label (SF-style uppercase
     // tracking, hairline-quiet, matching the GENERAL/PERSONAL pill weight).
-    h("h3", { class: "panel-section-label", text: "Hacker News" }),
+    /** @type {HTMLElement} */ (hnHeaderSlot),
     /** @type {HTMLElement} */ (widgetSlot),
     h("h3", { class: "panel-section-label", text: "My Apps" }),
     /** @type {HTMLElement} */ (quickLinksSlot),
